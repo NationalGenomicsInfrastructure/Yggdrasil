@@ -1,10 +1,30 @@
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-import couchdb
 
+# Mock IBM Cloud SDK modules before importing the module under test
+class MockApiException(Exception):
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# Mock the IBM Cloud SDK modules to avoid import errors
+mock_api_exception_module = MagicMock()
+mock_api_exception_module.ApiException = MockApiException
+sys.modules["ibm_cloud_sdk_core"] = MagicMock()
+sys.modules["ibm_cloud_sdk_core.api_exception"] = mock_api_exception_module
+sys.modules["ibmcloudant"] = MagicMock()
+sys.modules["ibmcloudant.cloudant_v1"] = MagicMock()
+
+# Make the ApiException available in the module
+import lib.couchdb.yggdrasil_db_manager
 from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager, auto_load_and_save
+
+lib.couchdb.yggdrasil_db_manager.ApiException = MockApiException
 
 
 class TestYggdrasilDBManager(unittest.TestCase):
@@ -71,7 +91,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         mock_handler_init.return_value = None
 
         # Act
-        manager = YggdrasilDBManager()
+        YggdrasilDBManager()
 
         # Assert
         mock_handler_init.assert_called_once_with("yggdrasil")
@@ -151,6 +171,8 @@ class TestYggdrasilDBManager(unittest.TestCase):
         mock_ygg_doc.delivery_info.__setitem__.assert_called_with("sensitive", True)
         # Document should be saved
         manager.save_document.assert_called_once_with(mock_ygg_doc)
+        # Should return the created document
+        self.assertEqual(result, mock_ygg_doc)
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.logging")
@@ -158,11 +180,18 @@ class TestYggdrasilDBManager(unittest.TestCase):
         """Test saving a new document (no existing _rev)."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_db = MagicMock()
-        mock_db.get.return_value = None  # Document doesn't exist
+        mock_server = MagicMock()
+
+        # Mock get_document to raise 404 (document doesn't exist)
+        api_exception = MockApiException("Not Found", code=404)
+        mock_server.get_document.side_effect = api_exception
+
+        # Mock successful put_document
+        mock_server.put_document.return_value.get_result.return_value = {"ok": True}
 
         manager = YggdrasilDBManager()
-        manager.db = mock_db
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
 
         mock_doc = MagicMock()
         mock_doc._id = "P12345"
@@ -172,8 +201,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document(mock_doc)
 
         # Assert
-        mock_db.get.assert_called_once_with("P12345")
-        mock_db.save.assert_called_once_with({"_id": "P12345", "data": "test"})
+        mock_server.get_document.assert_called_once_with(
+            db="yggdrasil", doc_id="P12345"
+        )
+        mock_server.put_document.assert_called_once_with(
+            db="yggdrasil", doc_id="P12345", document={"_id": "P12345", "data": "test"}
+        )
         mock_logging.info.assert_called_with(
             "Document with ID 'P12345' saved successfully in 'yggdrasil' DB."
         )
@@ -184,11 +217,21 @@ class TestYggdrasilDBManager(unittest.TestCase):
         """Test saving an existing document (preserves _rev)."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_db = MagicMock()
-        mock_db.get.return_value = {"_id": "P12345", "_rev": "1-abc123", "old": "data"}
+        mock_server = MagicMock()
+
+        # Mock get_document to return existing document with _rev
+        mock_server.get_document.return_value.get_result.return_value = {
+            "_id": "P12345",
+            "_rev": "1-abc123",
+            "old": "data",
+        }
+
+        # Mock successful put_document
+        mock_server.put_document.return_value.get_result.return_value = {"ok": True}
 
         manager = YggdrasilDBManager()
-        manager.db = mock_db
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
 
         mock_doc = MagicMock()
         mock_doc._id = "P12345"
@@ -198,9 +241,13 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document(mock_doc)
 
         # Assert
-        mock_db.get.assert_called_once_with("P12345")
+        mock_server.get_document.assert_called_once_with(
+            db="yggdrasil", doc_id="P12345"
+        )
         expected_save_data = {"_id": "P12345", "data": "test", "_rev": "1-abc123"}
-        mock_db.save.assert_called_once_with(expected_save_data)
+        mock_server.put_document.assert_called_once_with(
+            db="yggdrasil", doc_id="P12345", document=expected_save_data
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.logging")
@@ -208,11 +255,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         """Test save_document when an exception occurs."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_db = MagicMock()
-        mock_db.get.side_effect = Exception("Database error")
+        mock_server = MagicMock()
+        mock_server.get_document.side_effect = Exception("Database error")
 
         manager = YggdrasilDBManager()
-        manager.db = mock_db
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
 
         mock_doc = MagicMock()
         mock_doc._id = "P12345"
@@ -231,19 +279,25 @@ class TestYggdrasilDBManager(unittest.TestCase):
         """Test successful document retrieval by project ID."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_db = MagicMock()
-        mock_db.__getitem__.return_value = self.mock_project_data
+        mock_server = MagicMock()
+        mock_server.get_document.return_value.get_result.return_value = (
+            self.mock_project_data
+        )
+
         mock_ygg_doc = MagicMock()
         mock_ygg_doc_class.from_dict.return_value = mock_ygg_doc
 
         manager = YggdrasilDBManager()
-        manager.db = mock_db
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
 
         # Act
         result = manager.get_document_by_project_id("P12345")
 
         # Assert
-        mock_db.__getitem__.assert_called_once_with("P12345")
+        mock_server.get_document.assert_called_once_with(
+            db="yggdrasil", doc_id="P12345"
+        )
         mock_ygg_doc_class.from_dict.assert_called_once_with(self.mock_project_data)
         self.assertEqual(result, mock_ygg_doc)
 
@@ -255,11 +309,15 @@ class TestYggdrasilDBManager(unittest.TestCase):
         """Test document retrieval when document doesn't exist."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_db = MagicMock()
-        mock_db.__getitem__.side_effect = couchdb.http.ResourceNotFound()
+        mock_server = MagicMock()
+
+        # Mock ApiException for 404 (document not found)
+        api_exception = MockApiException("Not Found", code=404)
+        mock_server.get_document.side_effect = api_exception
 
         manager = YggdrasilDBManager()
-        manager.db = mock_db
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
 
         # Act
         result = manager.get_document_by_project_id("nonexistent")
@@ -276,18 +334,48 @@ class TestYggdrasilDBManager(unittest.TestCase):
         """Test document retrieval when an exception occurs."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_db = MagicMock()
-        mock_db.__getitem__.side_effect = Exception("Database error")
+        mock_server = MagicMock()
+        mock_server.get_document.side_effect = Exception("Database error")
 
         manager = YggdrasilDBManager()
-        manager.db = mock_db
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
 
         # Act
         result = manager.get_document_by_project_id("P12345")
 
         # Assert
         self.assertIsNone(result)
-        mock_logging.error.assert_called_with("Error accessing project: Database error")
+        mock_logging.error.assert_called_with(
+            "Error accessing project 'P12345': Database error"
+        )
+
+    @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
+    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    def test_get_document_by_project_id_api_exception_other_codes(
+        self, mock_logging, mock_handler_init
+    ):
+        """Test document retrieval when API exception with non-404 code occurs."""
+        # Arrange
+        mock_handler_init.return_value = None
+        mock_server = MagicMock()
+
+        # Mock ApiException for 500 (server error)
+        api_exception = MockApiException("Internal Server Error", code=500)
+        mock_server.get_document.side_effect = api_exception
+
+        manager = YggdrasilDBManager()
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
+
+        # Act
+        result = manager.get_document_by_project_id("P12345")
+
+        # Assert
+        self.assertIsNone(result)
+        mock_logging.error.assert_called_with(
+            "Error accessing project 'P12345': 500 Internal Server Error"
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.logging")
@@ -341,7 +429,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document = MagicMock()
 
         # Act
-        result = manager.add_sample("P12345", "S003", "pending")
+        manager.add_sample("P12345", "S003", "pending")
 
         # Assert
         manager.get_document_by_project_id.assert_called_once_with("P12345")
@@ -409,7 +497,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document = MagicMock()
 
         # Act
-        result = manager.update_sample_status("P12345", "S001", "completed")
+        manager.update_sample_status("P12345", "S001", "completed")
 
         # Assert
         manager.get_document_by_project_id.assert_called_once_with("P12345")
@@ -484,7 +572,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document = MagicMock()
 
         # Act
-        result = manager.update_sample_slurm_job_id("P12345", "S001", "789012")
+        manager.update_sample_slurm_job_id("P12345", "S001", "789012")
 
         # Assert
         manager.get_document_by_project_id.assert_called_once_with("P12345")
@@ -510,7 +598,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document = MagicMock()
 
         # Act
-        result = manager.update_sample_slurm_job_id("P12345", "S001", "789012")
+        manager.update_sample_slurm_job_id("P12345", "S001", "789012")
 
         # Assert
         mock_doc.update_sample_field.assert_called_once_with(
@@ -522,6 +610,59 @@ class TestYggdrasilDBManager(unittest.TestCase):
         mock_logging.warning.assert_called_with(
             "Failed to update slurm_job_id for sample 'S001'."
         )
+
+    @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
+    @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDocument")
+    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    def test_create_project_with_default_sensitive_flag(
+        self, mock_logging, mock_ygg_doc_class, mock_handler_init
+    ):
+        """Test project creation with default sensitive flag."""
+        # Arrange
+        mock_handler_init.return_value = None
+        mock_ygg_doc = MagicMock()
+        mock_ygg_doc_class.return_value = mock_ygg_doc
+
+        manager = YggdrasilDBManager()
+        manager.save_document = MagicMock()
+
+        # Act - not passing sensitive parameter to test default
+        manager.create_project(
+            project_id="P12345",
+            projects_reference="ref_12345",
+            project_name="Test Project",
+            method="10X",
+        )
+
+        # Assert
+        # sensitive should default to True when not specified
+        mock_ygg_doc.delivery_info.__setitem__.assert_called_with("sensitive", True)
+
+    @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
+    @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDocument")
+    def test_create_project_with_sensitive_false(
+        self, mock_ygg_doc_class, mock_handler_init
+    ):
+        """Test project creation with sensitive flag set to False."""
+        # Arrange
+        mock_handler_init.return_value = None
+        mock_ygg_doc = MagicMock()
+        mock_ygg_doc_class.return_value = mock_ygg_doc
+
+        manager = YggdrasilDBManager()
+        manager.save_document = MagicMock()
+
+        # Act
+        manager.create_project(
+            project_id="P12345",
+            projects_reference="ref_12345",
+            project_name="Test Project",
+            method="10X",
+            sensitive=False,
+        )
+
+        # Assert
+        mock_ygg_doc.delivery_info.__setitem__.assert_called_with("sensitive", False)
 
 
 class TestAutoLoadAndSaveDecorator(unittest.TestCase):
@@ -594,6 +735,101 @@ class TestAutoLoadAndSaveDecorator(unittest.TestCase):
         self.mock_manager.save_document.assert_not_called()
         mock_logging.error.assert_called_with(
             "Error in test_method for project P12345: Method error"
+        )
+
+
+class TestEdgeCasesAndIntegration(unittest.TestCase):
+    """Test edge cases and integration scenarios for YggdrasilDBManager."""
+
+    def setUp(self):
+        """Set up test fixtures for edge case testing."""
+        # Clear singleton instances to ensure test isolation
+        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
+
+        if CouchDBConnectionManager in SingletonMeta._instances:
+            del SingletonMeta._instances[CouchDBConnectionManager]
+
+    def tearDown(self):
+        """Clean up singleton instances after each test."""
+        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
+
+        if CouchDBConnectionManager in SingletonMeta._instances:
+            del SingletonMeta._instances[CouchDBConnectionManager]
+
+    @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
+    def test_decorated_method_with_return_value(self, mock_handler_init):
+        """Test decorated method that returns a value gets passed through correctly."""
+        # Arrange
+        mock_handler_init.return_value = None
+        mock_doc = MagicMock()
+
+        manager = YggdrasilDBManager()
+        manager.get_document_by_project_id = MagicMock(return_value=mock_doc)
+        manager.save_document = MagicMock()
+
+        # Act
+        result = manager.add_sample("P12345", "S001", "pending")
+
+        # Assert - the decorator should pass through the return value from the method
+        # In this case, add_sample doesn't explicitly return anything, so None is expected
+        self.assertIsNone(result)
+
+    @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
+    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    def test_save_document_with_put_document_exception(
+        self, mock_logging, mock_handler_init
+    ):
+        """Test save_document when put_document raises an exception."""
+        # Arrange
+        mock_handler_init.return_value = None
+        mock_server = MagicMock()
+
+        # Mock get_document succeeds, but put_document fails
+        mock_server.get_document.return_value.get_result.return_value = {
+            "_id": "P12345",
+            "_rev": "1-abc",
+        }
+        mock_server.put_document.side_effect = Exception("Put failed")
+
+        manager = YggdrasilDBManager()
+        manager.server = mock_server
+        manager.db_name = "yggdrasil"
+
+        mock_doc = MagicMock()
+        mock_doc._id = "P12345"
+        mock_doc.to_dict.return_value = {"_id": "P12345", "data": "test"}
+
+        # Act
+        manager.save_document(mock_doc)
+
+        # Assert
+        mock_logging.error.assert_called_with("Error saving document: Put failed")
+
+    @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
+    def test_multiple_decorated_methods_same_project(self, mock_handler_init):
+        """Test multiple decorated method calls on the same project work correctly."""
+        # Arrange
+        mock_handler_init.return_value = None
+        mock_doc = MagicMock()
+
+        manager = YggdrasilDBManager()
+        manager.get_document_by_project_id = MagicMock(return_value=mock_doc)
+        manager.save_document = MagicMock()
+
+        # Act - call multiple decorated methods on the same project
+        manager.add_sample("P12345", "S001", "pending")
+        manager.update_sample_status("P12345", "S001", "completed")
+        manager.update_sample_slurm_job_id("P12345", "S001", "12345")
+
+        # Assert - verify each method was called and document was saved each time
+        self.assertEqual(manager.get_document_by_project_id.call_count, 3)
+        self.assertEqual(manager.save_document.call_count, 3)
+        mock_doc.add_sample.assert_called_once_with(sample_id="S001", status="pending")
+        mock_doc.update_sample_status.assert_called_once_with(
+            sample_id="S001", status="completed"
+        )
+        mock_doc.update_sample_field.assert_called_once_with(
+            "S001", "slurm_job_id", "12345"
         )
 
 

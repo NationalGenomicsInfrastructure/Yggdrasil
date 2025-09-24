@@ -76,6 +76,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install mypy
+          pip install types-requests
 
       - name: Run Mypy
         run: mypy .
