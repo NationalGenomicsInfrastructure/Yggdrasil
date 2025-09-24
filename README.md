@@ -250,7 +250,9 @@ Example Configuration File (config.json)
 ```json
 {
     "yggdrasil_log_dir": "yggdrasil_workspace/logs",
-    "couchdb_url": "<host>:<port>",
+    "couchdb":{
+        "url": "<host>:<port>"
+    },
     "couchdb_database": "my_projects",
     "couchdb_status_tracking": "my_yggdrasil_db",
     "couchdb_poll_interval": 3,

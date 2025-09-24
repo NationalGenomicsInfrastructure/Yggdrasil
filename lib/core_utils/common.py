@@ -2,7 +2,7 @@ import importlib
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
 
 class YggdrasilUtilities:
@@ -17,14 +17,14 @@ class YggdrasilUtilities:
         CONFIG_DIR (Path): Directory containing configuration files.
     """
 
-    module_cache: Dict[str, Any] = {}
+    module_cache: dict[str, Any] = {}
     CONFIG_DIR: Path = (
         Path(__file__).parent.parent.parent
         / "yggdrasil_workspace/common/configurations"
     )
 
     @staticmethod
-    def load_realm_class(module_path: str) -> Optional[Type]:
+    def load_realm_class(module_path: str) -> type | None:
         """
         Load a realm class from a module path and cache it for reuse.
 
@@ -51,7 +51,7 @@ class YggdrasilUtilities:
             return None
 
     @staticmethod
-    def load_module(module_path: str) -> Optional[Any]:
+    def load_module(module_path: str) -> Any | None:
         """Load a module and cache it for reuse.
 
         Args:
@@ -72,7 +72,7 @@ class YggdrasilUtilities:
             return None
 
     @staticmethod
-    def get_path(file_name: str) -> Optional[Path]:
+    def get_path(file_name: str) -> Path | None:
         """Get the full path to a specific configuration file.
 
         Args:
@@ -172,3 +172,9 @@ class YggdrasilUtilities:
                 "'.last_processed_seq' File not found in the configurations."
             )
             pass
+
+    @staticmethod
+    def normalize_url(url: str) -> str:
+        if not url.startswith(("http://", "https://")):
+            url = "http://" + url
+        return url.rstrip("/")

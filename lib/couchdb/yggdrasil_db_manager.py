@@ -1,7 +1,8 @@
 import functools
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
-import couchdb
+from ibm_cloud_sdk_core.api_exception import ApiException
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
@@ -51,8 +52,8 @@ class YggdrasilDBManager(CouchDBHandler):
         projects_reference: str,
         project_name: str,
         method: str,
-        user_info: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
-        sensitive: Optional[bool] = True,
+        user_info: dict[str, dict[str, str | None]] | None = None,
+        sensitive: bool | None = True,
     ) -> YggdrasilDocument:
         """Creates a new project document in the database.
 
@@ -100,21 +101,32 @@ class YggdrasilDBManager(CouchDBHandler):
                    is logged with the error message.
         """
         try:
-            existing_doc = self.db.get(document._id)
+            try:
+                existing_doc = self.server.get_document(
+                    db=self.db_name, doc_id=document._id
+                ).get_result()
+            except ApiException as e:
+                if e.code == 404:
+                    existing_doc = None  # keeps parity with couchdb.Database.get()
+                else:
+                    raise
+
             doc_dict = document.to_dict()
-            if existing_doc:
+            if existing_doc and "_rev" in existing_doc:
                 # Preserve the _rev field to avoid update conflicts
                 doc_dict["_rev"] = existing_doc["_rev"]
-            self.db.save(doc_dict)
+
+            # Keep parity with couchdb.Database.save(): internally used PUT /{db}/{id}
+            self.server.put_document(
+                db=self.db_name, doc_id=document._id, document=doc_dict
+            ).get_result()
             logging.info(
-                f"Document with ID '{document._id}' saved successfully in 'yggdrasil' DB."
+                f"Document with ID '{document._id}' saved successfully in '{self.db_name}' DB."
             )
         except Exception as e:
             logging.error(f"Error saving document: {e}")
 
-    def get_document_by_project_id(
-        self, project_id: str
-    ) -> Optional[YggdrasilDocument]:
+    def get_document_by_project_id(self, project_id: str) -> YggdrasilDocument | None:
         """Retrieves a document by project ID.
 
         Args:
@@ -124,13 +136,20 @@ class YggdrasilDBManager(CouchDBHandler):
             Optional[YggdrasilDocument]: An Yggdrasil document if found, else None.
         """
         try:
-            document = self.db[project_id]
+            document = self.server.get_document(
+                db=self.db_name, doc_id=project_id
+            ).get_result()
             return YggdrasilDocument.from_dict(document)
-        except couchdb.http.ResourceNotFound:
-            logging.info(f"Project with ID '{project_id}' not found.")
+        except ApiException as e:
+            if e.code == 404:
+                logging.info(f"Project with ID '{project_id}' not found.")
+            else:
+                logging.error(
+                    f"Error accessing project '{project_id}': {e.code} {e.message}"
+                )
             return None
         except Exception as e:
-            logging.error(f"Error accessing project: {e}")
+            logging.error(f"Error accessing project '{project_id}': {e}")
             return None
 
     def check_project_exists(self, project_id: str) -> bool:
@@ -208,7 +227,7 @@ class YggdrasilDBManager(CouchDBHandler):
     def add_ngi_report_entry(
         self,
         _doc_injected: YggdrasilDocument,
-        report_data: Dict[str, Any],
+        report_data: dict[str, Any],
     ) -> bool:
         """
         IMPORTANT: This method is decorated by @auto_load_and_save,

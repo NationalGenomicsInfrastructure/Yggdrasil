@@ -1,4 +1,9 @@
-from typing import Any, AsyncGenerator, Dict, Optional, Tuple
+import json
+from collections.abc import AsyncGenerator
+from typing import Any, cast
+
+from ibm_cloud_sdk_core.api_exception import ApiException
+from requests import Response
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.config_loader import ConfigLoader
@@ -23,13 +28,13 @@ class ProjectDBManager(CouchDBHandler):
         super().__init__("projects")
         self.module_registry = ConfigLoader().load_config("module_registry.json")
 
-    async def fetch_changes(self) -> AsyncGenerator[Tuple[Dict[str, Any], str], None]:
+    async def fetch_changes(self) -> AsyncGenerator[tuple[dict[str, Any], str], None]:
         """Fetches document changes from the database asynchronously.
 
         Yields:
             Tuple[Dict[str, Any], str]: A tuple containing the document and module location.
         """
-        last_processed_seq: Optional[str] = None
+        last_processed_seq: str | None = None
 
         while True:
             async for change in self.get_changes(last_processed_seq=last_processed_seq):
@@ -59,8 +64,8 @@ class ProjectDBManager(CouchDBHandler):
                     pass
 
     async def get_changes(
-        self, last_processed_seq: Optional[str] = None
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        self, last_processed_seq: str | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Fetch and yield document changes from a CouchDB database.
 
@@ -74,13 +79,29 @@ class ProjectDBManager(CouchDBHandler):
         if last_processed_seq is None:
             last_processed_seq = Ygg.get_last_processed_seq()
 
-        changes = self.db.changes(
-            feed="continuous", include_docs=False, since=last_processed_seq
-        )
+        response = self.server.post_changes_as_stream(
+            db=self.db_name,
+            feed="continuous",
+            since=last_processed_seq,
+            include_docs=False,
+        ).get_result()
 
-        for change in changes:
+        # Type assertion: we expect a Response object for streaming
+        changes = cast(Response, response)  # Makes Pylance happy
+
+        for line in changes.iter_lines():
+            # Reduce nesting / skip empty lines
+            if not line:
+                continue
+
+            change = json.loads(line)
+
+            # Only process real change entries
+            if "id" not in change or "seq" not in change:
+                continue
+
             try:
-                doc = self.db.get(change["id"])
+                doc = self.fetch_document_by_id(change["id"])
                 last_processed_seq = change["seq"]
                 if last_processed_seq is not None:
                     Ygg.save_last_processed_seq(last_processed_seq)
@@ -97,7 +118,7 @@ class ProjectDBManager(CouchDBHandler):
                 logging.warning(f"Error processing change: {e}")
                 logging.debug(f"Data causing the error: {change}")
 
-    def fetch_document_by_id(self, doc_id):
+    def fetch_document_by_id(self, doc_id) -> dict[str, Any] | None:
         """Fetches a document from the database by its ID.
 
         Args:
@@ -107,10 +128,20 @@ class ProjectDBManager(CouchDBHandler):
             Optional[Dict[str, Any]]: The retrieved document, or None if not found.
         """
         try:
-            document = self.db[doc_id]
-            return document
-        except KeyError:
-            logging.error(f"Document with ID '{doc_id}' not found in the database.")
+            document = self.server.get_document(
+                db=self.db_name, doc_id=doc_id
+            ).get_result()
+            if isinstance(document, dict):
+                return document
+            logging.warning("Unexpected non-dict response when fetching %s", doc_id)
+            return None
+        except ApiException as e:
+            if e.code == 404:
+                logging.error(f"Document '{doc_id}' not found in the database.")
+                return None
+            logging.error(
+                f"Cloudant API error fetching '{doc_id}': {e.code} {e.message}"
+            )
             return None
         except Exception as e:
             logging.error(f"Error while accessing database: {e}")
