@@ -20,6 +20,11 @@ except ImportError:
 for noisy in ("matplotlib", "numba", "h5py", "PIL", "watchdog"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
+logging.getLogger("ibm-cloud-sdk-core").setLevel(logging.ERROR)  # Only errors
+logging.getLogger("ibmcloudant.cloudant_v1").setLevel(
+    logging.WARNING
+)  # Warnings and above
+
 # Helper to abbreviate level names
 for _name, _abbr in {
     "DEBUG": "D",
