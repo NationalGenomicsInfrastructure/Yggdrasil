@@ -6,6 +6,7 @@ from typing import Any
 
 from lib.core_utils.singleton_decorator import singleton
 from lib.handlers.base_handler import BaseHandler
+from lib.ops.consumer_service import OpsConsumerService
 
 # from lib.handlers.flowcell_handler import FlowcellHandler
 from lib.watchers.couchdb_watcher import CouchDBWatcher
@@ -41,6 +42,9 @@ class YggdrasilCore:
 
         # Handlers: event_type -> function(event_payload)
         self.handlers: dict[str, BaseHandler] = {}
+
+        # Ops consumer service (for writing plan_status to CouchDB)
+        self.ops_consumer = OpsConsumerService(interval_sec=2.0)
 
         self._init_db_managers()
 
@@ -226,6 +230,11 @@ class YggdrasilCore:
             return
 
         self._running = True
+
+        self._logger.info("Starting operations consumer service...")
+        # Start the ops consumer service
+        self.ops_consumer.start()
+
         self._logger.info("Starting all watchers...")
 
         # Start watchers as async tasks
@@ -252,6 +261,10 @@ class YggdrasilCore:
         stop_tasks = [asyncio.create_task(w.stop()) for w in self.watchers]
         await asyncio.gather(*stop_tasks)
         self._logger.info("All watchers stopped.")
+
+        # Stop the ops consumer service
+        await self.ops_consumer.stop()
+        self._logger.info("Ops consumer service stopped.")
 
     def run_once(self, doc_id: str):
         """
@@ -287,6 +300,19 @@ class YggdrasilCore:
                 f"Handler {handler!r} must implement `.run_now(payload)` for one-off mode"
             )
         handler.run_now(payload)
+
+        # 2) After the step(s) emitted events, do a single consume pass
+        # TODO: Put the imports at the top when this is stable
+        import os
+        from pathlib import Path
+
+        from lib.ops.consumer import FileSpoolConsumer
+        from lib.ops.sinks.couch import OpsWriter
+
+        spool = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
+        FileSpoolConsumer(
+            spool, OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))
+        ).consume()
 
     def handle_event(self, event: YggdrasilEvent) -> None:
         """
