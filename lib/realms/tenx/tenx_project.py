@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 from lib.base.abstract_project import AbstractProject
 from lib.core_utils.config_loader import ConfigLoader
@@ -18,7 +19,7 @@ class TenXProject(AbstractProject):
 
     config: Mapping[str, Any] = ConfigLoader().load_config("10x_config.json")
 
-    def __init__(self, doc: Dict[str, Any], yggdrasil_db_manager: Any) -> None:
+    def __init__(self, doc: dict[str, Any], yggdrasil_db_manager: Any) -> None:
         """
         Initialize a TenXProject instance.
 
@@ -39,7 +40,7 @@ class TenXProject(AbstractProject):
         if self.proceed:
             self.initialize_project_in_db()
             # Extract metadata from project document
-            self.project_info: Dict[str, Any] = self._extract_project_info()
+            self.project_info: dict[str, Any] = self._extract_project_info()
 
             if not self.determine_organism():
                 # TODO: Send this message as a notification (e.g. on Slack)
@@ -49,15 +50,31 @@ class TenXProject(AbstractProject):
                 self.proceed = False
                 return
 
-            self.project_dir: Optional[Path] = self.ensure_project_directory()
+            self.project_dir: Path | None = self.ensure_project_directory()
             self.project_info["project_dir"] = self.project_dir
-            self.samples: List[TenXRunSample] = []
+            self.samples: list[TenXRunSample] = []
             self.case_type: str = self.project_info.get("case_type", "unknown")
             logging.info(f"Case type: {self.case_type}")
 
             self.status: str = "initialized"
 
-    def _extract_project_info(self) -> Dict[str, Any]:
+    # Experimental #
+    async def launch_template(self) -> None:
+        if not self.doc:
+            logging.warning("TenxRealm: no project document bound; skipping.")
+            return
+
+        # Build the same payload your handler expects
+        payload = {
+            "doc": self.doc,  # or "document" if that’s what you use—be consistent
+            "reason": f"project.status={getattr(self, 'project_status', '') or 'unknown'}",
+        }
+        from lib.realms.tenx.handler import handle_project_change
+
+        # Offload the sync handler so we don’t block the event loop
+        await asyncio.to_thread(handle_project_change, payload)
+
+    def _extract_project_info(self) -> dict[str, Any]:
         """
         Extracts relevant project information from the document.
 
@@ -66,7 +83,7 @@ class TenXProject(AbstractProject):
         """
         try:
             details = self.doc.get("details", {})
-            project_info: Dict[str, Any] = {
+            project_info: dict[str, Any] = {
                 "project_name": self.doc.get("project_name", ""),
                 "project_id": self.doc.get("project_id", "Unknown_Project"),
                 "customer_reference": self.doc.get("customer_project_reference", ""),
@@ -174,7 +191,7 @@ class TenXProject(AbstractProject):
 
         return True
 
-    def _is_field(self, field_path: str, data: Dict[str, Any]) -> bool:
+    def _is_field(self, field_path: str, data: dict[str, Any]) -> bool:
         """Checks if the document contains all required fields.
 
         Args:
@@ -192,7 +209,7 @@ class TenXProject(AbstractProject):
                 return False
         return True
 
-    def ensure_project_directory(self) -> Optional[Path]:
+    def ensure_project_directory(self) -> Path | None:
         """Ensures that the project directory exists. Creates it if necessary.
 
         Returns:
@@ -227,7 +244,7 @@ class TenXProject(AbstractProject):
         else:
             return "unknown"
 
-    def identify_feature_old_case(self, sample_info: Dict[str, Any]) -> Tuple[str, str]:
+    def identify_feature_old_case(self, sample_info: dict[str, Any]) -> tuple[str, str]:
         """Identify feature and original sample ID for old format cases.
 
         Args:
@@ -247,7 +264,7 @@ class TenXProject(AbstractProject):
         default_original_sample_id = customer_name or "unknown_sample_id"
         return "unknown", default_original_sample_id
 
-    def identify_feature_new_case(self, sample_id: str) -> Tuple[str, str]:
+    def identify_feature_new_case(self, sample_id: str) -> tuple[str, str]:
         """Identify feature and original sample ID for new format cases.
 
         Args:
@@ -262,7 +279,7 @@ class TenXProject(AbstractProject):
         default_original_sample_id = sample_id[:-1] or "unknown_sample_id"
         return feature, default_original_sample_id
 
-    def filter_aborted_samples(self, sample_data: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_aborted_samples(self, sample_data: dict[str, Any]) -> dict[str, Any]:
         """Filter out aborted samples from the sample data.
 
         Args:
@@ -279,8 +296,8 @@ class TenXProject(AbstractProject):
         }
 
     def identify_feature_and_original_id_old(
-        self, sample_id: str, sample_info: Dict[str, Any]
-    ) -> Tuple[str, str]:
+        self, sample_id: str, sample_info: dict[str, Any]
+    ) -> tuple[str, str]:
         """Identify feature and original sample ID for old format samples.
 
         Args:
@@ -301,7 +318,7 @@ class TenXProject(AbstractProject):
             original_sample_id = sample_id
             return feature, original_sample_id
 
-    def identify_feature_and_original_id_new(self, sample_id: str) -> Tuple[str, str]:
+    def identify_feature_and_original_id_new(self, sample_id: str) -> tuple[str, str]:
         """Identify feature and original sample ID for new format samples.
 
         Args:
@@ -321,8 +338,8 @@ class TenXProject(AbstractProject):
             return feature, original_sample_id
 
     def create_lab_samples(
-        self, sample_data: Dict[str, Any]
-    ) -> Dict[str, Tuple[TenXLabSample, str]]:
+        self, sample_data: dict[str, Any]
+    ) -> dict[str, tuple[TenXLabSample, str]]:
         """Create lab samples from the sample data.
 
         Args:
@@ -350,8 +367,8 @@ class TenXProject(AbstractProject):
         return lab_samples
 
     def group_lab_samples(
-        self, lab_samples: Dict[str, Tuple[TenXLabSample, str]]
-    ) -> Dict[str, List[TenXLabSample]]:
+        self, lab_samples: dict[str, tuple[TenXLabSample, str]]
+    ) -> dict[str, list[TenXLabSample]]:
         """Group lab samples by original sample ID.
 
         Args:
@@ -360,14 +377,14 @@ class TenXProject(AbstractProject):
         Returns:
             Dict[str, List[TenXLabSample]]: A dictionary grouping lab samples by original sample ID.
         """
-        groups: Dict[str, list[TenXLabSample]] = {}
+        groups: dict[str, list[TenXLabSample]] = {}
         for lab_sample, original_sample_id in lab_samples.values():
             groups.setdefault(original_sample_id, []).append(lab_sample)
         return groups
 
     def create_run_samples(
-        self, grouped_lab_samples: Dict[str, List[TenXLabSample]]
-    ) -> List[TenXRunSample]:
+        self, grouped_lab_samples: dict[str, list[TenXLabSample]]
+    ) -> list[TenXRunSample]:
         """Create run samples from grouped lab samples.
 
         Args:
@@ -389,7 +406,7 @@ class TenXProject(AbstractProject):
             run_samples.append(run_sample)
         return run_samples
 
-    def extract_samples(self) -> List[TenXRunSample]:
+    def extract_samples(self) -> list[TenXRunSample]:
         """Extract and prepare samples for processing.
 
         Returns:
