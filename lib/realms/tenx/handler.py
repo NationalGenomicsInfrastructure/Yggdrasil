@@ -11,7 +11,7 @@ from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.planner import PlanningContext
 
-from .planner import TenxPlanner  # realm-local
+from .planner_old import TenxPlanner  # realm-local
 
 
 def handle_project_change(payload: dict[str, Any]) -> None:
@@ -26,7 +26,7 @@ def handle_project_change(payload: dict[str, Any]) -> None:
     ctx = PlanningContext(
         realm="tenx",
         scope=scope,
-        work_root=Path(os.environ.get("YGG_WORK_ROOT", "/tmp/ygg_work")),
+        scope_dir=Path(os.environ.get("YGG_WORK_ROOT", "/tmp/ygg_work")),
         emitter=FileSpoolEmitter(),
         source_doc=doc,
         reason=payload.get("reason", "project.updated"),
@@ -40,7 +40,7 @@ def handle_project_change(payload: dict[str, Any]) -> None:
 
     # Auto-run if allowed
     if draft.auto_run:
-        Engine(work_root=ctx.work_root, emitter=ctx.emitter).run(draft.plan)
+        Engine(work_root=ctx.scope_dir, emitter=ctx.emitter).run(draft.plan)
 
 
 def handle_plan_draft_change(payload: dict[str, Any]) -> None:

@@ -10,7 +10,7 @@ from yggdrasil.flow.planner import PlanDraft, Planner, PlanningContext
 # Dotted paths to realm steps (wrap old tenx functions with @step later)
 INTAKE_COLLECT = "lib.realms.tenx.steps.collect_metadata"  # TODO: implement/wrap
 INTAKE_DETECT = "lib.realms.tenx.steps.detect_assay"  # TODO: implement/wrap
-STEP_LIBCSV = "lib.realms.tenx.steps.build_library_csv"  # TODO: implement/wrap
+STEP_LIBCSV = "lib.realms.tenx.steps.build_libraries_csv"  # TODO: implement/wrap
 STEP_MULTI = "lib.realms.tenx.steps.cellranger_multi"  # TODO: implement/wrap
 
 
@@ -26,11 +26,11 @@ class TenxPlanner(Planner):
     def generate(self, ctx: PlanningContext) -> PlanDraft:
         realm, scope = ctx.realm, ctx.scope
         proj_id = scope["id"]
-        base = Path(ctx.work_root) / realm / proj_id
+        base = Path(ctx.scope_dir) / realm / proj_id
 
         # --- OPTIONAL: run intake (tracked) so we have stable artifacts to wire ---
         # Comment out until you have the @step wrappers ready.
-        # eng = Engine(work_root=ctx.work_root, emitter=ctx.emitter or FileSpoolEmitter())
+        # eng = Engine(work_root=ctx.base_dir, emitter=ctx.emitter or FileSpoolEmitter())
         # intake = Plan(
         #     plan_id=f"intake_{proj_id}",
         #     realm=realm,
