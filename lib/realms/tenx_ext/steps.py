@@ -1,4 +1,3 @@
-# lib/realms/tenx/steps.py
 from __future__ import annotations
 
 import json
@@ -47,27 +46,32 @@ def detect_assay(ctx: StepContext, in_dir: str, out_dir: str) -> StepResult:
 # ---------- execution steps (safe stubs) ----------
 
 
-@step("build_library_csv")
-def build_library_csv(
+@step("build_libraries_csv")
+def build_libraries_csv(
     ctx: StepContext, features: dict[str, str], out_dir: str
 ) -> StepResult:
     outdir = Path(out_dir)
+
+    # GOOD TO HAVE: Enhanced safety for not writing outside workdir
+    if not outdir.is_absolute():
+        outdir = (ctx.workdir / outdir).resolve()
+
     outdir.mkdir(parents=True, exist_ok=True)
-    csv_path = outdir / "library.csv"
+    csv_path = outdir / "libraries.csv"
 
     with csv_path.open("w") as fh:
         fh.write("feature_type,feature_id\n")
         for ft, fid in (features or {}).items():
             fh.write(f"{ft},{fid}\n")
 
-    art = ctx.add_artifact("library_csv", str(csv_path))
+    art = ctx.add_artifact("libraries_csv", str(csv_path))
     return StepResult(artifacts=[art], metrics={"rows": len(features or {})})
 
 
-@step("cellranger_multi", input_keys=("library_csv",))
+@step("cellranger_multi", input_keys=("libraries_csv",))
 def cellranger_multi(
     ctx: StepContext,
-    library_csv: (
+    libraries_csv: (
         str | None
     ),  # <-- we will also pass this in params so the step can use it
     out_dir: str,
@@ -76,10 +80,15 @@ def cellranger_multi(
     """
     Stub: don't actually run CR. Just show wiring works and produce a “submit script”.
     """
-    if not library_csv:
-        raise ValueError("cellranger_multi requires 'library_csv' in params")
+    if not libraries_csv:
+        raise ValueError("cellranger_multi requires 'libraries_csv' in params")
 
     outdir = Path(out_dir)
+
+    # GOOD TO HAVE: Enhanced safety for not writing outside workdir
+    if not outdir.is_absolute():
+        outdir = (ctx.workdir / outdir).resolve()
+
     outdir.mkdir(parents=True, exist_ok=True)
 
     # Emit a submit script artifact (glass-box) so a human could run it if needed.
@@ -88,8 +97,8 @@ def cellranger_multi(
         f"""#!/usr/bin/env bash
 set -euo pipefail
 # STUB submit for {sample_id}
-# would run: cellranger multi --config {library_csv} --id {sample_id} --output-dir {out_dir}
-echo "Simulating cellranger multi for {sample_id} using {library_csv}" > "{outdir}/_SIMULATED_OUT"
+# would run: cellranger multi --config {libraries_csv} --id {sample_id} --output-dir {out_dir}
+echo "Simulating cellranger multi for {sample_id} using {libraries_csv}" > "{outdir}/_SIMULATED_OUT"
 """
     )
     submit.chmod(0o755)
@@ -100,4 +109,46 @@ echo "Simulating cellranger multi for {sample_id} using {library_csv}" > "{outdi
     if simulated.exists():
         ctx.add_artifact("cr_outs", str(outdir))
 
+    return StepResult(metrics={"simulated": True})
+
+
+@step("cellranger_count", input_keys=("libraries_csv",))
+def cellranger_count(
+    ctx: StepContext,
+    libraries_csv: (
+        str | None
+    ),  # <-- we will also pass this in params so the step can use it
+    out_dir: str,
+    project_id: str,
+) -> StepResult:
+    """
+    Stub: don't actually run CR. Just show wiring works and produce a “submit script”.
+    """
+    if not libraries_csv:
+        raise ValueError("cellranger_count requires 'libraries_csv' in params")
+
+    outdir = Path(out_dir)
+
+    # GOOD TO HAVE: Enhanced safety for not writing outside workdir
+    if not outdir.is_absolute():
+        outdir = (ctx.workdir / outdir).resolve()
+
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # Emit a submit script artifact (glass-box) so a human could run it if needed.
+    submit = outdir / "submit_cellranger_count.sh"
+    submit.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+# STUB submit for {project_id}
+# would run: cellranger count --libraries {libraries_csv} --id {project_id} --output-dir {out_dir}
+echo "Simulating cellranger count for {project_id} using {libraries_csv}" > "{outdir}/_SIMULATED_OUT"
+"""
+    )
+    submit.chmod(0o755)
+    ctx.add_artifact("submit_script", str(submit))
+    # pretend we produced some outs
+    simulated = outdir / "_SIMULATED_OUT"
+    if simulated.exists():
+        ctx.add_artifact("cr_outs", str(outdir))
     return StepResult(metrics={"simulated": True})
