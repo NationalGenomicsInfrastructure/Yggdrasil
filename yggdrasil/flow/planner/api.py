@@ -1,21 +1,30 @@
-# yggdrasil/flow/planner.py
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .model import Plan
+from yggdrasil.flow.model import Plan
+
+
+class FactsProvider(ABC):
+    @abstractmethod
+    def distil_facts(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """Normalize the source document into a compact facts dict for planning."""
+        ...
 
 
 @dataclass
 class PlanningContext:
     realm: str
     scope: dict[str, Any]  # {"kind":"project","id":"P12345"}, etc.
-    work_root: Path  # where planner may stage intake outputs
+    scope_dir: Path  # ABS path: working root for THIS scope (project/flowcell/...)
     emitter: Any  # EventEmitter (or None; planner can ignore)
     source_doc: dict[str, Any]  # triggering document snapshot
     reason: str  # e.g. "projects/P12345 updated"
+    realm_config: Mapping[str, Any] | None = None  # optional realm-specific config
 
 
 @dataclass
