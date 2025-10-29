@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,6 +92,7 @@ def step(name: str | None = None, *, input_keys: tuple[str, ...] = ()):
     def deco(fn: Callable[..., Any]):
         sname = name or fn.__name__
 
+        @functools.wraps(fn)
         def wrapper(ctx: StepContext, **kwargs) -> StepResult:
             ctx.emit("step.started", params=kwargs)
             try:
