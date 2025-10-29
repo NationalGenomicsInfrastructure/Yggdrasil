@@ -114,6 +114,13 @@ class YggdrasilCore:
                 event_type.name,  # type: ignore
             )
 
+        from lib.realms.tenx_ext.yggdrasil_realm.project_handler import (
+            TenxProjectHandler,
+        )
+
+        # event_type = getattr(TenxProjectHandler, "event_type", None)
+        self.register_handler(EventType.PROJECT_CHANGE, TenxProjectHandler())
+
     def setup_handlers(self) -> None:
         """
         Instantiate and register all event handlers.
@@ -123,16 +130,14 @@ class YggdrasilCore:
         self.auto_register_external_handlers()
 
         # 2. Register built-in handlers
-        from lib.handlers.bp_analysis_handler import BestPracticeAnalysisHandler
+        # from lib.handlers.bp_analysis_handler import BestPracticeAnalysisHandler
 
         # Best‑practice analysis for new/changed ProjectDB docs
-        project_handler = BestPracticeAnalysisHandler()
-        self.register_handler(EventType.PROJECT_CHANGE, project_handler)
-
+        # project_handler = BestPracticeAnalysisHandler()
+        # self.register_handler(EventType.PROJECT_CHANGE, project_handler)
         # # Demultiplexing / downstream pipeline for newly-ready flowcells
         # flowcell_handler = FlowcellHandler()
         # self.register_handler(EventType.FLOWCELL_READY, flowcell_handler)
-
         # NOTE: When we have a CLI‑triggered event type, e.g. 'manual_run', register it here too
         # cli_handler = CLIHandler()
         # self.register_handler(EventType.<whatever>, cli_handler)
@@ -266,53 +271,102 @@ class YggdrasilCore:
         await self.ops_consumer.stop()
         self._logger.info("Ops consumer service stopped.")
 
+    # def run_once(self, doc_id: str):
+    #     """
+    #     Fetch the project doc, build the payload, and synchronously
+    #     drive the BestPracticeAnalysisHandler without starting watchers.
+    #     """
+    #     from lib.core_utils.module_resolver import get_module_location
+    #     from lib.couchdb.project_db_manager import ProjectDBManager
+
+    #     pdm = ProjectDBManager()
+    #     doc = pdm.fetch_document_by_id(doc_id)
+    #     if not doc:
+    #         self._logger.error(f"No project with ID {doc_id}")
+    #         return
+
+    #     module_loc = get_module_location(doc)
+    #     if not module_loc:
+    #         self._logger.error(f"No module for project {doc_id}")
+    #         return
+
+    #     payload = {"document": doc, "module_location": module_loc}
+
+    #     # Use the appropriate registered earlier
+    #     handler = self.handlers.get(EventType.PROJECT_CHANGE)
+    #     if not handler:
+    #         self._logger.error(
+    #             "No handler for '%s' event type", EventType.PROJECT_CHANGE
+    #         )
+    #         return
+
+    #     if not hasattr(handler, "run_now"):
+    #         raise RuntimeError(
+    #             f"Handler {handler!r} must implement `.run_now(payload)` for one-off mode"
+    #         )
+    #     handler.run_now(payload)
+
+    #     # 2) After the step(s) emitted events, do a single consume pass
+    #     # TODO: Put the imports at the top when this is stable
+    #     import os
+    #     from pathlib import Path
+
+    #     from lib.ops.consumer import FileSpoolConsumer
+    #     from lib.ops.sinks.couch import OpsWriter
+
+    #     spool = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
+    #     FileSpoolConsumer(
+    #         spool, OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))
+    #     ).consume()
+
     def run_once(self, doc_id: str):
         """
-        Fetch the project doc, build the payload, and synchronously
-        drive the BestPracticeAnalysisHandler without starting watchers.
+        Fetch one project doc and run the PROJECT_CHANGE handler synchronously.
+        Then do a single pass over the event spool to flush to ops.
         """
-        from lib.core_utils.module_resolver import get_module_location
-        from lib.couchdb.project_db_manager import ProjectDBManager
-
-        pdm = ProjectDBManager()
-        doc = pdm.fetch_document_by_id(doc_id)
-        if not doc:
-            self._logger.error(f"No project with ID {doc_id}")
-            return
-
-        module_loc = get_module_location(doc)
-        if not module_loc:
-            self._logger.error(f"No module for project {doc_id}")
-            return
-
-        payload = {"document": doc, "module_location": module_loc}
-
-        # Use the appropriate registered earlier
-        handler = self.handlers.get(EventType.PROJECT_CHANGE)
-        if not handler:
-            self._logger.error(
-                "No handler for '%s' event type", EventType.PROJECT_CHANGE
-            )
-            return
-
-        if not hasattr(handler, "run_now"):
-            raise RuntimeError(
-                f"Handler {handler!r} must implement `.run_now(payload)` for one-off mode"
-            )
-        handler.run_now(payload)
-
-        # 2) After the step(s) emitted events, do a single consume pass
-        # TODO: Put the imports at the top when this is stable
         import os
         from pathlib import Path
 
+        from lib.couchdb.project_db_manager import ProjectDBManager
         from lib.ops.consumer import FileSpoolConsumer
         from lib.ops.sinks.couch import OpsWriter
 
-        spool = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
+        self._logger.info("run_once: fetching project %s", doc_id)
+        pdm = ProjectDBManager()
+        doc = pdm.fetch_document_by_id(doc_id)
+        if not doc:
+            self._logger.error("No project with ID %s", doc_id)
+            return
+
+        handler = self.handlers.get(EventType.PROJECT_CHANGE)
+        if not handler:
+            self._logger.error("No handler registered for %s", EventType.PROJECT_CHANGE)
+            return
+        if not hasattr(handler, "run_now"):
+            raise RuntimeError(f"Handler {handler!r} must implement run_now(payload)")
+
+        # Build the minimal, consistent payload the Tenx handler expects
+        payload = {
+            "doc": doc,
+            "reason": f"run_once:{doc.get('project_id') or doc_id}",
+        }
+
+        self._logger.info("Invoking PROJECT_CHANGE handler (run_now)")
+        try:
+            handler.run_now(payload)
+        except Exception as e:
+            self._logger.exception("Handler raised during run_once: %s", e)
+            return
+
+        # Single consume pass: spool must match the emitter used in the handler
+        spool_root = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
+        self._logger.info("Consuming event spool once at %s", spool_root)
         FileSpoolConsumer(
-            spool, OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))
+            spool_root,
+            OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops")),
         ).consume()
+
+        self._logger.info("run_once: done.")
 
     def handle_event(self, event: YggdrasilEvent) -> None:
         """
