@@ -24,6 +24,9 @@ logging.getLogger("ibm-cloud-sdk-core").setLevel(logging.ERROR)  # Only errors
 logging.getLogger("ibmcloudant.cloudant_v1").setLevel(
     logging.WARNING
 )  # Warnings and above
+logging.getLogger("urllib3.connectionpool").setLevel(
+    logging.WARNING
+)  # Suppress debug logs
 
 # Helper to abbreviate level names
 for _name, _abbr in {
