@@ -5,14 +5,13 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Callable
-from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
-from yggdrasil.flow.model import Plan, StepSpec
+from yggdrasil.flow.model import Plan, StepResult, StepSpec
 from yggdrasil.flow.step import StepContext
+from yggdrasil.flow.utils.callable_ref import resolve_callable
 from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
 from yggdrasil.flow.utils.ygg_time import utcnow_compact, utcnow_iso
 
@@ -20,12 +19,6 @@ logger = logging.getLogger("yggdrasil.flow.engine")
 
 
 # ------------ Utilities ------------
-
-
-def _load_callable(fn_ref: str) -> Callable[..., Any]:
-    mod_name, func_name = fn_ref.rsplit(".", 1)
-    mod = import_module(mod_name)
-    return getattr(mod, func_name)
 
 
 def _json_sha256(data: dict[str, Any]) -> str:
@@ -117,9 +110,9 @@ class Engine:
         self.emitter = emitter or FileSpoolEmitter()
 
     def _plan_dir(self, plan: Plan) -> Path:
-        scope_id = plan.scope.get("id", "na")
-        realm = plan.realm
-        return self.work_root / realm / scope_id / plan.plan_id
+        # scope_id = plan.scope.get("id", "na")
+        # realm = plan.realm
+        return self.work_root / plan.plan_id
 
     def _step_dir(self, plan_dir: Path, spec: StepSpec) -> Path:
         return plan_dir / spec.step_id
@@ -159,7 +152,7 @@ class Engine:
             step_dir = self._step_dir(plan_dir, spec)
             step_dir.mkdir(parents=True, exist_ok=True)
 
-            fn = _load_callable(spec.fn_ref)
+            fn = resolve_callable(spec.fn_ref)
             _lint_missing_inputs(spec, fn)
 
             run_id = _new_run_id()
@@ -207,10 +200,15 @@ class Engine:
                 run_id=run_id,
             )
 
-            fn = _load_callable(spec.fn_ref)
-            result = fn(
-                ctx, **spec.params
-            )  # returns StepResult (decorator wraps emissions)
+            # returns StepResult (decorator wraps emissions)
+            result = fn(ctx, **spec.params)
+
+            if result is not None and not isinstance(result, StepResult):
+                logger.warning(
+                    "Step %s returned %r (expected StepResult or None)",
+                    spec.step_id,
+                    type(result),
+                )
 
             # mark success in cache after function returns without exception
             fp_file.write_text(fingerprint)
