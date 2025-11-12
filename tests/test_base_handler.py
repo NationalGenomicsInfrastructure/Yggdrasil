@@ -99,6 +99,153 @@ class TestBaseHandler(unittest.TestCase):
         self.assertIsInstance(handler, self.ConcreteHandler)
 
     # =====================================================
+    # IDENTITY HELPER METHOD TESTS
+    # =====================================================
+
+    def test_class_qualified_name(self):
+        """Test class_qualified_name returns correct module.qualname format."""
+        handler = self.ConcreteHandler()
+
+        # Should return module.qualname format
+        qualified_name = handler.class_qualified_name()
+
+        # Should contain module name
+        self.assertIn("test_base_handler", qualified_name)
+        # Should contain class name
+        self.assertIn("ConcreteHandler", qualified_name)
+        # Should be in correct format
+        self.assertTrue(qualified_name.endswith(".ConcreteHandler"))
+
+    def test_class_qualified_name_with_nested_classes(self):
+        """Test class_qualified_name handles nested classes correctly."""
+
+        class OuterHandler(BaseHandler):
+            event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
+
+            class InnerHandler(BaseHandler):
+                event_type: ClassVar[EventType] = EventType.FLOWCELL_READY
+
+                async def handle_task(self, payload: dict[str, Any]) -> None:
+                    pass
+
+                def __call__(self, payload: dict[str, Any]) -> None:
+                    pass
+
+            async def handle_task(self, payload: dict[str, Any]) -> None:
+                pass
+
+            def __call__(self, payload: dict[str, Any]) -> None:
+                pass
+
+        outer = OuterHandler()
+        inner = OuterHandler.InnerHandler()
+
+        # Outer should have simple qualname
+        outer_qname = outer.class_qualified_name()
+        self.assertIn("OuterHandler", outer_qname)
+        self.assertNotIn("InnerHandler", outer_qname)
+
+        # Inner should have nested qualname
+        inner_qname = inner.class_qualified_name()
+        self.assertIn("OuterHandler.InnerHandler", inner_qname)
+
+    def test_class_key_returns_tuple(self):
+        """Test class_key returns (module, qualname) tuple."""
+        handler = self.ConcreteHandler()
+
+        key = handler.class_key()
+
+        # Should be a tuple
+        self.assertIsInstance(key, tuple)
+        # Should have exactly 2 elements
+        self.assertEqual(len(key), 2)
+        # Both should be strings
+        self.assertIsInstance(key[0], str)
+        self.assertIsInstance(key[1], str)
+
+    def test_class_key_stability(self):
+        """Test class_key returns stable identity across instances."""
+        handler1 = self.ConcreteHandler()
+        handler2 = self.ConcreteHandler()
+
+        key1 = handler1.class_key()
+        key2 = handler2.class_key()
+
+        # Keys should be identical for same class
+        self.assertEqual(key1, key2)
+
+    def test_class_key_uniqueness(self):
+        """Test class_key distinguishes different handler classes."""
+        concrete_handler = self.ConcreteHandler()
+        incomplete_handler_cls = self.IncompleteHandler
+
+        # Get keys
+        concrete_key = concrete_handler.class_key()
+
+        # Keys should be different for different classes
+        # (IncompleteHandler can't be instantiated, but we can call class method)
+        incomplete_key = incomplete_handler_cls.class_key()
+
+        self.assertNotEqual(concrete_key, incomplete_key)
+
+    def test_class_key_format(self):
+        """Test class_key format matches (module, qualname)."""
+        handler = self.ConcreteHandler()
+
+        key = handler.class_key()
+        module_name, qualname = key
+
+        # Module should match
+        self.assertEqual(module_name, handler.__module__)
+        # Qualname should match
+        self.assertEqual(qualname, handler.__class__.__qualname__)
+
+    def test_class_key_used_for_deduplication(self):
+        """Test class_key can be used for handler deduplication."""
+        handler1 = self.ConcreteHandler()
+        handler2 = self.ConcreteHandler()
+
+        class AnotherHandler(BaseHandler):
+            event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
+
+            async def handle_task(self, payload: dict[str, Any]) -> None:
+                pass
+
+            def __call__(self, payload: dict[str, Any]) -> None:
+                pass
+
+        another_handler = AnotherHandler()
+
+        # Simulate deduplication using class_key
+        seen_keys = set()
+        unique_handlers = []
+
+        for handler in [handler1, handler2, another_handler]:
+            key = handler.class_key()
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_handlers.append(handler)
+
+        # Should have deduplicated ConcreteHandler instances
+        self.assertEqual(len(unique_handlers), 2)
+        # Should have kept one ConcreteHandler and one AnotherHandler
+        self.assertEqual(len(seen_keys), 2)
+
+    def test_identity_methods_are_class_methods(self):
+        """Test that identity helper methods are proper class methods."""
+        # Should be callable on class without instantiation
+        qualified_name = self.ConcreteHandler.class_qualified_name()
+        key = self.ConcreteHandler.class_key()
+
+        self.assertIsInstance(qualified_name, str)
+        self.assertIsInstance(key, tuple)
+
+        # Should return same results when called on instance
+        handler = self.ConcreteHandler()
+        self.assertEqual(qualified_name, handler.class_qualified_name())
+        self.assertEqual(key, handler.class_key())
+
+    # =====================================================
     # EVENT TYPE CLASS VARIABLE TESTS
     # =====================================================
 
