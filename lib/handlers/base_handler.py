@@ -16,6 +16,17 @@ class BaseHandler(ABC):
     # realm authors must set this
     event_type: ClassVar[EventType]
 
+    # ---------- identity helpers ----------
+    @classmethod
+    def class_qualified_name(cls) -> str:
+        """e.g. '<realm>.yggdrasil_realm.project_handler.<RealmProjectHandler>'"""
+        return f"{cls.__module__}.{cls.__qualname__}"
+
+    @classmethod
+    def class_key(cls) -> tuple[str, str]:
+        """Stable identity: (module, qualname)."""
+        return (cls.__module__, cls.__qualname__)
+
     @abstractmethod
     async def handle_task(self, payload: dict[str, Any]) -> None:
         """
