@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
+from yggdrasil.flow.utils.jsonify import to_jsonable
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
 
@@ -26,11 +27,16 @@ class FileSpoolEmitter:
         event.setdefault("eid", str(uuid.uuid4()))
         event.setdefault("ts", utcnow_iso())
         hints = event.pop("_spool_path", {})
-        rel = Path(
-            hints.get("realm", "unknown"),
-            hints.get("plan_id", "unknown_plan"),
-            hints.get("step_id", "unknown_step"),
-        )
+        # Build relative spool path.
+        # For plan-level events (e.g. type startswith 'plan.'), omit step directory if not provided.
+        realm = hints.get("realm", "unknown")
+        plan_id = hints.get("plan_id", "unknown_plan")
+        step_id = hints.get("step_id")
+        ev_type = str(event.get("type", ""))
+        if not step_id and ev_type.startswith("plan."):
+            rel = Path(realm, plan_id)
+        else:
+            rel = Path(realm, plan_id, step_id or "unknown_step")
         run_id = hints.get("run_id")
         if run_id:
             rel = rel / run_id
@@ -38,7 +44,7 @@ class FileSpoolEmitter:
         d.mkdir(parents=True, exist_ok=True)
         fn = hints.get("filename", f"{event['eid']}.json")
         tmp = (d / fn).with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(event, sort_keys=True), encoding="utf-8")
+        tmp.write_text(json.dumps(to_jsonable(event), sort_keys=True), encoding="utf-8")
         tmp.replace(d / fn)
 
 
