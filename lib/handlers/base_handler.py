@@ -28,6 +28,14 @@ class BaseHandler(ABC):
         return (cls.__module__, cls.__qualname__)
 
     @abstractmethod
+    def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """
+        Return {'kind': <string>, 'id': <string>} for this document.
+        Examples: {'kind':'project','id': P12345} or {'kind':'flowcell','id': FCID}.
+        """
+        ...
+
+    @abstractmethod
     async def handle_task(self, payload: dict[str, Any]) -> None:
         """
         Coroutine that does the real work.
