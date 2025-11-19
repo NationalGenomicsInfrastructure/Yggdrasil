@@ -25,7 +25,7 @@ class Plan:
 
 @dataclass
 class Artifact:
-    role: str  # semantic label, e.g. "library_csv", "cr_outs", "submit_script"
+    key: str  # semantic label, e.g. "library_csv", "cr_outs", "submit_script"
     path: str  # absolute or workdir-relative path
     digest: str | None = None  # sha256 for files or "dirhash:<hex>" for dirs
 
