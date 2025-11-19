@@ -109,9 +109,10 @@ class Engine:
         )
         self.emitter = emitter or FileSpoolEmitter()
 
+    def _scope_dir(self, plan_dir: Path) -> Path:
+        return plan_dir.parent
+
     def _plan_dir(self, plan: Plan) -> Path:
-        # scope_id = plan.scope.get("id", "na")
-        # realm = plan.realm
         return self.work_root / plan.plan_id
 
     def _step_dir(self, plan_dir: Path, spec: StepSpec) -> Path:
@@ -194,6 +195,7 @@ class Engine:
                 step_id=spec.step_id,
                 step_name=spec.name,
                 workdir=step_dir,
+                scope_dir=self._scope_dir(plan_dir),
                 emitter=self.emitter,
                 run_mode=os.environ.get("YGG_RUN_MODE", "auto"),
                 fingerprint=fingerprint,
