@@ -1,5 +1,5 @@
 import os
-from typing import cast
+from typing import Any, cast
 
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant import CouchDbSessionAuthenticator, cloudant_v1
@@ -109,3 +109,34 @@ class CouchDBHandler:
         self.server: cloudant_v1.CloudantV1 = cast(
             cloudant_v1.CloudantV1, self.connection_manager.server
         )
+
+    def fetch_document_by_id(self, doc_id) -> dict[str, Any] | None:
+        """Fetches a document from the database by its ID.
+
+        Args:
+            doc_id (str): The ID of the document to fetch.
+
+        Returns:
+            Optional[dict[str, Any]]: The retrieved document, or None if not found.
+        """
+        try:
+            document = self.server.get_document(
+                db=self.db_name, doc_id=doc_id
+            ).get_result()
+            if isinstance(document, dict):
+                return document
+            logging.warning("Unexpected non-dict response when fetching %s", doc_id)
+            return None
+        except ApiException as e:
+            if e.code == 404:
+                logging.error(
+                    f"Document '{doc_id}' not found in the database {self.db_name}."
+                )
+                return None
+            logging.error(
+                f"Cloudant API error fetching '{doc_id}' from {self.db_name}: {e.code} {e.message}"
+            )
+            return None
+        except Exception as e:
+            logging.error(f"Error while accessing database {self.db_name}: {e}")
+            return None

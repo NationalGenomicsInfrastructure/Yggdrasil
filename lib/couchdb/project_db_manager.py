@@ -2,7 +2,6 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
-from ibm_cloud_sdk_core.api_exception import ApiException
 from requests import Response
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
@@ -18,7 +17,6 @@ class ProjectDBManager(CouchDBHandler):
     Manages interactions with the 'projects' database, such as:
 
       - Asynchronously fetching document changes (`fetch_changes` / `get_changes`).
-      - Retrieving documents by ID.
 
     Inherits from `CouchDBHandler` to reuse the CouchDB connection.
     It is specialized for Yggdrasil needs (e.g., module registry lookups).
@@ -117,32 +115,3 @@ class ProjectDBManager(CouchDBHandler):
             except Exception as e:
                 logging.warning(f"Error processing change: {e}")
                 logging.debug(f"Data causing the error: {change}")
-
-    def fetch_document_by_id(self, doc_id) -> dict[str, Any] | None:
-        """Fetches a document from the database by its ID.
-
-        Args:
-            doc_id (str): The ID of the document to fetch.
-
-        Returns:
-            Optional[Dict[str, Any]]: The retrieved document, or None if not found.
-        """
-        try:
-            document = self.server.get_document(
-                db=self.db_name, doc_id=doc_id
-            ).get_result()
-            if isinstance(document, dict):
-                return document
-            logging.warning("Unexpected non-dict response when fetching %s", doc_id)
-            return None
-        except ApiException as e:
-            if e.code == 404:
-                logging.error(f"Document '{doc_id}' not found in the database.")
-                return None
-            logging.error(
-                f"Cloudant API error fetching '{doc_id}': {e.code} {e.message}"
-            )
-            return None
-        except Exception as e:
-            logging.error(f"Error while accessing database: {e}")
-            return None
