@@ -466,9 +466,10 @@ class YggdrasilCore:
             return
 
         # Build the minimal, consistent payload the Tenx handler expects
-        payload = {
+        reason: str = f"run_once:{doc.get('project_id') or doc_id}"
+        payload: dict[str, Any] = {
             "doc": doc,
-            "reason": f"run_once:{doc.get('project_id') or doc_id}",
+            "reason": reason,
         }
 
         self._logger.info(
@@ -486,9 +487,7 @@ class YggdrasilCore:
                     )
                     continue
 
-                ctx = self._make_planning_ctx(
-                    handler, scope, doc=doc, reason=payload["reason"]
-                )
+                ctx = self._make_planning_ctx(handler, scope, doc=doc, reason=reason)
                 payload["planning_ctx"] = ctx
                 handler.run_now(payload)
             except Exception as e:
