@@ -135,21 +135,10 @@ class YggdrasilDBManager(CouchDBHandler):
         Returns:
             Optional[YggdrasilDocument]: An Yggdrasil document if found, else None.
         """
-        try:
-            document = self.server.get_document(
-                db=self.db_name, doc_id=project_id
-            ).get_result()
+        document = self.fetch_document_by_id(project_id)
+        if document:
             return YggdrasilDocument.from_dict(document)
-        except ApiException as e:
-            if e.code == 404:
-                logging.info(f"Project with ID '{project_id}' not found.")
-            else:
-                logging.error(
-                    f"Error accessing project '{project_id}': {e.code} {e.message}"
-                )
-            return None
-        except Exception as e:
-            logging.error(f"Error accessing project '{project_id}': {e}")
+        else:
             return None
 
     def check_project_exists(self, project_id: str) -> bool:
