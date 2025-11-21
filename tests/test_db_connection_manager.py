@@ -9,6 +9,7 @@ class MockApiException(Exception):
     def __init__(self, message, code=None):
         super().__init__(message)
         self.code = code
+        self.message = message
 
 
 # Mock the IBM Cloud SDK modules to avoid import errors in test environment
@@ -398,6 +399,532 @@ class TestCouchDBConnectionManager(unittest.TestCase):
         for db_name in special_names:
             with self.subTest(db_name=db_name):
                 self.assertEqual(manager.ensure_db(db_name), db_name)
+
+
+class TestCouchDBHandler(unittest.TestCase):
+    """
+    Comprehensive tests for CouchDBHandler class.
+    Tests initialization, fetch_document_by_id, and error handling.
+    """
+
+    def setUp(self):
+        """Set up test fixtures and clear singleton instances for test isolation."""
+        # Clear singleton instances to ensure test isolation
+
+        if CouchDBConnectionManager in SingletonMeta._instances:
+            del SingletonMeta._instances[CouchDBConnectionManager]
+
+        # Mock document data
+        self.mock_doc = {
+            "_id": "doc123",
+            "_rev": "1-abc",
+            "project_id": "P12345",
+            "name": "Test Project",
+            "status": "active",
+        }
+
+    def tearDown(self):
+        """Clean up singleton instances after each test."""
+        if CouchDBConnectionManager in SingletonMeta._instances:
+            del SingletonMeta._instances[CouchDBConnectionManager]
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_handler_initialization_success(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test successful initialization of CouchDBHandler."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server and database check
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        mock_cloudant.return_value = mock_server
+
+        # Import here to use mocked modules
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Verify handler was initialized correctly
+        self.assertEqual(handler.db_name, "testdb")
+        self.assertIsNotNone(handler.server)
+        self.assertIsNotNone(handler.connection_manager)
+        mock_server.get_database_information.assert_called_once_with(db="testdb")
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_handler_initialization_database_not_found(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test CouchDBHandler initialization when database doesn't exist."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with database not found
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        api_exception = MockApiException("Database not found", code=404)
+        mock_server.get_database_information.side_effect = api_exception
+        mock_cloudant.return_value = mock_server
+
+        # Import here to use mocked modules
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        # Should raise ConnectionError due to database not existing
+        with self.assertRaises(ConnectionError) as cm:
+            CouchDBHandler("missing_db")
+
+        self.assertIn("missing_db does not exist", str(cm.exception))
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_fetch_document_by_id_success(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test successful document fetch by ID."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        mock_server.get_document.return_value.get_result.return_value = self.mock_doc
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch document
+        result = handler.fetch_document_by_id("doc123")
+
+        # Verify result
+        self.assertIsNotNone(result)
+        assert isinstance(result, dict)  # Type narrowing for Pylance
+        self.assertEqual(result, self.mock_doc)
+        self.assertEqual(result["_id"], "doc123")
+        self.assertEqual(result["project_id"], "P12345")
+        mock_server.get_document.assert_called_once_with(db="testdb", doc_id="doc123")
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("lib.couchdb.couchdb_connection.logging")
+    def test_fetch_document_by_id_not_found(
+        self, mock_logging, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetch_document_by_id when document doesn't exist (404)."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with document not found
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        api_exception = MockApiException("Document not found", code=404)
+        mock_server.get_document.side_effect = api_exception
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch non-existent document
+        result = handler.fetch_document_by_id("nonexistent")
+
+        # Verify result is None and error was logged
+        self.assertIsNone(result)
+        mock_server.get_document.assert_called_once_with(
+            db="testdb", doc_id="nonexistent"
+        )
+        # Verify error logging
+        mock_logging.error.assert_called()
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("lib.couchdb.couchdb_connection.logging")
+    def test_fetch_document_by_id_api_error(
+        self, mock_logging, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetch_document_by_id with non-404 API error."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with API error
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        api_exception = MockApiException("Unauthorized", code=401)
+        mock_server.get_document.side_effect = api_exception
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch document with API error
+        result = handler.fetch_document_by_id("doc123")
+
+        # Verify result is None and error was logged
+        self.assertIsNone(result)
+        mock_logging.error.assert_called()
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("lib.couchdb.couchdb_connection.logging")
+    def test_fetch_document_by_id_general_exception(
+        self, mock_logging, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetch_document_by_id with general exception."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with general exception
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        mock_server.get_document.side_effect = Exception("Network error")
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch document with exception
+        result = handler.fetch_document_by_id("doc123")
+
+        # Verify result is None and error was logged
+        self.assertIsNone(result)
+        mock_logging.error.assert_called()
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("lib.couchdb.couchdb_connection.logging")
+    def test_fetch_document_by_id_non_dict_response(
+        self, mock_logging, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetch_document_by_id with non-dict response."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with non-dict response
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        # Return a string instead of dict
+        mock_server.get_document.return_value.get_result.return_value = "not a dict"
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch document with non-dict response
+        result = handler.fetch_document_by_id("doc123")
+
+        # Verify result is None and warning was logged
+        self.assertIsNone(result)
+        mock_logging.warning.assert_called()
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_fetch_document_by_id_multiple_documents(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetching multiple different documents."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+
+        # Setup different responses for different doc IDs
+        doc1 = {"_id": "doc1", "name": "Document 1"}
+        doc2 = {"_id": "doc2", "name": "Document 2"}
+        doc3 = {"_id": "doc3", "name": "Document 3"}
+
+        def get_document_side_effect(db, doc_id):
+            mock_result = MagicMock()
+            if doc_id == "doc1":
+                mock_result.get_result.return_value = doc1
+            elif doc_id == "doc2":
+                mock_result.get_result.return_value = doc2
+            elif doc_id == "doc3":
+                mock_result.get_result.return_value = doc3
+            return mock_result
+
+        mock_server.get_document.side_effect = get_document_side_effect
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch multiple documents
+        result1 = handler.fetch_document_by_id("doc1")
+        result2 = handler.fetch_document_by_id("doc2")
+        result3 = handler.fetch_document_by_id("doc3")
+
+        # Verify results
+        self.assertEqual(result1, doc1)
+        self.assertEqual(result2, doc2)
+        self.assertEqual(result3, doc3)
+        self.assertEqual(mock_server.get_document.call_count, 3)
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_fetch_document_by_id_special_characters_in_id(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetching document with special characters in ID."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+
+        # Test various special character IDs
+        special_ids = [
+            "doc-with-hyphens",
+            "doc_with_underscores",
+            "doc.with.dots",
+            "doc:with:colons",
+            "doc/with/slashes",
+            "doc@with@at",
+        ]
+
+        for doc_id in special_ids:
+            mock_doc = {"_id": doc_id, "data": "test"}
+            mock_server.get_document.return_value.get_result.return_value = mock_doc
+            mock_cloudant.return_value = mock_server
+
+            # Import and create handler
+            from lib.couchdb.couchdb_connection import CouchDBHandler
+
+            handler = CouchDBHandler("testdb")
+
+            # Fetch document with special ID
+            result = handler.fetch_document_by_id(doc_id)
+
+            # Verify result
+            self.assertIsNotNone(result)
+            assert isinstance(result, dict)  # Type narrowing for Pylance
+            self.assertEqual(result["_id"], doc_id)
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_fetch_document_by_id_with_complex_document(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetching document with complex nested structure."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with complex document
+        complex_doc = {
+            "_id": "complex_doc",
+            "_rev": "2-xyz",
+            "project_id": "P12345",
+            "details": {
+                "name": "Complex Project",
+                "metadata": {
+                    "created": "2025-01-01",
+                    "modified": "2025-11-21",
+                },
+            },
+            "samples": [
+                {"id": "S001", "status": "pending"},
+                {"id": "S002", "status": "completed"},
+            ],
+            "user_info": {
+                "owner": {"name": "John Doe", "email": "john@example.com"},
+                "pi": {"name": "Jane Smith", "email": "jane@example.com"},
+            },
+        }
+
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        mock_server.get_document.return_value.get_result.return_value = complex_doc
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch complex document
+        result = handler.fetch_document_by_id("complex_doc")
+
+        # Verify all nested structure is preserved
+        self.assertIsNotNone(result)
+        assert isinstance(result, dict)  # Type narrowing for Pylance
+        self.assertEqual(result["_id"], "complex_doc")
+        self.assertEqual(result["details"]["name"], "Complex Project")
+        self.assertEqual(len(result["samples"]), 2)
+        self.assertEqual(result["user_info"]["owner"]["name"], "John Doe")
+
+    @patch("lib.couchdb.couchdb_connection.ConfigLoader")
+    @patch("lib.couchdb.couchdb_connection.os.getenv")
+    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
+    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    def test_fetch_document_by_id_empty_document(
+        self, mock_auth, mock_cloudant, mock_getenv, mock_config_loader
+    ):
+        """Test fetching document that is an empty dict."""
+        # Mock configuration
+        mock_config_loader.return_value.load_config.return_value = {
+            "couchdb": {
+                "url": "localhost:5984",
+                "default_user": "admin",
+                "default_password": "secret",
+            }
+        }
+        mock_getenv.side_effect = lambda key, default=None: default
+
+        # Mock server with empty document
+        mock_server = MagicMock()
+        mock_server.get_server_information.return_value.get_result.return_value = {
+            "version": "3.1.1"
+        }
+        mock_server.get_database_information.return_value = {"db_name": "testdb"}
+        mock_server.get_document.return_value.get_result.return_value = {}
+        mock_cloudant.return_value = mock_server
+
+        # Import and create handler
+        from lib.couchdb.couchdb_connection import CouchDBHandler
+
+        handler = CouchDBHandler("testdb")
+
+        # Fetch empty document
+        result = handler.fetch_document_by_id("empty_doc")
+
+        # Verify result is empty dict (still valid)
+        self.assertEqual(result, {})
+        self.assertIsInstance(result, dict)
 
 
 if __name__ == "__main__":

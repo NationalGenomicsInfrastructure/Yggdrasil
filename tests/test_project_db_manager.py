@@ -627,7 +627,12 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     def test_fetch_document_by_id_success(self, mock_handler_init, mock_config_loader):
-        """Test successful document retrieval by ID."""
+        """Test successful document retrieval by ID (inherited from CouchDBHandler).
+
+        Note: Detailed error handling tests for fetch_document_by_id are in
+        test_db_connection_manager.py since the method is now in CouchDBHandler.
+        This test verifies that ProjectDBManager correctly inherits the method.
+        """
         # Arrange
         mock_handler_init.return_value = None
         mock_config_instance = MagicMock()
@@ -652,141 +657,6 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         # Assert
         self.assertEqual(result, self.mock_doc_with_10x)
         mock_server.get_document.assert_called_once_with(db="projects", doc_id="doc1")
-
-    @patch("lib.couchdb.project_db_manager.ConfigLoader")
-    @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.project_db_manager.logging")
-    def test_fetch_document_by_id_not_found(
-        self, mock_logging, mock_handler_init, mock_config_loader
-    ):
-        """Test document retrieval when document doesn't exist (404)."""
-        # Arrange
-        mock_handler_init.return_value = None
-        mock_config_instance = MagicMock()
-        mock_config_instance.load_config.return_value = self.mock_module_registry
-        mock_config_loader.return_value = mock_config_instance
-
-        manager = ProjectDBManager()
-
-        # Mock IBM Cloud SDK server
-        mock_server = MagicMock()
-        manager.server = mock_server
-        manager.db_name = "projects"
-
-        # Mock 404 exception that behaves like ApiException
-        api_exception = MockApiException(404, "Not found")
-        mock_server.get_document.side_effect = api_exception
-
-        # Patch the ApiException in the module to catch our mock
-        with patch("lib.couchdb.project_db_manager.ApiException", MockApiException):
-            # Act
-            result = manager.fetch_document_by_id("nonexistent_doc")
-
-        # Assert
-        self.assertIsNone(result)
-        mock_logging.error.assert_called_with(
-            "Document 'nonexistent_doc' not found in the database."
-        )
-
-    @patch("lib.couchdb.project_db_manager.ConfigLoader")
-    @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.project_db_manager.logging")
-    def test_fetch_document_by_id_api_error(
-        self, mock_logging, mock_handler_init, mock_config_loader
-    ):
-        """Test document retrieval when API returns other errors."""
-        # Arrange
-        mock_handler_init.return_value = None
-        mock_config_instance = MagicMock()
-        mock_config_instance.load_config.return_value = self.mock_module_registry
-        mock_config_loader.return_value = mock_config_instance
-
-        manager = ProjectDBManager()
-
-        # Mock IBM Cloud SDK server
-        mock_server = MagicMock()
-        manager.server = mock_server
-        manager.db_name = "projects"
-
-        # Mock 500 exception that behaves like ApiException
-        api_exception = MockApiException(500, "Server error")
-        mock_server.get_document.side_effect = api_exception
-
-        # Patch the ApiException in the module to catch our mock
-        with patch("lib.couchdb.project_db_manager.ApiException", MockApiException):
-            # Act
-            result = manager.fetch_document_by_id("error_doc")
-
-        # Assert
-        self.assertIsNone(result)
-        mock_logging.error.assert_called_with(
-            "Cloudant API error fetching 'error_doc': 500 Server error"
-        )
-
-    @patch("lib.couchdb.project_db_manager.ConfigLoader")
-    @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.project_db_manager.logging")
-    def test_fetch_document_by_id_general_exception(
-        self, mock_logging, mock_handler_init, mock_config_loader
-    ):
-        """Test document retrieval when general exception occurs."""
-        # Arrange
-        mock_handler_init.return_value = None
-        mock_config_instance = MagicMock()
-        mock_config_instance.load_config.return_value = self.mock_module_registry
-        mock_config_loader.return_value = mock_config_instance
-
-        manager = ProjectDBManager()
-
-        # Mock IBM Cloud SDK server
-        mock_server = MagicMock()
-        manager.server = mock_server
-        manager.db_name = "projects"
-
-        # Mock general exception
-        mock_server.get_document.side_effect = Exception("Connection error")
-
-        # Act
-        result = manager.fetch_document_by_id("error_doc")
-
-        # Assert
-        self.assertIsNone(result)
-        mock_logging.error.assert_called_with(
-            "Error while accessing database: Connection error"
-        )
-
-    @patch("lib.couchdb.project_db_manager.ConfigLoader")
-    @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    def test_fetch_document_by_id_non_dict_response(
-        self, mock_handler_init, mock_config_loader
-    ):
-        """Test document retrieval when response is not a dictionary."""
-        # Arrange
-        mock_handler_init.return_value = None
-        mock_config_instance = MagicMock()
-        mock_config_instance.load_config.return_value = self.mock_module_registry
-        mock_config_loader.return_value = mock_config_instance
-
-        manager = ProjectDBManager()
-
-        # Mock IBM Cloud SDK server
-        mock_server = MagicMock()
-        manager.server = mock_server
-        manager.db_name = "projects"
-
-        # Mock response with non-dict result (e.g., string or None)
-        mock_response = MagicMock()
-        mock_response.result = "not_a_dict"  # Non-dict response
-        mock_server.get_document.return_value = mock_response
-
-        # Act
-        result = manager.fetch_document_by_id("test_doc")
-
-        # Assert
-        self.assertIsNone(result)
-        mock_server.get_document.assert_called_once_with(
-            db="projects", doc_id="test_doc"
-        )
 
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
