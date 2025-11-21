@@ -15,8 +15,11 @@ repos:
     rev: v1.17.0
     hooks:
       - id: mypy
+        args: [--config-file=pyproject.toml, .]
+        pass_filenames: false
         additional_dependencies:
           - types-requests
+        # Check all files (via '.'), not just changed ones, to match GH Actions
 
   # - repo: https://github.com/trufflesecurity/trufflehog
   #   rev: v3.90.2
