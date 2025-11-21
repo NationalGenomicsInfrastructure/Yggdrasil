@@ -303,6 +303,81 @@ class TestFileSpoolEmitter(unittest.TestCase):
         subdirs = [d for d in expected_dir.iterdir() if d.is_dir()]
         self.assertEqual(len(subdirs), 0)
 
+    def test_emit_plan_level_event_without_step_directory(self):
+        """Test that plan-level events (type starts with 'plan.') are routed directly under realm/plan_id without step directory."""
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+
+        # Plan-level event with 'plan.' prefix and no step_id
+        event = {
+            "type": "plan.draft",
+            "_spool_path": {
+                "realm": "test_realm",
+                "plan_id": "plan_123",
+                "filename": "plan_draft.json",
+            },
+        }
+        emitter.emit(event)
+
+        # Should create path: realm/plan_id (no step directory)
+        expected_dir = self.spool_dir / "test_realm" / "plan_123"
+        self.assertTrue(expected_dir.exists())
+
+        # Verify file is directly under plan directory
+        event_file = expected_dir / "plan_draft.json"
+        self.assertTrue(event_file.exists())
+
+        # Should NOT have unknown_step directory
+        unknown_step_dir = expected_dir / "unknown_step"
+        self.assertFalse(unknown_step_dir.exists())
+
+    def test_emit_plan_level_event_with_run_id(self):
+        """Test that plan-level events can include run_id for versioning."""
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+
+        event = {
+            "type": "plan.submitted",
+            "_spool_path": {
+                "realm": "production",
+                "plan_id": "plan_456",
+                "run_id": "run_001",
+                "filename": "submitted.json",
+            },
+        }
+        emitter.emit(event)
+
+        # Should create path: realm/plan_id/run_id
+        expected_file = (
+            self.spool_dir / "production" / "plan_456" / "run_001" / "submitted.json"
+        )
+        self.assertTrue(expected_file.exists())
+
+    def test_emit_step_level_event_still_includes_step_directory(self):
+        """Test that step-level events (not starting with 'plan.') still include step directory."""
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+
+        event = {
+            "type": "step.succeeded",
+            "_spool_path": {
+                "realm": "test",
+                "plan_id": "plan_789",
+                "step_id": "step_001",
+                "run_id": "run_002",
+                "filename": "success.json",
+            },
+        }
+        emitter.emit(event)
+
+        # Should create full path including step directory
+        expected_file = (
+            self.spool_dir
+            / "test"
+            / "plan_789"
+            / "step_001"
+            / "run_002"
+            / "success.json"
+        )
+        self.assertTrue(expected_file.exists())
+
     def test_emit_with_custom_filename(self):
         """Test that custom filename from hints is used."""
         emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))

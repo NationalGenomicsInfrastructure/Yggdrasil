@@ -153,6 +153,107 @@ class TestFindAnyEvent(unittest.TestCase):
             result = _find_any_event(plan_dir)
             self.assertIsNone(result)
 
+    def test_find_any_event_fallback_without_run_dirs(self):
+        """Test fallback to read events directly under step_dir when no run_id subdirectories exist (plan drafts)."""
+        with TemporaryDirectory() as tmpdir:
+            plan_dir = Path(tmpdir)
+            step_dir = plan_dir / "step1"
+            step_dir.mkdir(parents=True)
+
+            # Place event directly under step_dir (no run_id subdirectory)
+            scope = {"kind": "project", "id": "P123"}
+            event_data = {"type": "plan.draft", "scope": scope, "data": "draft"}
+            (step_dir / "plan_draft.json").write_text(json.dumps(event_data))
+
+            result = _find_any_event(plan_dir)
+
+            # Should find the event using fallback logic
+            self.assertIsNotNone(result)
+            assert result is not None  # for type checker
+            self.assertEqual(result["type"], "plan.draft")
+            self.assertEqual(result["scope"], scope)
+
+    def test_find_any_event_fallback_prefers_plan_draft(self):
+        """Test that fallback prefers plan_draft files when multiple events exist at step level."""
+        with TemporaryDirectory() as tmpdir:
+            plan_dir = Path(tmpdir)
+            step_dir = plan_dir / "step1"
+            step_dir.mkdir(parents=True)
+
+            # Multiple events directly under step_dir
+            draft_event = {
+                "type": "plan.draft",
+                "scope": {"kind": "project", "id": "P123"},
+            }
+            other_event = {
+                "type": "other.event",
+                "scope": {"kind": "project", "id": "P456"},
+            }
+
+            (step_dir / "plan_draft.json").write_text(json.dumps(draft_event))
+            (step_dir / "other_event.json").write_text(json.dumps(other_event))
+
+            result = _find_any_event(plan_dir)
+
+            # Should prefer plan_draft
+            self.assertIsNotNone(result)
+            assert result is not None  # for type checker
+            self.assertEqual(result["type"], "plan.draft")
+            self.assertEqual(result["scope"]["id"], "P123")
+
+    def test_find_any_event_fallback_skips_events_without_scope(self):
+        """Test that fallback skips events without scope field."""
+        with TemporaryDirectory() as tmpdir:
+            plan_dir = Path(tmpdir)
+            step_dir = plan_dir / "step1"
+            step_dir.mkdir(parents=True)
+
+            # Event without scope
+            bad_event = {"type": "plan.draft", "data": "no scope"}
+            good_event = {
+                "type": "plan.draft",
+                "scope": {"kind": "project", "id": "P123"},
+            }
+
+            (step_dir / "aaa_bad.json").write_text(json.dumps(bad_event))
+            (step_dir / "bbb_good.json").write_text(json.dumps(good_event))
+
+            result = _find_any_event(plan_dir)
+
+            # Should skip bad event and find good one
+            self.assertIsNotNone(result)
+            assert result is not None  # for type checker
+            self.assertEqual(result["scope"]["id"], "P123")
+
+    def test_find_any_event_normal_case_preferred_over_fallback(self):
+        """Test that normal case (with run_dirs) is preferred over fallback."""
+        with TemporaryDirectory() as tmpdir:
+            plan_dir = Path(tmpdir)
+            step_dir = plan_dir / "step1"
+            run_dir = step_dir / "run001"
+            run_dir.mkdir(parents=True)
+
+            # Event in normal location (with run_id)
+            normal_event = {
+                "type": "step.started",
+                "scope": {"kind": "project", "id": "P_NORMAL"},
+            }
+            (run_dir / "event.json").write_text(json.dumps(normal_event))
+
+            # Event in fallback location (without run_id)
+            fallback_event = {
+                "type": "plan.draft",
+                "scope": {"kind": "project", "id": "P_FALLBACK"},
+            }
+            (step_dir / "plan_draft.json").write_text(json.dumps(fallback_event))
+
+            result = _find_any_event(plan_dir)
+
+            # Should use normal case, not fallback
+            self.assertIsNotNone(result)
+            assert result is not None  # for type checker
+            self.assertEqual(result["scope"]["id"], "P_NORMAL")
+
 
 class TestReadScopeFromSpool(unittest.TestCase):
     """Tests for _read_scope_from_spool helper function."""

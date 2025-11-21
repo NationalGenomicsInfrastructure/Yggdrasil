@@ -16,6 +16,18 @@ class TestBaseHandler(unittest.TestCase):
     and asynchronous execution patterns, and integration with the event system.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        """Set up class-level resources."""
+        # Store original event loop policy
+        cls.original_event_loop_policy = asyncio.get_event_loop_policy()
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up class-level resources and reset event loop state."""
+        # Reset to default event loop policy for subsequent tests
+        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
     def setUp(self):
         """Set up test fixtures for each test."""
 
@@ -28,6 +40,10 @@ class TestBaseHandler(unittest.TestCase):
                 self.call_called = False
                 self.last_payload = None
                 self.handle_task_mock = AsyncMock()
+
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                # Simple test implementation
+                return {"kind": "project", "id": doc.get("project_id", "test_project")}
 
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 self.handle_task_called = True
@@ -44,12 +60,18 @@ class TestBaseHandler(unittest.TestCase):
         class IncompleteHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.FLOWCELL_READY
 
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {"kind": "flowcell", "id": doc.get("flowcell_id", "test_fc")}
+
             # Missing handle_task implementation
             def __call__(self, payload: dict[str, Any]) -> None:
                 pass
 
         class MissingCallHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
+
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {"kind": "project", "id": "test"}
 
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 pass
@@ -125,11 +147,20 @@ class TestBaseHandler(unittest.TestCase):
             class InnerHandler(BaseHandler):
                 event_type: ClassVar[EventType] = EventType.FLOWCELL_READY
 
+                def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                    return {
+                        "kind": "flowcell",
+                        "id": doc.get("flowcell_id", "inner_fc"),
+                    }
+
                 async def handle_task(self, payload: dict[str, Any]) -> None:
                     pass
 
                 def __call__(self, payload: dict[str, Any]) -> None:
                     pass
+
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {"kind": "project", "id": doc.get("project_id", "outer_project")}
 
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 pass
@@ -207,6 +238,9 @@ class TestBaseHandler(unittest.TestCase):
 
         class AnotherHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
+
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {"kind": "project", "id": doc.get("project_id", "dedup_project")}
 
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 pass
@@ -343,6 +377,9 @@ class TestBaseHandler(unittest.TestCase):
                 self.start_time = None
                 self.end_time = None
 
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {"kind": "project", "id": doc.get("project_id", "timed_project")}
+
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 import time
 
@@ -375,6 +412,12 @@ class TestBaseHandler(unittest.TestCase):
 
         class ExceptionHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
+
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "kind": "project",
+                    "id": doc.get("project_id", "exception_project"),
+                }
 
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 raise ValueError("Test exception")
@@ -503,6 +546,12 @@ class TestBaseHandler(unittest.TestCase):
         class PayloadModifyingHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
 
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "kind": "project",
+                    "id": doc.get("project_id", "modify_project"),
+                }
+
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 # Simulate handler modifying payload (bad practice)
                 payload["modified"] = True
@@ -589,6 +638,9 @@ class TestBaseHandler(unittest.TestCase):
 
             def __init__(self, error_type=None):
                 self.error_type = error_type
+
+            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+                return {"kind": "project", "id": doc.get("project_id", "error_project")}
 
             async def handle_task(self, payload: dict[str, Any]) -> None:
                 if self.error_type:

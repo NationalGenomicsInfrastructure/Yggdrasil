@@ -489,27 +489,27 @@ class TestArtifact(unittest.TestCase):
 
     def test_artifact_initialization_required_fields(self):
         """Test Artifact initialization with required fields."""
-        artifact = Artifact(role="output", path="/path/to/file.txt")
+        artifact = Artifact(key="output", path="/path/to/file.txt")
 
-        self.assertEqual(artifact.role, "output")
+        self.assertEqual(artifact.key, "output")
         self.assertEqual(artifact.path, "/path/to/file.txt")
         self.assertIsNone(artifact.digest)
 
     def test_artifact_initialization_with_digest(self):
         """Test Artifact initialization with digest."""
         artifact = Artifact(
-            role="input",
+            key="input",
             path="/path/to/input.txt",
             digest="sha256:abc123def456",
         )
 
-        self.assertEqual(artifact.role, "input")
+        self.assertEqual(artifact.key, "input")
         self.assertEqual(artifact.path, "/path/to/input.txt")
         self.assertEqual(artifact.digest, "sha256:abc123def456")
 
     def test_artifact_digest_defaults_to_none(self):
         """Test that digest defaults to None."""
-        artifact = Artifact(role="role", path="path")
+        artifact = Artifact(key="output", path="/path")
         self.assertIsNone(artifact.digest)
 
     # =====================================================
@@ -517,8 +517,8 @@ class TestArtifact(unittest.TestCase):
     # =====================================================
 
     def test_artifact_role_values(self):
-        """Test various semantic role values."""
-        roles = [
+        """Test various semantic key values."""
+        keys = [
             "library_csv",
             "cr_outs",
             "submit_script",
@@ -528,36 +528,36 @@ class TestArtifact(unittest.TestCase):
             "report",
         ]
 
-        for role_value in roles:
-            artifact = Artifact(role=role_value, path="/path")
-            self.assertEqual(artifact.role, role_value)
+        for key_value in keys:
+            artifact = Artifact(key=key_value, path="/path")
+            self.assertEqual(artifact.key, key_value)
 
     def test_artifact_path_formats(self):
         """Test various path formats."""
         # Absolute path
-        art1 = Artifact(role="r", path="/absolute/path/to/file.txt")
+        art1 = Artifact(key="r", path="/absolute/path/to/file.txt")
         self.assertTrue(art1.path.startswith("/"))
 
         # Relative path
-        art2 = Artifact(role="r", path="relative/path/file.txt")
+        art2 = Artifact(key="r", path="relative/path/file.txt")
         self.assertFalse(art2.path.startswith("/"))
 
         # Windows-style path
-        art3 = Artifact(role="r", path="C:\\Windows\\path\\file.txt")
+        art3 = Artifact(key="r", path="C:\\Windows\\path\\file.txt")
         self.assertIn("\\", art3.path)
 
     def test_artifact_digest_formats(self):
         """Test various digest formats."""
         # SHA256 for file
-        art1 = Artifact(role="r", path="p", digest="sha256:abc123")
+        art1 = Artifact(key="r", path="p", digest="sha256:abc123")
         self.assertTrue(art1.digest.startswith("sha256:"))  # type: ignore
 
         # Dirhash for directory
-        art2 = Artifact(role="r", path="p", digest="dirhash:def456")
+        art2 = Artifact(key="r", path="p", digest="dirhash:def456")
         self.assertTrue(art2.digest.startswith("dirhash:"))  # type: ignore
 
         # None (not computed yet)
-        art3 = Artifact(role="r", path="p", digest=None)
+        art3 = Artifact(key="r", path="p", digest=None)
         self.assertIsNone(art3.digest)
 
     # =====================================================
@@ -566,39 +566,39 @@ class TestArtifact(unittest.TestCase):
 
     def test_artifact_is_dataclass(self):
         """Test that Artifact is a proper dataclass."""
-        artifact = Artifact(role="r", path="p")
+        artifact = Artifact(key="r", path="p")
 
         # Should have dataclass fields
         artifact_fields = fields(artifact)
         field_names = [f.name for f in artifact_fields]
 
-        self.assertIn("role", field_names)
+        self.assertIn("key", field_names)
         self.assertIn("path", field_names)
         self.assertIn("digest", field_names)
 
     def test_artifact_equality(self):
         """Test Artifact equality comparison."""
-        art1 = Artifact(role="output", path="/path", digest="sha256:123")
-        art2 = Artifact(role="output", path="/path", digest="sha256:123")
+        art1 = Artifact(key="output", path="/path", digest="sha256:123")
+        art2 = Artifact(key="output", path="/path", digest="sha256:123")
 
         self.assertEqual(art1, art2)
 
     def test_artifact_inequality(self):
         """Test Artifact inequality when fields differ."""
-        art1 = Artifact(role="output", path="/path1")
-        art2 = Artifact(role="output", path="/path2")
+        art1 = Artifact(key="output", path="/path1")
+        art2 = Artifact(key="output", path="/path2")
 
         self.assertNotEqual(art1, art2)
 
     def test_artifact_dict_conversion(self):
         """Test converting Artifact to dict."""
         artifact = Artifact(
-            role="library_csv", path="/data/library.csv", digest="sha256:abc"
+            key="library_csv", path="/data/library.csv", digest="sha256:abc"
         )
 
         artifact_dict = artifact.__dict__
 
-        self.assertEqual(artifact_dict["role"], "library_csv")
+        self.assertEqual(artifact_dict["key"], "library_csv")
         self.assertEqual(artifact_dict["path"], "/data/library.csv")
         self.assertEqual(artifact_dict["digest"], "sha256:abc")
 
@@ -609,29 +609,29 @@ class TestArtifact(unittest.TestCase):
     def test_artifact_file_output(self):
         """Test artifact for file output."""
         artifact = Artifact(
-            role="analysis_report",
+            key="analysis_report",
             path="/outputs/report.html",
             digest="sha256:abc123def456",
         )
 
-        self.assertEqual(artifact.role, "analysis_report")
+        self.assertEqual(artifact.key, "analysis_report")
         self.assertTrue(artifact.path.endswith(".html"))
         self.assertIsNotNone(artifact.digest)
 
     def test_artifact_directory_output(self):
         """Test artifact for directory output."""
         artifact = Artifact(
-            role="cellranger_outs",
+            key="cellranger_outs",
             path="/outputs/cellranger_results",
             digest="dirhash:xyz789",
         )
 
-        self.assertEqual(artifact.role, "cellranger_outs")
+        self.assertEqual(artifact.key, "cellranger_outs")
         self.assertTrue(artifact.digest.startswith("dirhash:"))  # type: ignore
 
     def test_artifact_pending_digest(self):
         """Test artifact without computed digest (pending)."""
-        artifact = Artifact(role="temp_file", path="/tmp/temp.txt", digest=None)
+        artifact = Artifact(key="temp_file", path="/tmp/temp.txt", digest=None)
 
         self.assertIsNone(artifact.digest)
 
@@ -659,14 +659,14 @@ class TestStepResult(unittest.TestCase):
     def test_stepresult_initialization_with_artifacts(self):
         """Test StepResult initialization with artifacts."""
         artifacts = [
-            Artifact(role="output1", path="/path1"),
-            Artifact(role="output2", path="/path2"),
+            Artifact(key="output", path="/path1"),
+            Artifact(key="log", path="/path2"),
         ]
 
         result = StepResult(artifacts=artifacts)
 
         self.assertEqual(len(result.artifacts), 2)
-        self.assertEqual(result.artifacts[0].role, "output1")
+        self.assertEqual(result.artifacts[0].key, "output")
 
     def test_stepresult_initialization_with_metrics(self):
         """Test StepResult initialization with metrics."""
@@ -689,7 +689,7 @@ class TestStepResult(unittest.TestCase):
     def test_stepresult_initialization_all_fields(self):
         """Test StepResult initialization with all fields."""
         result = StepResult(
-            artifacts=[Artifact(role="output", path="/path")],
+            artifacts=[Artifact(key="output", path="/path")],
             metrics={"count": 10},
             extra={"status": "success"},
         )
@@ -704,7 +704,7 @@ class TestStepResult(unittest.TestCase):
 
     def test_stepresult_artifacts_list(self):
         """Test artifacts as list of Artifact objects."""
-        artifacts = [Artifact(role=f"output{i}", path=f"/path{i}") for i in range(3)]
+        artifacts = [Artifact(key=f"output{i}", path=f"/path{i}") for i in range(3)]
 
         result = StepResult(artifacts=artifacts)
 
@@ -763,8 +763,8 @@ class TestStepResult(unittest.TestCase):
 
     def test_stepresult_equality(self):
         """Test StepResult equality comparison."""
-        result1 = StepResult(artifacts=[Artifact(role="r", path="p")], metrics={"m": 1})
-        result2 = StepResult(artifacts=[Artifact(role="r", path="p")], metrics={"m": 1})
+        result1 = StepResult(artifacts=[Artifact(key="r", path="p")], metrics={"m": 1})
+        result2 = StepResult(artifacts=[Artifact(key="r", path="p")], metrics={"m": 1})
 
         self.assertEqual(result1, result2)
 
@@ -781,7 +781,7 @@ class TestStepResult(unittest.TestCase):
         result2 = StepResult()
 
         # Modify result1
-        result1.artifacts.append(Artifact(role="r", path="p"))
+        result1.artifacts.append(Artifact(key="r", path="p"))
         result1.metrics["key"] = "value"
 
         # result2 should not be affected
@@ -796,8 +796,8 @@ class TestStepResult(unittest.TestCase):
         """Test adding artifacts to result."""
         result = StepResult()
 
-        result.artifacts.append(Artifact(role="output1", path="/path1"))
-        result.artifacts.append(Artifact(role="output2", path="/path2"))
+        result.artifacts.append(Artifact(key="output1", path="/path1"))
+        result.artifacts.append(Artifact(key="output2", path="/path2"))
 
         self.assertEqual(len(result.artifacts), 2)
 
@@ -829,8 +829,8 @@ class TestStepResult(unittest.TestCase):
         """Test StepResult for a successful step execution."""
         result = StepResult(
             artifacts=[
-                Artifact(role="output", path="/out/result.txt", digest="sha256:abc"),
-                Artifact(role="log", path="/out/log.txt", digest="sha256:def"),
+                Artifact(key="output", path="/out/result.txt", digest="sha256:abc"),
+                Artifact(key="log", path="/out/log.txt", digest="sha256:def"),
             ],
             metrics={
                 "files_processed": 1000,
@@ -847,7 +847,7 @@ class TestStepResult(unittest.TestCase):
     def test_stepresult_failed_step_with_partial_results(self):
         """Test StepResult for a partially failed step."""
         result = StepResult(
-            artifacts=[Artifact(role="partial_output", path="/out/partial.txt")],
+            artifacts=[Artifact(key="partial_output", path="/out/partial.txt")],
             metrics={"processed": 500, "failed": 500},
             extra={
                 "status": "partial_failure",
@@ -918,17 +918,17 @@ class TestModelIntegration(unittest.TestCase):
         result = StepResult(
             artifacts=[
                 Artifact(
-                    role="primary_output",
+                    key="primary_output",
                     path="/outputs/results.csv",
                     digest="sha256:primary123",
                 ),
                 Artifact(
-                    role="analysis_dir",
+                    key="analysis_dir",
                     path="/outputs/analysis",
                     digest="dirhash:dir456",
                 ),
                 Artifact(
-                    role="log_file",
+                    key="log_file",
                     path="/outputs/execution.log",
                     digest="sha256:log789",
                 ),
@@ -948,10 +948,10 @@ class TestModelIntegration(unittest.TestCase):
         )
 
         # Verify all artifact types are present
-        roles = {a.role for a in result.artifacts}
-        self.assertIn("primary_output", roles)
-        self.assertIn("analysis_dir", roles)
-        self.assertIn("log_file", roles)
+        keys = {a.key for a in result.artifacts}
+        self.assertIn("primary_output", keys)
+        self.assertIn("analysis_dir", keys)
+        self.assertIn("log_file", keys)
 
         # Verify mixed digest types
         digests = [a.digest for a in result.artifacts]

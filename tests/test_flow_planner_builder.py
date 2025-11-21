@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from yggdrasil.flow.model import Plan
-from yggdrasil.flow.planner.builder import PlanBuilder, _role_key, _validate_step_id
+from yggdrasil.flow.planner.builder import PlanBuilder, _artifact_key, _validate_step_id
 
 
 class TestUtilityFunctions(unittest.TestCase):
@@ -73,24 +73,24 @@ class TestUtilityFunctions(unittest.TestCase):
     # ROLE KEY NORMALIZATION TESTS
     # =====================================================
 
-    def test_role_key_with_string(self):
-        """Test _role_key with string input."""
-        self.assertEqual(_role_key("input"), "input")
-        self.assertEqual(_role_key("my_role"), "my_role")
-        self.assertEqual(_role_key(""), "")
+    def test_artifact_key_with_string(self):
+        """Test _artifact_key with string input."""
+        self.assertEqual(_artifact_key("input"), "input")
+        self.assertEqual(_artifact_key("my_role"), "my_role")
+        self.assertEqual(_artifact_key(""), "")
 
-    def test_role_key_with_enum(self):
-        """Test _role_key with Enum input."""
+    def test_artifact_key_with_enum(self):
+        """Test _artifact_key with Enum input."""
 
         class Role(Enum):
             INPUT = "input_data"
             OUTPUT = "output_data"
 
-        self.assertEqual(_role_key(Role.INPUT), "input_data")
-        self.assertEqual(_role_key(Role.OUTPUT), "output_data")
+        self.assertEqual(_artifact_key(Role.INPUT), "input_data")
+        self.assertEqual(_artifact_key(Role.OUTPUT), "output_data")
 
-    def test_role_key_with_different_enum_types(self):
-        """Test _role_key with various Enum types."""
+    def test_artifact_key_with_different_enum_types(self):
+        """Test _artifact_key with various Enum types."""
 
         class FileRole(Enum):
             RAW = "raw_data"
@@ -100,8 +100,8 @@ class TestUtilityFunctions(unittest.TestCase):
             READY = "ready"
             DONE = "done"
 
-        self.assertEqual(_role_key(FileRole.RAW), "raw_data")
-        self.assertEqual(_role_key(Status.READY), "ready")
+        self.assertEqual(_artifact_key(FileRole.RAW), "raw_data")
+        self.assertEqual(_artifact_key(Status.READY), "ready")
 
 
 class TestPlanBuilder(unittest.TestCase):
@@ -145,8 +145,8 @@ class TestPlanBuilder(unittest.TestCase):
         self.assertEqual(builder.scope["id"], "P456")
         self.assertEqual(builder.base, Path("/tmp/work"))
         self.assertEqual(builder.steps, [])
-        self.assertEqual(builder._role_provider, {})
-        self.assertEqual(builder._role_path, {})
+        self.assertEqual(builder._artifact_provider, {})
+        self.assertEqual(builder._artifact_path, {})
 
     def test_plan_builder_is_dataclass(self):
         """Test that PlanBuilder is a dataclass."""
@@ -156,126 +156,146 @@ class TestPlanBuilder(unittest.TestCase):
     # PATH HELPER TESTS
     # =====================================================
 
-    def test_dir_for_creates_directory(self):
-        """Test that dir_for creates directory."""
-        role_dir = self.builder.dir_for("input")
+    def test_artifact_path_creates_paths(self):
+        """Test that artifact_path resolves artifact references to paths."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
-        self.assertTrue(role_dir.exists())
-        self.assertTrue(role_dir.is_dir())
-        self.assertEqual(role_dir, self.base / "input")
+        ref = SimpleArtifactRef(
+            key_name="input_data", folder="input", filename="data.txt"
+        )
+        path = self.builder.artifact_path(ref)
 
-    def test_dir_for_multiple_roles(self):
-        """Test creating directories for multiple roles."""
-        roles = ["input", "output", "temp", "logs"]
+        self.assertEqual(path, self.base / "input" / "data.txt")
+        self.assertTrue(path.parent.exists())
 
-        for role in roles:
-            role_dir = self.builder.dir_for(role)
-            self.assertTrue(role_dir.exists())
-            self.assertEqual(role_dir.parent, self.base)
+    def test_artifact_workspace_creates_directory(self):
+        """Test that artifact_workspace creates workspace directories."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
-    def test_dir_for_idempotent(self):
-        """Test that dir_for is idempotent."""
-        dir1 = self.builder.dir_for("test_role")
-        dir2 = self.builder.dir_for("test_role")
+        ref = SimpleArtifactRef(key_name="output", folder="outputs")
+        workspace = self.builder.artifact_workspace(ref)
 
-        self.assertEqual(dir1, dir2)
-        self.assertTrue(dir1.exists())
+        self.assertTrue(workspace.exists())
+        self.assertTrue(workspace.is_dir())
+        self.assertEqual(workspace, self.base / "outputs")
 
-    def test_file_for_returns_path(self):
-        """Test that file_for returns file path."""
-        file_path = self.builder.file_for("data", "input.txt")
+    def test_artifact_workspace_with_file_ref(self):
+        """Test artifact_workspace when ref resolves to a file."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
-        expected = self.base / "data" / "input.txt"
-        self.assertEqual(file_path, expected)
-        # Directory should be created
-        self.assertTrue(file_path.parent.exists())
+        ref = SimpleArtifactRef(
+            key_name="config", folder="configs", filename="app.json"
+        )
+        workspace = self.builder.artifact_workspace(ref)
 
-    def test_file_for_multiple_files(self):
-        """Test creating paths for multiple files in same role."""
-        files = ["file1.txt", "file2.csv", "file3.json"]
+        # Should return the parent directory, not the file
+        self.assertEqual(workspace, self.base / "configs")
+        self.assertTrue(workspace.exists())
+        self.assertTrue(workspace.is_dir())
 
-        for filename in files:
-            file_path = self.builder.file_for("output", filename)
-            self.assertEqual(file_path.parent, self.base / "output")
-            self.assertEqual(file_path.name, filename)
+    def test_artifact_path_with_multiple_refs(self):
+        """Test artifact_path resolves different refs to different paths."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
-    def test_path_with_filename(self):
-        """Test path helper with filename."""
-        result = self.builder.path("data", "file.txt")
+        ref1 = SimpleArtifactRef(key_name="input", folder="inputs", filename="data.csv")
+        ref2 = SimpleArtifactRef(
+            key_name="output", folder="outputs", filename="result.json"
+        )
+        ref3 = SimpleArtifactRef(key_name="logs", folder="logs")
 
-        self.assertEqual(result, self.base / "data" / "file.txt")
-        self.assertTrue(result.parent.exists())
+        path1 = self.builder.artifact_path(ref1)
+        path2 = self.builder.artifact_path(ref2)
+        path3 = self.builder.artifact_path(ref3)
 
-    def test_path_without_filename(self):
-        """Test path helper without filename (directory)."""
-        result = self.builder.path("logs")
+        self.assertEqual(path1, self.base / "inputs" / "data.csv")
+        self.assertEqual(path2, self.base / "outputs" / "result.json")
+        self.assertEqual(path3, self.base / "logs")
 
-        self.assertEqual(result, self.base / "logs")
-        self.assertTrue(result.exists())
-        self.assertTrue(result.is_dir())
+        # All parent directories should be created
+        self.assertTrue(path1.parent.exists())
+        self.assertTrue(path2.parent.exists())
+        self.assertTrue(path3.exists())  # This one is a directory
 
-    def test_path_with_none_filename(self):
-        """Test path helper with explicit None filename."""
-        result = self.builder.path("config", None)
+    def test_artifact_workspace_idempotent(self):
+        """Test that artifact_workspace is idempotent."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
-        self.assertEqual(result, self.base / "config")
-        self.assertTrue(result.is_dir())
+        ref = SimpleArtifactRef(key_name="data", folder="datadir")
+
+        ws1 = self.builder.artifact_workspace(ref)
+        ws2 = self.builder.artifact_workspace(ref)
+
+        self.assertEqual(ws1, ws2)
+        self.assertTrue(ws1.exists())
+
+    def test_artifact_path_creates_nested_directories(self):
+        """Test that artifact_path creates nested directory structures."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
+
+        ref = SimpleArtifactRef(
+            key_name="nested", folder="a/b/c/d", filename="file.txt"
+        )
+        path = self.builder.artifact_path(ref)
+
+        self.assertEqual(path, self.base / "a" / "b" / "c" / "d" / "file.txt")
+        self.assertTrue(path.parent.exists())
+        self.assertEqual(str(path.parent), str(self.base / "a" / "b" / "c" / "d"))
 
     # =====================================================
-    # ROLE REGISTRATION TESTS
+    # ARTIFACT REGISTRATION TESTS
     # =====================================================
 
-    def test_provide_registers_role(self):
-        """Test that provide registers role mapping."""
-        self.builder.provide("input_data", "/path/to/input", by_step_id="step1")
+    def test_record_artifact_registers_key(self):
+        """Test that record_artifact registers artifact key mapping."""
+        self.builder.record_artifact("input_data", "/path/to/input", by_step_id="step1")
 
-        self.assertEqual(self.builder._role_provider["input_data"], "step1")
-        self.assertEqual(self.builder._role_path["input_data"], "/path/to/input")
+        self.assertEqual(self.builder._artifact_provider["input_data"], "step1")
+        self.assertEqual(self.builder._artifact_path["input_data"], "/path/to/input")
 
-    def test_provide_multiple_roles(self):
-        """Test registering multiple roles."""
-        self.builder.provide("role1", "/path1", by_step_id="step1")
-        self.builder.provide("role2", "/path2", by_step_id="step2")
-        self.builder.provide("role3", "/path3", by_step_id="step1")
+    def test_record_artifact_multiple_keys(self):
+        """Test registering multiple artifact keys."""
+        self.builder.record_artifact("key1", "/path1", by_step_id="step1")
+        self.builder.record_artifact("key2", "/path2", by_step_id="step2")
+        self.builder.record_artifact("key3", "/path3", by_step_id="step1")
 
-        self.assertEqual(self.builder._role_provider["role1"], "step1")
-        self.assertEqual(self.builder._role_provider["role2"], "step2")
-        self.assertEqual(self.builder._role_path["role2"], "/path2")
+        self.assertEqual(self.builder._artifact_provider["key1"], "step1")
+        self.assertEqual(self.builder._artifact_provider["key2"], "step2")
+        self.assertEqual(self.builder._artifact_path["key2"], "/path2")
 
-    def test_provide_with_enum_role(self):
-        """Test provide with Enum role."""
+    def test_record_artifact_with_enum_key(self):
+        """Test record_artifact with Enum key."""
 
-        class DataRole(Enum):
+        class DataKey(Enum):
             INPUT = "input_data"
 
-        self.builder.provide(DataRole.INPUT, "/path", by_step_id="s1")  # type: ignore
+        self.builder.record_artifact(DataKey.INPUT, "/path", by_step_id="s1")  # type: ignore
 
-        self.assertEqual(self.builder._role_provider["input_data"], "s1")
+        self.assertEqual(self.builder._artifact_provider["input_data"], "s1")
 
-    def test_require_returns_registered_path(self):
-        """Test that require returns registered path."""
-        self.builder.provide("my_input", "/data/input.txt", by_step_id="s1")
+    def test_path_for_returns_registered_path(self):
+        """Test that path_for returns registered path."""
+        self.builder.record_artifact("my_input", "/data/input.txt", by_step_id="s1")
 
-        path = self.builder.require("my_input")
+        path = self.builder.path_for("my_input")
 
         self.assertEqual(path, "/data/input.txt")
 
-    def test_require_raises_on_missing_role(self):
-        """Test that require raises KeyError for unregistered role."""
+    def test_path_for_raises_on_missing_key(self):
+        """Test that path_for raises KeyError for unregistered artifact key."""
         with self.assertRaises(KeyError) as context:
-            self.builder.require("nonexistent_role")
+            self.builder.path_for("nonexistent_key")
 
-        self.assertIn("not yet provided", str(context.exception))
+        self.assertIn("no known path", str(context.exception))
 
-    def test_require_with_enum_role(self):
-        """Test require with Enum role."""
+    def test_path_for_with_enum_key(self):
+        """Test path_for with Enum key."""
 
-        class DataRole(Enum):
+        class DataKey(Enum):
             OUTPUT = "output_data"
 
-        self.builder.provide(DataRole.OUTPUT, "/out/data", by_step_id="s1")  # type: ignore
+        self.builder.record_artifact(DataKey.OUTPUT, "/out/data", by_step_id="s1")  # type: ignore
 
-        path = self.builder.require(DataRole.OUTPUT)  # type: ignore
+        path = self.builder.path_for(DataKey.OUTPUT)  # type: ignore
 
         self.assertEqual(path, "/out/data")
 
@@ -330,141 +350,206 @@ class TestPlanBuilder(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.builder.add_step_fn(test_func, step_id="123invalid", params={})
 
-    def test_add_step_fn_with_inputs(self):
-        """Test adding step with inputs."""
+    def test_add_step_fn_with_annotated_inputs(self):
+        """Test adding step with In[] annotated inputs."""
+        from typing import Annotated
 
-        def analyze():
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
+        from yggdrasil.flow.step import In
+
+        # Register an artifact first
+        raw_ref = SimpleArtifactRef(
+            key_name="raw_data", folder="input", filename="data.csv"
+        )
+        self.builder.record_artifact(
+            "raw_data", str(self.builder.artifact_path(raw_ref)), by_step_id="prep"
+        )
+
+        def analyze(ctx, input_data: Annotated[Path, In(raw_ref)]):
             pass
 
-        self.builder.provide("raw_data", "/data/raw.csv", by_step_id="prep")
+        # Manually set step metadata that @step() would set
+        analyze.__step_inputs__ = {"input_data": raw_ref}
+        analyze.__step_outputs__ = {}
 
         spec = self.builder.add_step_fn(
             analyze,
             step_id="analyze_step",
             params={},
-            inputs={"raw_data": self.builder.require("raw_data")},
         )
 
+        # Should have input mapped
         self.assertIn("raw_data", spec.inputs)
-        self.assertEqual(spec.inputs["raw_data"], "/data/raw.csv")
+        self.assertEqual(spec.deps, ["prep"])
 
-    def test_add_step_fn_with_provides(self):
-        """Test adding step that provides roles."""
+    def test_add_step_fn_with_annotated_outputs(self):
+        """Test adding step that produces outputs via Out[] annotations."""
+        from typing import Annotated
 
-        def generate_data():
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
+        from yggdrasil.flow.step import Out
+
+        output_ref = SimpleArtifactRef(
+            key_name="output_data", folder="output", filename="result.txt"
+        )
+
+        def generate_data(ctx, result: Annotated[Path, Out(output_ref)]):
             pass
 
-        output_path = str(self.builder.file_for("output", "result.txt"))
+        # Manually set step metadata that @step() would set
+        generate_data.__step_inputs__ = {}
+        generate_data.__step_outputs__ = {"result": output_ref}
 
         spec = self.builder.add_step_fn(
             generate_data,
             step_id="gen_step",
             params={},
-            provides={"output_data": output_path},
         )
 
-        # Role should be registered
-        self.assertEqual(self.builder._role_provider["output_data"], "gen_step")
-        self.assertEqual(self.builder._role_path["output_data"], output_path)
+        # Artifact should be registered by _add_step after processing outputs
+        self.assertIn("output_data", self.builder._artifact_provider)
+        self.assertEqual(self.builder._artifact_provider["output_data"], "gen_step")
 
-    def test_add_step_fn_with_requires_roles(self):
-        """Test adding step with explicit role requirements."""
+    def test_add_step_fn_with_requires_artifacts(self):
+        """Test adding step with explicit artifact requirements."""
 
         def step1():
             pass
 
+        step1.__step_inputs__ = {}
+        step1.__step_outputs__ = {}
+
         def step2():
             pass
 
-        # Step 1 provides a role
+        step2.__step_inputs__ = {}
+        step2.__step_outputs__ = {}
+
+        # Step 1 produces an artifact
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
+
+        inter_ref = SimpleArtifactRef(key_name="intermediate", folder="temp")
+        self.builder.record_artifact(
+            "intermediate", str(self.builder.artifact_path(inter_ref)), by_step_id="s1"
+        )
+
         self.builder.add_step_fn(
             step1,
             step_id="s1",
             params={},
-            provides={"intermediate": "/tmp/inter"},
         )
 
-        # Step 2 requires that role
+        # Step 2 requires that artifact
         spec2 = self.builder.add_step_fn(
             step2,
             step_id="s2",
             params={},
-            requires_roles=["intermediate"],
+            requires_artifacts=["intermediate"],
         )
 
         # Should have dependency on s1
         self.assertIn("s1", spec2.deps)
 
-    def test_add_step_fn_automatic_dependency_from_inputs(self):
-        """Test that dependencies are inferred from inputs."""
+    def test_add_step_fn_automatic_dependency_from_annotated_inputs(self):
+        """Test that dependencies are inferred from In[] annotations."""
+        from typing import Annotated
 
-        def prep():
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
+        from yggdrasil.flow.step import In, Out
+
+        data_ref = SimpleArtifactRef(key_name="data", folder="prep")
+
+        def prep(ctx, output: Annotated[Path, Out(data_ref)]):
             pass
 
-        def analyze():
+        # Manually set step metadata that @step() would set
+        prep.__step_inputs__ = {}
+        prep.__step_outputs__ = {"output": data_ref}
+
+        def analyze(ctx, input_data: Annotated[Path, In(data_ref)]):
             pass
 
-        # Prep provides data
+        # Manually set step metadata that @step() would set
+        analyze.__step_inputs__ = {"input_data": data_ref}
+        analyze.__step_outputs__ = {}
+
+        # Add prep first
         self.builder.add_step_fn(
             prep,
             step_id="prep_step",
             params={},
-            provides={"data": "/data/prep.csv"},
         )
 
-        # Analyze uses that data
+        # Add analyze - should automatically depend on prep_step
         spec = self.builder.add_step_fn(
             analyze,
             step_id="analyze_step",
             params={},
-            inputs={"data": self.builder.require("data")},
         )
 
         # Should automatically depend on prep_step
         self.assertIn("prep_step", spec.deps)
 
-    def test_add_step_fn_fails_on_missing_required_role(self):
-        """Test that adding step fails if required role doesn't exist."""
+    def test_add_step_fn_fails_on_missing_required_artifact(self):
+        """Test that adding step fails if required artifact doesn't exist."""
 
         def my_step():
             pass
+
+        my_step.__step_inputs__ = {}
+        my_step.__step_outputs__ = {}
 
         with self.assertRaises(KeyError) as context:
             self.builder.add_step_fn(
                 my_step,
                 step_id="step1",
                 params={},
-                requires_roles=["nonexistent_role"],
+                requires_artifacts=["nonexistent_artifact"],
             )
 
         self.assertIn("no provider", str(context.exception))
 
     def test_add_step_fn_multiple_dependencies(self):
         """Test step with multiple dependencies."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def step1():
             pass
 
+        step1.__step_inputs__ = {}
+        step1.__step_outputs__ = {}
+
         def step2():
             pass
+
+        step2.__step_inputs__ = {}
+        step2.__step_outputs__ = {}
 
         def step3():
             pass
 
-        # Create two providers
-        self.builder.add_step_fn(
-            step1, step_id="s1", params={}, provides={"role1": "/path1"}
+        step3.__step_inputs__ = {}
+        step3.__step_outputs__ = {}
+
+        # Create two artifact providers
+        ref1 = SimpleArtifactRef(key_name="key1", folder="data1")
+        ref2 = SimpleArtifactRef(key_name="key2", folder="data2")
+        self.builder.record_artifact(
+            "key1", str(self.builder.artifact_path(ref1)), by_step_id="s1"
         )
-        self.builder.add_step_fn(
-            step2, step_id="s2", params={}, provides={"role2": "/path2"}
+        self.builder.record_artifact(
+            "key2", str(self.builder.artifact_path(ref2)), by_step_id="s2"
         )
+
+        self.builder.add_step_fn(step1, step_id="s1", params={})
+        self.builder.add_step_fn(step2, step_id="s2", params={})
 
         # Step 3 depends on both
         spec = self.builder.add_step_fn(
             step3,
             step_id="s3",
             params={},
-            requires_roles=["role1", "role2"],
+            requires_artifacts=["key1", "key2"],
         )
 
         self.assertIn("s1", spec.deps)
@@ -472,54 +557,74 @@ class TestPlanBuilder(unittest.TestCase):
         self.assertEqual(len(spec.deps), 2)
 
     def test_add_step_fn_no_self_dependency(self):
-        """Test that step doesn't depend on itself even when providing and requiring same role."""
+        """Test that step doesn't depend on itself."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def step1():
             pass
 
+        step1.__step_inputs__ = {}
+        step1.__step_outputs__ = {}
+
         def step2():
             pass
 
-        # Step 1 provides a role
-        self.builder.add_step_fn(
-            step1,
-            step_id="s1",
-            params={},
-            provides={"shared": "/path1"},
+        step2.__step_inputs__ = {}
+        step2.__step_outputs__ = {}
+
+        # Step 1 produces an artifact
+        ref = SimpleArtifactRef(key_name="shared", folder="shared")
+        self.builder.record_artifact(
+            "shared", str(self.builder.artifact_path(ref)), by_step_id="s1"
         )
 
-        # Step 2 provides same role and requires it (from s1)
+        self.builder.add_step_fn(step1, step_id="s1", params={})
+
+        # Step 2 requires that artifact and will produce its own version
         spec = self.builder.add_step_fn(
             step2,
             step_id="s2",
             params={},
-            requires_roles=["shared"],
-            provides={"shared": "/path2"},  # Overrides the role
+            requires_artifacts=["shared"],
         )
 
         # Should depend on s1, not itself
         self.assertIn("s1", spec.deps)
         self.assertNotIn("s2", spec.deps)
 
-    def test_add_step_fn_with_enum_roles(self):
-        """Test adding steps with Enum-based roles."""
+    def test_add_step_fn_with_enum_artifact_keys(self):
+        """Test adding steps with Enum-based artifact keys."""
 
-        class Role(Enum):
+        class ArtifactKey(Enum):
             RAW = "raw_data"
             PROCESSED = "processed_data"
 
         def generate():
             pass
 
+        generate.__step_inputs__ = {}
+        generate.__step_outputs__ = {}
+
         def process():
             pass
 
-        # First step provides raw data
+        process.__step_inputs__ = {}
+        process.__step_outputs__ = {}
+
+        # First step produces raw data
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
+
+        raw_ref = SimpleArtifactRef(key_name=ArtifactKey.RAW.value, folder="input")
+        self.builder.record_artifact(
+            ArtifactKey.RAW.value,
+            str(self.builder.artifact_path(raw_ref)),
+            by_step_id="generate_step",
+        )
+
         self.builder.add_step_fn(
             generate,
             step_id="generate_step",
             params={},
-            provides={Role.RAW.value: "/input"},
         )
 
         # Second step processes it
@@ -527,12 +632,11 @@ class TestPlanBuilder(unittest.TestCase):
             process,
             step_id="process_step",
             params={},
-            inputs={Role.RAW.value: self.builder.require(Role.RAW.value)},
-            provides={Role.PROCESSED.value: "/output"},
+            requires_artifacts=[ArtifactKey.RAW],
         )
 
-        self.assertIn("raw_data", spec.inputs)
-        self.assertEqual(self.builder._role_provider["processed_data"], "process_step")
+        # Should have dependency
+        self.assertIn("generate_step", spec.deps)
 
     # =====================================================
     # PLAN FINALIZATION TESTS
@@ -585,21 +689,32 @@ class TestPlanBuilder(unittest.TestCase):
 
     def test_to_plan_with_dependencies(self):
         """Test to_plan with dependent steps."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def prep():
             pass
 
+        prep.__step_inputs__ = {}
+        prep.__step_outputs__ = {}
+
         def analyze():
             pass
 
-        self.builder.add_step_fn(
-            prep, step_id="prep", params={}, provides={"data": "/data"}
+        analyze.__step_inputs__ = {}
+        analyze.__step_outputs__ = {}
+
+        # Register artifact
+        ref = SimpleArtifactRef(key_name="data", folder="data")
+        self.builder.record_artifact(
+            "data", str(self.builder.artifact_path(ref)), by_step_id="prep"
         )
+
+        self.builder.add_step_fn(prep, step_id="prep", params={})
         self.builder.add_step_fn(
             analyze,
             step_id="analyze",
             params={},
-            requires_roles=["data"],
+            requires_artifacts=["data"],
         )
 
         plan = self.builder.to_plan()
@@ -614,42 +729,70 @@ class TestPlanBuilder(unittest.TestCase):
 
     def test_complete_workflow_linear(self):
         """Test building a complete linear workflow."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def download_data():
             pass
 
+        download_data.__step_inputs__ = {}
+        download_data.__step_outputs__ = {}
+
         def preprocess():
             pass
+
+        preprocess.__step_inputs__ = {}
+        preprocess.__step_outputs__ = {}
 
         def analyze():
             pass
 
-        # Build linear pipeline
-        raw_path = str(self.builder.file_for("raw", "data.csv"))
-        clean_path = str(self.builder.file_for("clean", "data.csv"))
-        results_path = str(self.builder.file_for("results", "output.json"))
+        analyze.__step_inputs__ = {}
+        analyze.__step_outputs__ = {}
+
+        # Build linear pipeline with artifact dependencies
+        raw_ref = SimpleArtifactRef(
+            key_name="raw_data", folder="raw", filename="data.csv"
+        )
+        clean_ref = SimpleArtifactRef(
+            key_name="clean_data", folder="clean", filename="data.csv"
+        )
+        results_ref = SimpleArtifactRef(
+            key_name="results", folder="results", filename="output.json"
+        )
+
+        # Register artifacts as they're produced
+        self.builder.record_artifact(
+            "raw_data", str(self.builder.artifact_path(raw_ref)), by_step_id="download"
+        )
+        self.builder.record_artifact(
+            "clean_data",
+            str(self.builder.artifact_path(clean_ref)),
+            by_step_id="preprocess",
+        )
+        self.builder.record_artifact(
+            "results",
+            str(self.builder.artifact_path(results_ref)),
+            by_step_id="analyze",
+        )
 
         self.builder.add_step_fn(
             download_data,
             step_id="download",
             params={"url": "http://example.com/data"},
-            provides={"raw_data": raw_path},
         )
 
         self.builder.add_step_fn(
             preprocess,
             step_id="preprocess",
             params={},
-            inputs={"raw_data": self.builder.require("raw_data")},
-            provides={"clean_data": clean_path},
+            requires_artifacts=["raw_data"],
         )
 
         self.builder.add_step_fn(
             analyze,
             step_id="analyze",
             params={},
-            inputs={"clean_data": self.builder.require("clean_data")},
-            provides={"results": results_path},
+            requires_artifacts=["clean_data"],
         )
 
         plan = self.builder.to_plan()
@@ -666,54 +809,84 @@ class TestPlanBuilder(unittest.TestCase):
 
     def test_complete_workflow_branching(self):
         """Test building a workflow with branching."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def fetch():
             pass
 
+        fetch.__step_inputs__ = {}
+        fetch.__step_outputs__ = {}
+
         def process_a():
             pass
+
+        process_a.__step_inputs__ = {}
+        process_a.__step_outputs__ = {}
 
         def process_b():
             pass
 
+        process_b.__step_inputs__ = {}
+        process_b.__step_outputs__ = {}
+
         def merge():
             pass
 
-        # Build branching pipeline
-        data_path = str(self.builder.file_for("input", "data.csv"))
-        result_a_path = str(self.builder.file_for("branch_a", "result.json"))
-        result_b_path = str(self.builder.file_for("branch_b", "result.json"))
-        merged_path = str(self.builder.file_for("output", "merged.json"))
+        merge.__step_inputs__ = {}
+        merge.__step_outputs__ = {}
 
-        self.builder.add_step_fn(
-            fetch,
-            step_id="fetch",
-            params={},
-            provides={"data": data_path},
+        # Register artifacts
+        data_ref = SimpleArtifactRef(
+            key_name="data", folder="input", filename="data.csv"
         )
+        result_a_ref = SimpleArtifactRef(
+            key_name="result_a", folder="branch_a", filename="result.json"
+        )
+        result_b_ref = SimpleArtifactRef(
+            key_name="result_b", folder="branch_b", filename="result.json"
+        )
+        merged_ref = SimpleArtifactRef(
+            key_name="final", folder="output", filename="merged.json"
+        )
+
+        self.builder.record_artifact(
+            "data", str(self.builder.artifact_path(data_ref)), by_step_id="fetch"
+        )
+        self.builder.record_artifact(
+            "result_a",
+            str(self.builder.artifact_path(result_a_ref)),
+            by_step_id="process_a",
+        )
+        self.builder.record_artifact(
+            "result_b",
+            str(self.builder.artifact_path(result_b_ref)),
+            by_step_id="process_b",
+        )
+        self.builder.record_artifact(
+            "final", str(self.builder.artifact_path(merged_ref)), by_step_id="merge"
+        )
+
+        self.builder.add_step_fn(fetch, step_id="fetch", params={})
 
         self.builder.add_step_fn(
             process_a,
             step_id="process_a",
             params={},
-            requires_roles=["data"],
-            provides={"result_a": result_a_path},
+            requires_artifacts=["data"],
         )
 
         self.builder.add_step_fn(
             process_b,
             step_id="process_b",
             params={},
-            requires_roles=["data"],
-            provides={"result_b": result_b_path},
+            requires_artifacts=["data"],
         )
 
         self.builder.add_step_fn(
             merge,
             step_id="merge",
             params={},
-            requires_roles=["result_a", "result_b"],
-            provides={"final": merged_path},
+            requires_artifacts=["result_a", "result_b"],
         )
 
         plan = self.builder.to_plan()
@@ -729,38 +902,53 @@ class TestPlanBuilder(unittest.TestCase):
         self.assertIn("process_a", merge_step.deps)
         self.assertIn("process_b", merge_step.deps)
 
-    def test_workflow_with_path_helpers(self):
-        """Test using path helpers for file management."""
+    def test_workflow_with_artifact_paths(self):
+        """Test using artifact_path for file management."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def step1():
             pass
 
+        step1.__step_inputs__ = {}
+        step1.__step_outputs__ = {}
+
         def step2():
             pass
 
-        # Use path helpers
-        input_dir = self.builder.path("input")
-        input_file = self.builder.path("input", "data.txt")
-        output_file = self.builder.path("output", "result.txt")
+        step2.__step_inputs__ = {}
+        step2.__step_outputs__ = {}
+
+        # Use artifact_path helpers
+        input_ref = SimpleArtifactRef(
+            key_name="intermediate", folder="input", filename="data.txt"
+        )
+        output_ref = SimpleArtifactRef(
+            key_name="output", folder="output", filename="result.txt"
+        )
+
+        input_file = self.builder.artifact_path(input_ref)
+        output_file = self.builder.artifact_path(output_ref)
+
+        self.builder.record_artifact("intermediate", str(input_file), by_step_id="s1")
+        self.builder.record_artifact("output", str(output_file), by_step_id="s2")
 
         self.builder.add_step_fn(
             step1,
             step_id="s1",
-            params={"input_dir": str(input_dir)},
-            provides={"intermediate": str(input_file)},
+            params={"input": str(input_file)},
         )
 
         self.builder.add_step_fn(
             step2,
             step_id="s2",
             params={"output": str(output_file)},
-            requires_roles=["intermediate"],
+            requires_artifacts=["intermediate"],
         )
 
         plan = self.builder.to_plan()
 
         # Verify paths were created
-        self.assertTrue(input_dir.exists())
+        self.assertTrue(input_file.parent.exists())
         self.assertTrue(output_file.parent.exists())
 
         # Verify plan structure
@@ -804,48 +992,62 @@ class TestPlanBuilderEdgeCases(unittest.TestCase):
         """Clean up temporary resources."""
         self.temp_dir.cleanup()
 
-    def test_circular_dependency_detection_implicit(self):
-        """Test that circular dependencies can be detected."""
+    def test_no_circular_self_dependency(self):
+        """Test that builder creates valid dependency chains."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def step_a():
             pass
 
+        step_a.__step_inputs__ = {}
+        step_a.__step_outputs__ = {}
+
         def step_b():
             pass
 
-        # Create a situation that could lead to circular deps
-        # (though the current implementation prevents self-deps)
-        self.builder.add_step_fn(
-            step_a, step_id="a", params={}, provides={"role_a": "/a"}
+        step_b.__step_inputs__ = {}
+        step_b.__step_outputs__ = {}
+
+        # Create linear dependency
+        ref_a = SimpleArtifactRef(key_name="key_a", folder="a")
+        ref_b = SimpleArtifactRef(key_name="key_b", folder="b")
+        self.builder.record_artifact(
+            "key_a", str(self.builder.artifact_path(ref_a)), by_step_id="a"
+        )
+        self.builder.record_artifact(
+            "key_b", str(self.builder.artifact_path(ref_b)), by_step_id="b"
         )
 
+        self.builder.add_step_fn(step_a, step_id="a", params={})
         self.builder.add_step_fn(
             step_b,
             step_id="b",
             params={},
-            requires_roles=["role_a"],
-            provides={"role_b": "/b"},
+            requires_artifacts=["key_a"],
         )
 
         # This should work (no actual cycle)
         plan = self.builder.to_plan()
         self.assertEqual(len(plan.steps), 2)
+        # B depends on A
+        self.assertIn("a", plan.steps[1].deps)
 
-    def test_role_override(self):
-        """Test that providing same role twice updates the provider."""
+    def test_artifact_key_override(self):
+        """Test that recording same artifact key twice updates the provider."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
-        def step1():
-            pass
+        ref1 = SimpleArtifactRef(key_name="shared_key", folder="path1")
+        ref2 = SimpleArtifactRef(key_name="shared_key", folder="path2")
 
-        def step2():
-            pass
-
-        self.builder.provide("shared_role", "/path1", by_step_id="s1")
-        self.builder.provide("shared_role", "/path2", by_step_id="s2")
+        self.builder.record_artifact(
+            "shared_key", str(self.builder.artifact_path(ref1)), by_step_id="s1"
+        )
+        self.builder.record_artifact(
+            "shared_key", str(self.builder.artifact_path(ref2)), by_step_id="s2"
+        )
 
         # Latest provider wins
-        self.assertEqual(self.builder._role_provider["shared_role"], "s2")
-        self.assertEqual(self.builder._role_path["shared_role"], "/path2")
+        self.assertEqual(self.builder._artifact_provider["shared_key"], "s2")
 
     def test_empty_params(self):
         """Test adding step with empty params."""
@@ -853,22 +1055,33 @@ class TestPlanBuilderEdgeCases(unittest.TestCase):
         def simple_step():
             pass
 
+        simple_step.__step_inputs__ = {}
+        simple_step.__step_outputs__ = {}
+
         spec = self.builder.add_step_fn(simple_step, step_id="s1", params={})
 
         self.assertEqual(spec.params, {})
 
     def test_complex_params(self):
         """Test adding step with complex params."""
+        from yggdrasil.flow.artifacts import SimpleArtifactRef
 
         def complex_step():
             pass
+
+        complex_step.__step_inputs__ = {}
+        complex_step.__step_outputs__ = {}
+
+        # Create an artifact path for testing
+        ref = SimpleArtifactRef(key_name="data", folder="data", filename="file.txt")
+        artifact_path = self.builder.artifact_path(ref)
 
         params = {
             "simple": "value",
             "number": 42,
             "list": [1, 2, 3],
             "dict": {"nested": "data"},
-            "path": str(self.builder.path("data", "file.txt")),
+            "path": str(artifact_path),
         }
 
         spec = self.builder.add_step_fn(complex_step, step_id="s1", params=params)

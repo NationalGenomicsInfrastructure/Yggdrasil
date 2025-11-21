@@ -854,7 +854,7 @@ class TestEngine(unittest.TestCase):
             output = ctx.workdir / "step1_output.txt"
             output.write_text("step1 result", encoding="utf-8")
             return StepResult(
-                artifacts=[Artifact(role="output", path=str(output))],
+                artifacts=[Artifact(key="output", path=str(output))],
                 metrics={"processed": 100},
             )
 
@@ -862,7 +862,7 @@ class TestEngine(unittest.TestCase):
             output = ctx.workdir / "step2_output.txt"
             output.write_text("step2 result", encoding="utf-8")
             return StepResult(
-                artifacts=[Artifact(role="final_output", path=str(output))],
+                artifacts=[Artifact(key="final_output", path=str(output))],
                 metrics={"total": 200},
             )
 

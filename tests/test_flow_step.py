@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
+from yggdrasil.flow.artifacts import SimpleArtifactRef
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import Artifact, StepResult
 from yggdrasil.flow.step import StepContext, step
@@ -20,6 +21,8 @@ class TestStepContext(unittest.TestCase):
         """Set up test fixtures for each test."""
         self.temp_dir = TemporaryDirectory()
         self.workdir = Path(self.temp_dir.name)
+        self.scope_dir = Path(self.temp_dir.name) / "scope"
+        self.scope_dir.mkdir(parents=True, exist_ok=True)
 
         # Mock emitter for capturing events
         self.mock_emitter = Mock(spec=EventEmitter)
@@ -32,6 +35,7 @@ class TestStepContext(unittest.TestCase):
             step_id="test_step_001",
             step_name="test_step",
             workdir=self.workdir,
+            scope_dir=self.scope_dir,
             emitter=self.mock_emitter,
             run_mode="auto",
             fingerprint="abc123",
@@ -55,6 +59,7 @@ class TestStepContext(unittest.TestCase):
             step_id="step_42_001",
             step_name="demux",
             workdir=Path("/tmp/work"),
+            scope_dir=Path("/tmp/scope"),
             emitter=self.mock_emitter,
             run_mode="render_only",
             fingerprint="fingerprint_xyz",
@@ -82,6 +87,7 @@ class TestStepContext(unittest.TestCase):
             step_id="step",
             step_name="name",
             workdir=Path("/tmp"),
+            scope_dir=Path("/tmp/scope"),
         )
 
         # Should have FileSpoolEmitter as default
@@ -105,6 +111,7 @@ class TestStepContext(unittest.TestCase):
             step_id="s",
             step_name="n",
             workdir=Path("/tmp/path_obj"),
+            scope_dir=Path("/tmp/scope"),
         )
         self.assertIsInstance(ctx_path.workdir, Path)
         self.assertEqual(ctx_path.workdir, Path("/tmp/path_obj"))
@@ -144,6 +151,7 @@ class TestStepContext(unittest.TestCase):
             step_id="s2",
             step_name="n2",
             workdir=self.workdir,
+            scope_dir=self.scope_dir,
             emitter=self.mock_emitter,
         )
 
@@ -257,6 +265,7 @@ class TestStepContext(unittest.TestCase):
             step_id="step",
             step_name="name",
             workdir=self.workdir,
+            scope_dir=self.scope_dir,
             emitter=self.mock_emitter,
             run_id=None,
         )
@@ -273,33 +282,42 @@ class TestStepContext(unittest.TestCase):
     # ARTIFACT MANAGEMENT TESTS
     # =====================================================
 
-    def test_add_artifact_with_explicit_digest(self):
-        """Test add_artifact with explicitly provided digest."""
-        artifact = self.ctx.add_artifact(
-            role="test_output",
-            path="/path/to/file.txt",
+    def test_record_artifact_with_explicit_digest(self):
+        """Test record_artifact with explicitly provided digest."""
+        test_file = self.workdir / "file.txt"
+        test_file.write_text("content", encoding="utf-8")
+
+        ref = SimpleArtifactRef(
+            key_name="test_output", folder="outputs", filename="file.txt"
+        )
+        artifact = self.ctx.record_artifact(
+            ref,
+            path=test_file,
             digest="sha256:abc123def456",
         )
 
         # Verify artifact structure
         self.assertIsInstance(artifact, Artifact)
-        self.assertEqual(artifact.role, "test_output")
-        self.assertEqual(artifact.path, "/path/to/file.txt")
+        self.assertEqual(artifact.key, "test_output")
+        self.assertEqual(artifact.path, str(test_file))
         self.assertEqual(artifact.digest, "sha256:abc123def456")
 
         # Should emit step.artifact event
         self.mock_emitter.emit.assert_called_once()
         emitted_event = self.mock_emitter.emit.call_args[0][0]
         self.assertEqual(emitted_event["type"], "step.artifact")
-        self.assertEqual(emitted_event["artifact"]["role"], "test_output")
+        self.assertEqual(emitted_event["artifact"]["key"], "test_output")
 
-    def test_add_artifact_file_auto_digest(self):
-        """Test add_artifact automatically computes digest for files."""
+    def test_record_artifact_file_auto_digest(self):
+        """Test record_artifact automatically computes digest for files."""
         # Create a test file
         test_file = self.workdir / "test_file.txt"
         test_file.write_text("test content", encoding="utf-8")
 
-        artifact = self.ctx.add_artifact(role="test_file", path=str(test_file))
+        ref = SimpleArtifactRef(
+            key_name="test_file", folder="files", filename="test_file.txt"
+        )
+        artifact = self.ctx.record_artifact(ref, path=test_file)
 
         # Should have computed sha256 digest
         self.assertIsNotNone(artifact.digest)
@@ -307,53 +325,60 @@ class TestStepContext(unittest.TestCase):
         # Digest should be 64 hex characters after "sha256:"
         self.assertEqual(len(artifact.digest), len("sha256:") + 64)  # type: ignore
 
-    def test_add_artifact_directory_auto_digest(self):
-        """Test add_artifact automatically computes dirhash for directories."""
+    def test_record_artifact_directory_auto_digest(self):
+        """Test record_artifact automatically computes dirhash for directories."""
         # Create a test directory with files
         test_dir = self.workdir / "test_dir"
         test_dir.mkdir()
         (test_dir / "file1.txt").write_text("content1", encoding="utf-8")
         (test_dir / "file2.txt").write_text("content2", encoding="utf-8")
 
-        artifact = self.ctx.add_artifact(role="test_dir", path=str(test_dir))
+        ref = SimpleArtifactRef(key_name="test_dir", folder="dirs")
+        artifact = self.ctx.record_artifact(ref, path=test_dir)
 
         # Should have computed dirhash
         self.assertIsNotNone(artifact.digest)
         self.assertTrue(artifact.digest.startswith("dirhash:"))  # type: ignore
 
-    def test_add_artifact_emits_event_immediately(self):
-        """Test that add_artifact emits event immediately for UI updates."""
+    def test_record_artifact_emits_event_immediately(self):
+        """Test that record_artifact emits event immediately for UI updates."""
         test_file = self.workdir / "immediate.txt"
         test_file.write_text("content", encoding="utf-8")
 
         # Reset mock to clear any previous calls
         self.mock_emitter.reset_mock()
 
-        self.ctx.add_artifact(role="immediate", path=str(test_file))
+        ref = SimpleArtifactRef(
+            key_name="immediate", folder="outputs", filename="immediate.txt"
+        )
+        self.ctx.record_artifact(ref, path=test_file)
 
         # Should emit immediately
         self.mock_emitter.emit.assert_called_once()
 
         emitted_event = self.mock_emitter.emit.call_args[0][0]
         self.assertEqual(emitted_event["type"], "step.artifact")
-        self.assertEqual(emitted_event["artifact"]["role"], "immediate")
+        self.assertEqual(emitted_event["artifact"]["key"], "immediate")
         self.assertEqual(emitted_event["artifact"]["path"], str(test_file))
         self.assertIsNotNone(emitted_event["artifact"]["digest"])
 
-    def test_add_artifact_converts_path_to_string(self):
-        """Test that add_artifact converts Path objects to strings."""
+    def test_record_artifact_accepts_path_objects(self):
+        """Test that record_artifact accepts Path objects."""
         test_file = self.workdir / "path_obj.txt"
         test_file.write_text("content", encoding="utf-8")
 
         # Pass as Path object
-        artifact = self.ctx.add_artifact(role="path_test", path=str(test_file))
+        ref = SimpleArtifactRef(
+            key_name="path_test", folder="outputs", filename="path_obj.txt"
+        )
+        artifact = self.ctx.record_artifact(ref, path=test_file)
 
         # Should store as string
         self.assertIsInstance(artifact.path, str)
         self.assertEqual(artifact.path, str(test_file))
 
-    def test_add_artifact_multiple_artifacts(self):
-        """Test adding multiple artifacts in sequence."""
+    def test_record_artifact_multiple_artifacts(self):
+        """Test recording multiple artifacts in sequence."""
         file1 = self.workdir / "file1.txt"
         file2 = self.workdir / "file2.txt"
         file1.write_text("content1", encoding="utf-8")
@@ -361,15 +386,91 @@ class TestStepContext(unittest.TestCase):
 
         self.mock_emitter.reset_mock()
 
-        artifact1 = self.ctx.add_artifact("output1", str(file1))
-        artifact2 = self.ctx.add_artifact("output2", str(file2))
+        ref1 = SimpleArtifactRef(
+            key_name="output1", folder="outputs", filename="file1.txt"
+        )
+        ref2 = SimpleArtifactRef(
+            key_name="output2", folder="outputs", filename="file2.txt"
+        )
+        artifact1 = self.ctx.record_artifact(ref1, path=file1)
+        artifact2 = self.ctx.record_artifact(ref2, path=file2)
 
         # Should have emitted 2 events
         self.assertEqual(self.mock_emitter.emit.call_count, 2)
 
         # Artifacts should be different
-        self.assertNotEqual(artifact1.role, artifact2.role)
+        self.assertNotEqual(artifact1.key, artifact2.key)
         self.assertNotEqual(artifact1.path, artifact2.path)
+
+    def test_context_artifacts_property(self):
+        """Test that context.artifacts returns all recorded artifacts."""
+        file1 = self.workdir / "file1.txt"
+        file2 = self.workdir / "file2.txt"
+        file1.write_text("content1", encoding="utf-8")
+        file2.write_text("content2", encoding="utf-8")
+
+        # Initially empty
+        self.assertEqual(len(self.ctx.artifacts), 0)
+
+        ref1 = SimpleArtifactRef(key_name="art1", folder="out", filename="file1.txt")
+        ref2 = SimpleArtifactRef(key_name="art2", folder="out", filename="file2.txt")
+
+        self.ctx.record_artifact(ref1, path=file1)
+        self.assertEqual(len(self.ctx.artifacts), 1)
+
+        self.ctx.record_artifact(ref2, path=file2)
+        self.assertEqual(len(self.ctx.artifacts), 2)
+
+        # Should return copies, not internal list
+        arts = self.ctx.artifacts
+        self.assertIsInstance(arts, list)
+        self.assertEqual(len(arts), 2)
+
+    def test_record_artifact_uses_ref_key(self):
+        """Test that record_artifact uses the artifact ref's key() method."""
+        test_file = self.workdir / "test.txt"
+        test_file.write_text("content", encoding="utf-8")
+
+        ref = SimpleArtifactRef(
+            key_name="custom_key", folder="outputs", filename="test.txt"
+        )
+        artifact = self.ctx.record_artifact(ref, path=test_file)
+
+        self.assertEqual(artifact.key, "custom_key")
+
+    def test_record_artifact_resolves_path_from_ref(self):
+        """Test that record_artifact can resolve path from artifact ref."""
+        ref = SimpleArtifactRef(
+            key_name="auto_path", folder="data", filename="file.txt"
+        )
+
+        # Create file at the expected resolved location
+        expected_path = self.scope_dir / "data" / "file.txt"
+        expected_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_path.write_text("data", encoding="utf-8")
+
+        # Don't pass explicit path - let it resolve from ref
+        artifact = self.ctx.record_artifact(ref)
+
+        self.assertEqual(artifact.key, "auto_path")
+        self.assertEqual(artifact.path, str(expected_path))
+        self.assertIsNotNone(artifact.digest)
+
+    def test_record_artifact_explicit_path_overrides_ref(self):
+        """Test that explicit path parameter overrides ref resolution."""
+        ref = SimpleArtifactRef(
+            key_name="my_artifact", folder="default", filename="default.txt"
+        )
+
+        # Create file at custom location
+        custom_file = self.workdir / "custom_location" / "actual.txt"
+        custom_file.parent.mkdir(parents=True, exist_ok=True)
+        custom_file.write_text("custom", encoding="utf-8")
+
+        artifact = self.ctx.record_artifact(ref, path=custom_file)
+
+        self.assertEqual(artifact.key, "my_artifact")
+        self.assertEqual(artifact.path, str(custom_file))
 
     # =====================================================
     # PROGRESS TRACKING TESTS
@@ -460,6 +561,8 @@ class TestStepDecorator(unittest.TestCase):
         """Set up test fixtures."""
         self.temp_dir = TemporaryDirectory()
         self.workdir = Path(self.temp_dir.name)
+        self.scope_dir = Path(self.temp_dir.name) / "scope"
+        self.scope_dir.mkdir(parents=True, exist_ok=True)
         self.mock_emitter = Mock(spec=EventEmitter)
 
         self.ctx = StepContext(
@@ -469,6 +572,7 @@ class TestStepDecorator(unittest.TestCase):
             step_id="step",
             step_name="test_step",
             workdir=self.workdir,
+            scope_dir=self.scope_dir,
             emitter=self.mock_emitter,
         )
 
@@ -505,16 +609,21 @@ class TestStepDecorator(unittest.TestCase):
         # Step name should be custom
         self.assertEqual(my_function._step_name, "custom_name")  # type: ignore
 
-    def test_step_decorator_with_input_keys(self):
-        """Test @step decorator with input_keys parameter."""
+    def test_step_decorator_extracts_inputs_from_annotations(self):
+        """Test @step decorator extracts inputs from In[] annotations."""
+        from typing import Annotated
 
-        @step(input_keys=("input_file", "config_file"))
-        def process_data(ctx: StepContext, **kwargs) -> StepResult:
+        from yggdrasil.flow.step import In
+
+        @step()
+        def process_data(
+            ctx: StepContext, input_file: Annotated[str, In("raw_data")], **kwargs
+        ) -> StepResult:
             return StepResult()
 
-        # Should attach input_keys metadata
+        # Should extract input_keys metadata from annotations
         self.assertTrue(hasattr(process_data, "_input_keys"))
-        self.assertEqual(process_data._input_keys, ("input_file", "config_file"))  # type: ignore
+        self.assertIn("input_file", process_data._input_keys)  # type: ignore
 
     def test_step_decorator_preserves_function_metadata(self):
         """Test that @step preserves original function metadata."""
@@ -591,7 +700,7 @@ class TestStepDecorator(unittest.TestCase):
         @step()
         def return_result(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult(
-                artifacts=[Artifact(role="output", path="/out/file.txt")],
+                artifacts=[Artifact(key="output", path="/out/file.txt")],
                 metrics={"accuracy": 0.95},
                 extra={"note": "test"},
             )
@@ -647,7 +756,7 @@ class TestStepDecorator(unittest.TestCase):
         @step()
         def emit_succeeded(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult(
-                artifacts=[Artifact(role="output", path="/path")],
+                artifacts=[Artifact(key="output", path="/path")],
                 metrics={"count": 10},
                 extra={"status": "complete"},
             )
@@ -783,9 +892,15 @@ class TestStepDecorator(unittest.TestCase):
             output1.write_text("data1", encoding="utf-8")
             output2.write_text("data2", encoding="utf-8")
 
-            # Add artifacts
-            art1 = ctx.add_artifact("output1", str(output1))
-            art2 = ctx.add_artifact("output2", str(output2))
+            # Record artifacts
+            ref1 = SimpleArtifactRef(
+                key_name="output1", folder="outputs", filename="output1.txt"
+            )
+            ref2 = SimpleArtifactRef(
+                key_name="output2", folder="outputs", filename="output2.txt"
+            )
+            art1 = ctx.record_artifact(ref1, path=output1)
+            art2 = ctx.record_artifact(ref2, path=output2)
 
             return StepResult(artifacts=[art1, art2])
 
@@ -846,7 +961,7 @@ class TestStepDecorator(unittest.TestCase):
     def test_step_with_complex_workflow(self):
         """Test step with complex workflow including all features."""
 
-        @step(name="complex_workflow", input_keys=("input_path",))
+        @step(name="complex_workflow")
         def complex_step(ctx: StepContext, input_path: str, **kwargs) -> StepResult:
             # Progress tracking
             ctx.progress(10, "Initializing")
@@ -857,8 +972,11 @@ class TestStepDecorator(unittest.TestCase):
 
             ctx.progress(50, "Processing")
 
-            # Add artifact
-            artifact = ctx.add_artifact("result", str(output_file))
+            # Record artifact
+            ref = SimpleArtifactRef(
+                key_name="result", folder="outputs", filename="result.txt"
+            )
+            artifact = ctx.record_artifact(ref, path=output_file)
 
             ctx.progress(100, "Complete")
 
@@ -877,7 +995,7 @@ class TestStepDecorator(unittest.TestCase):
 
         # Verify complete workflow
         self.assertEqual(len(result.artifacts), 1)
-        self.assertEqual(result.artifacts[0].role, "result")
+        self.assertEqual(result.artifacts[0].key, "result")
         self.assertIn("input", result.metrics)
         self.assertEqual(result.extra["status"], "success")
 
@@ -925,13 +1043,15 @@ class TestStepDecorator(unittest.TestCase):
     def test_step_metadata_attached_to_wrapper(self):
         """Test that step metadata is attached to the wrapper function."""
 
-        @step(name="metadata_test", input_keys=("input1", "input2"))
+        @step(name="metadata_test")
         def metadata_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
         # Verify metadata on wrapper
         self.assertEqual(metadata_step._step_name, "metadata_test")  # type: ignore
-        self.assertEqual(metadata_step._input_keys, ("input1", "input2"))  # type: ignore
+        self.assertTrue(hasattr(metadata_step, "_input_keys"))  # type: ignore
+        self.assertTrue(hasattr(metadata_step, "__step_inputs__"))  # type: ignore
+        self.assertTrue(hasattr(metadata_step, "__step_outputs__"))  # type: ignore
 
     def test_step_with_no_return_value(self):
         """Test step that doesn't explicitly return a value."""
