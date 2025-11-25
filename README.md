@@ -16,11 +16,12 @@
 
 
 Yggdrasil is an in-house orchestration framework designed to automate well-defined workflows. It watches directories, CouchDB
-changes, etc., then calls **realm modules** (external or internal packages) to do the heavy lifting. Example realms today:
+changes, etc., then calls **realm modules** (external or internal packages) to do the heavy lifting. It includes a minimal execution framework (**Flow API** - `yggdrasil.flow`) with `@step` decorators, planners, and engine for workflow orchestration. [See Flow API README](yggdrasil/flow/README.md)
 
+**Example realms:**
 * `tenx` (internal)         - 10x Genomics best practice analysis
 * `smartseq3` (internal)    - Smart-seq3 best practice analysis
-* `dataflow-dmx` (external) - [under developmennt] Demultiplexing pipeline for Illumina / Aviti / ONT
+* `dataflow-dmx` (external) - [under development] Demultiplexing pipeline for Illumina / Aviti / ONT
 * *(more to come)*
 
 External realms self-register through the entry-point group **`ygg.handler`**.
@@ -34,6 +35,7 @@ External realms self-register through the entry-point group **`ygg.handler`**.
   - [Developers / Contributors](#1-developers--contributors)
   - [Production / CI runners](#2-production--ci-runners)
 - [Install External Realms](#install-an-external-realm-example-dataflow-dmx)
+- [Flow API](#flow-api)
 - [Project Structure](#project-structure)
 - [Usage](#usage)
   - [Command-line interface](#command-line-interface)
@@ -110,45 +112,79 @@ When a new event is detected, Yggdrasil schedules the appropriate handler as an
 async background task in its event loop.
 
 
+## Flow API
+
+Yggdrasil includes a minimal execution framework (`yggdrasil.flow`) for building and running workflow plans:
+
+* **@step decorator** - Standardizes step I/O, artifact emission, and progress tracking
+* **Planner protocol** - Generates execution plans from trigger events (PlanningContext → PlanDraft)
+* **Engine** - Executes plans with per-step workdirs, fingerprinting, and event emission
+* **Event system** - Pluggable emitters (FileSpool, Tee, Couch) for structured event logging
+* **Artifacts** - Type-safe artifact resolution via ArtifactRefProtocol
+
+**Key concepts:**
+* Plans consist of StepSpecs with dependencies, inputs, and parameters
+* Fingerprints are computed from params + input digests for caching
+* Events are emitted to `$YGG_EVENT_SPOOL/<realm>/<plan_id>/<step_id>/<run_id>/`
+* Steps receive a StepContext with realm, scope, workdir, and emitter
+
+**📚 [Full Flow API Documentation →](yggdrasil/flow/README.md)**
+
+
 ## Project Structure
 
 Brief overview of the main components and directories:
 
 ```text
 Yggdrasil/
-├── lib/
-│   ├── base/
-│   ├── core_utils/
-│   ├── couchdb/
-│   ├── handlers/
-│   ├── module_utils/
-│   ├── realms/
+├── yggdrasil/               # Public API package
+│   ├── flow/               # Execution framework (step, engine, planner)
+│   │   ├── planner/        # Planning API and utilities
+│   │   ├── events/         # Event emitters (FileSpool, Tee, Couch)
+│   │   ├── utils/          # Hash, codec, time utilities
+│   │   ├── step.py         # @step decorator and StepContext
+│   │   ├── engine.py       # Plan executor
+│   │   ├── model.py        # Core dataclasses (Plan, StepSpec, Artifact)
+│   │   ├── artifacts.py    # Artifact resolution protocol
+│   │   └── README.md       # Flow API documentation
+│   ├── core_utils/         # Core utilities (event types, etc.)
+│   ├── flow/
+│   │   └── base_handler.py # BaseHandler for event-driven handlers
+│   ├── cli.py              # Command-line interface
+│   └── __init__.py
+├── lib/                     # Internal implementation
+│   ├── core_utils/         # Core utilities and singleton
+│   ├── couchdb/            # CouchDB connection and managers
+│   ├── handlers/           # Built-in handlers (re-exports from yggdrasil.flow)
+│   ├── module_utils/       # Module utilities
+│   ├── realms/             # Internal realm implementations
 │   │   ├── tenx/
 │   │   └── smartseq3/
-│   └── watchers/
-├── tests/
+│   └── watchers/           # File system and CouchDB watchers
+├── tests/                   # Test suite
 ├── .github/
-│   └── workflows/
-├── requirements/
-├── yggdrasil.py
-├── ygg_trunk.py (depr)
-├── ygg-mule.py (depr)
-├── pyproject.toml
+│   └── workflows/          # CI/CD workflows (lint, tests)
+├── requirements/           # Locked dependencies
+├── pyproject.toml          # Project metadata and dependencies
 ├── LICENSE
 └── README.md
 ```
 
-*	**lib/**: Core library containing base classes and utilities.
-    *	**base/**: Abstract base classes and interfaces.
-    *   **core_utils/**: Utility modules for Yggdrasil core functionalities.
-    *   **couchdb/**: Classes specific for Yggdrasil-CouchDB interactions and document management.
-    *   **handlers/**: Base classes and built-in event/data handlers for processing and workflow orchestration.
-    *	**module_utils/**: Utility modules for various Yggdrasil module functionalities.
-    *	**realms/**: Internal modules specific to different sequencing technologies (e.g. TenX, SmartSeq3, etc.)
-    *   **watchers/**: File system and CouchDB watchers for monitoring and triggering events.
-*	**tests/**: Test cases for the application.
-*	**.github/workflows/**: GitHub Actions workflows for CI/CD.
-*   **requirements/**: Dependency lock files and requirements management for reproducible environments.
+*	**yggdrasil/**: Public API package for external realms and users.
+    *	**flow/**: Execution framework with @step decorator, planner protocol, engine, and event system.
+    *   **flow/base_handler.py**: Abstract BaseHandler for event-driven workflow handlers.
+    *   **core_utils/**: Public utilities (EventType enum, etc.).
+    *   **cli.py**: Command-line interface (daemon, run-doc).
+*	**lib/**: Internal implementation (not for external import).
+    *   **core_utils/**: Core utilities, singleton decorator, module resolver, logging.
+    *   **couchdb/**: CouchDB connection management and document handlers.
+    *   **handlers/**: Built-in handlers (re-export yggdrasil.flow.BaseHandler).
+    *	**module_utils/**: Utility modules for internal Yggdrasil functionalities.
+    *	**realms/**: Internal realm implementations (tenx, smartseq3).
+    *   **watchers/**: File system and CouchDB watchers for event monitoring.
+*	**tests/**: Comprehensive test suite with 650+ tests.
+*	**.github/workflows/**: CI/CD pipelines (lint, type-check, tests, security).
+*   **requirements/**: Locked dependency files for reproducible builds.
 
 
 ---
@@ -294,6 +330,12 @@ The following variables can also be set in the `config.json`, but for safety rea
 
     - COUCH_USER: Your CouchDB username.
     - COUCH_PASS: Your CouchDB password.
+
+**Flow API environment variables:**
+
+    - YGG_WORK_ROOT: Engine work root (defaults to `/tmp/ygg_work`).
+    - YGG_EVENT_SPOOL: Event spool root for FileSpoolEmitter (defaults to `/tmp/ygg_events`).
+    - OPS_DB: Operations database name for event consumers (defaults to `yggdrasil_ops`).
 
 ### Logging
 
