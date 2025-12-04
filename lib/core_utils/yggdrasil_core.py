@@ -13,11 +13,12 @@ from lib.ops.consumer_service import OpsConsumerService
 # from lib.handlers.flowcell_handler import FlowcellHandler
 from lib.watchers.couchdb_watcher import CouchDBWatcher
 from lib.watchers.seq_data_watcher import SeqDataWatcher, YggdrasilEvent
+from yggdrasil.core.engine import Engine
 
 # NOTE: Import EventType via `yggdrasil.*` namespace (not `lib.*`), to match external handlers (enum identity issue)
 from yggdrasil.core_utils.event_types import EventType  # type: ignore
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
-from yggdrasil.flow.planner.api import PlanningContext
+from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 
 # from lib.core_utils.event_types import EventType
 
@@ -53,9 +54,62 @@ class YggdrasilCore:
         # Ops consumer service (for writing plan_status to CouchDB)
         self.ops_consumer = OpsConsumerService(interval_sec=2.0)
 
+        # Engine for plan execution (handlers now return plans; core executes them)
+        self.engine = Engine(
+            work_root=config.get("work_root") or os.environ.get("YGG_WORK_ROOT"),
+            emitter=FileSpoolEmitter(
+                spool_dir=os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events")
+            ),
+        )
+
         self._init_db_managers()
 
         self._logger.info("YggdrasilCore initialized.")
+
+    def _persist_plan_draft(self, draft: PlanDraft, handler_realm: str) -> str:
+        """
+        Persist a PlanDraft to the database for auditability and potential approval.
+
+        TODO: Implement actual persistence logic. Options:
+          1. Write to yggdrasil_db with status='draft' or 'approved'
+          2. Include metadata: realm, scope, trigger reason, timestamp
+          3. Return the persisted plan's document ID for tracking
+
+        Args:
+            draft: The PlanDraft returned by the handler
+            handler_realm: The realm_id from the handler that generated this draft
+
+        Returns:
+            str: The database document ID of the persisted plan
+        """
+        # PLACEHOLDER: Actual DB write goes here
+        plan_doc_id = f"{draft.plan.plan_id}"  # temp: use plan_id as doc_id
+
+        self._logger.info(
+            "[PLACEHOLDER] Would persist plan '%s' (realm=%s, auto_run=%s, approvals_required=%s)",
+            draft.plan.plan_id,
+            handler_realm,
+            draft.auto_run,
+            draft.approvals_required,
+        )
+
+        # TODO: Actual implementation would look like:
+        # plan_doc = {
+        #     "_id": draft.plan.plan_id,
+        #     "type": "yggdrasil_plan",
+        #     "realm": handler_realm,
+        #     "scope": draft.plan.scope,
+        #     "status": "approved" if draft.auto_run else "draft",
+        #     "approvals_required": draft.approvals_required,
+        #     "plan": draft.plan.to_dict(),  # serialize plan
+        #     "notes": draft.notes,
+        #     "preview": draft.preview,
+        #     "created_at": utcnow_iso(),
+        #     "executed_at": None,
+        # }
+        # self.ydm.save_document(plan_doc)
+
+        return plan_doc_id
 
     def _init_db_managers(self):
         """
@@ -489,7 +543,23 @@ class YggdrasilCore:
 
                 ctx = self._make_planning_ctx(handler, scope, doc=doc, reason=reason)
                 payload["planning_ctx"] = ctx
-                handler.run_now(payload)
+
+                # NEW: Use new handler interface
+                self._logger.info(
+                    "Generating plan draft via %s", handler.class_qualified_name()
+                )
+                draft = handler.run_now(payload)  # returns PlanDraft
+
+                # Persist the plan
+                realm_id = getattr(handler, "realm_id", "unknown_realm")
+                plan_doc_id = self._persist_plan_draft(draft, realm_id)
+                self._logger.info("Persisted plan '%s' to database", draft.plan.plan_id)
+
+                # Execute via Engine (CLI mode skips approval checks)
+                self._logger.info("Executing plan '%s' via Engine", draft.plan.plan_id)
+                self.engine.run(draft.plan)
+                self._logger.info("✓ Plan '%s' execution completed", draft.plan.plan_id)
+
             except Exception as e:
                 self._logger.exception(
                     "Handler %s raised during run_once: %s",
@@ -510,7 +580,14 @@ class YggdrasilCore:
     def handle_event(self, event: YggdrasilEvent) -> None:
         """
         Watchers call this to deliver events.
-        NOTE! Broadcast's to ALL subscribers for a particular EventType.
+
+        New Flow:
+        1. Handler generates a PlanDraft (doesn't execute)
+        2. Core persists the draft to database
+        3. Core checks approval status (if approvals_required)
+        4. Core executes plan via Engine (if approved/auto_run)
+
+        NOTE! Broadcasts to ALL subscribers for a particular EventType.
         """
         self._logger.info(
             "Received event '%s' from '%s'", event.event_type, event.source
@@ -550,13 +627,85 @@ class YggdrasilCore:
                 payload["planning_ctx"] = self._make_planning_ctx(
                     handler, scope, doc=doc, reason=reason
                 )
-                self._logger.debug("Dispatching %s to %s", event.event_type, handler)
-                handler(payload)
+
+                # NEW: Schedule async plan generation and execution
+                self._logger.debug(
+                    "Scheduling plan generation for %s via %s",
+                    event.event_type,
+                    handler.class_qualified_name(),
+                )
+                asyncio.create_task(self._generate_and_execute_plan(handler, payload))
+
             except Exception as exc:
                 self._logger.error(
                     f"Error handling '{event.event_type}' with handler '{handler.class_qualified_name()}': {exc}",
                     exc_info=True,
                 )
+
+    async def _generate_and_execute_plan(
+        self, handler: BaseHandler, payload: dict[str, Any]
+    ) -> None:
+        """
+        Orchestrate the full plan lifecycle:
+        1. Generate plan draft from handler
+        2. Persist to database
+        3. Check approval status (if needed)
+        4. Execute via Engine (if approved)
+
+        Args:
+            handler: The handler that will generate the plan
+            payload: Event payload with planning_ctx
+        """
+        try:
+            # Step 1: Generate plan draft
+            self._logger.info(
+                "Generating plan draft via %s", handler.class_qualified_name()
+            )
+            draft = await handler.generate_plan_draft(payload)
+
+            # Step 2: Persist plan to database
+            realm_id = getattr(handler, "realm_id", "unknown_realm")
+            plan_doc_id = self._persist_plan_draft(draft, realm_id)
+            self._logger.info(
+                "Persisted plan '%s' (auto_run=%s, approvals_required=%s)",
+                draft.plan.plan_id,
+                draft.auto_run,
+                draft.approvals_required,
+            )
+
+            # Step 3: Execute immediately only if auto_run=True
+            if draft.auto_run:
+                self._logger.info(
+                    "Plan '%s' marked for auto-run; executing via Engine (realm=%s)",
+                    draft.plan.plan_id,
+                    realm_id,
+                )
+                self.engine.run(draft.plan)
+            else:
+                self._logger.info(
+                    "Plan '%s' persisted and awaiting approval (approvals_required=%s)",
+                    draft.plan.plan_id,
+                    draft.approvals_required,
+                )
+                # TODO: When approval arrives via CouchDB change watcher:
+                # 1. Watcher detects plan doc with status='approved'
+                # 2. Watcher calls: core.execute_approved_plan(plan_doc_id)
+                # 3. Core fetches plan from DB, deserializes, executes via Engine
+                return
+            self._logger.info(
+                "✓ Plan '%s' execution completed successfully", draft.plan.plan_id
+            )
+
+            # NOTE: Execution tracking happens via @step decorator emissions to ops DB.
+            # Plan document remains immutable metadata; do not update status here.
+
+        except Exception as exc:
+            self._logger.exception(
+                "Failed to generate/execute plan via %s: %s",
+                handler.class_qualified_name(),
+                exc,
+            )
+            # NOTE: Failure tracking also happens via step events/ops consumer
 
     # ---------------------------------
     # CLI or Semi-Automatic calls
