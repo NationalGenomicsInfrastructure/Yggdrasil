@@ -3,14 +3,21 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from yggdrasil.core_utils.event_types import EventType  # type: ignore
+from yggdrasil.flow.planner.api import PlanDraft
 
 
 class BaseHandler(ABC):
     """
     All handlers must implement:
+      - generate_plan_draft: async method that returns a PlanDraft (new responsibilities)
+      - derive_scope: extract scope from document
       - __call__: for async dispatch (under the running event loop)
-      - handle_async: the actual async work
-      - run_now: a sync wrapper for one-off CLI use
+
+    YggdrasilCore will:
+      - Call generate_plan_draft() to get a PlanDraft
+      - Persist the plan to database
+      - Check for approval requests
+      - Pass plan to Engine for execution
     """
 
     # realm authors must set this
@@ -36,23 +43,29 @@ class BaseHandler(ABC):
         ...
 
     @abstractmethod
-    async def handle_task(self, payload: dict[str, Any]) -> None:
+    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
         """
-        Coroutine that does the real work.
-        Subclasses implement this (e.g. resolving realm, running it).
+        Generate a PlanDraft from the trigger payload.
+
+        Returns:
+            PlanDraft: Contains plan + auto_run flag + approvals_required + notes.
+
+        This replaces the old handle_task pattern. Handlers now only generate plans;
+        YggdrasilCore handles persistence, approval routing, and engine execution.
         """
         ...
 
     @abstractmethod
     def __call__(self, payload: dict[str, Any]) -> None:
         """
-        Schedule handle_async under asyncio.create_task().
+        Schedule generate_plan_draft under asyncio.create_task().
+        YggdrasilCore will await the result and handle plan persistence/execution.
         """
         ...
 
-    def run_now(self, payload: dict[str, Any]) -> None:
+    def run_now(self, payload: dict[str, Any]) -> PlanDraft:
         """
         Blocking, one-off entrypoint for CLI mode.
-        Simply runs handle_async() to completion.
+        Simply runs generate_plan_draft() to completion and returns the draft.
         """
-        asyncio.run(self.handle_task(payload))
+        return asyncio.run(self.generate_plan_draft(payload))
