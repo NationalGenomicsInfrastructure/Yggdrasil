@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 from yggdrasil.flow.artifacts import ArtifactRefProtocol, ensure_artifact_ref
+from yggdrasil.flow.errors import PermanentStepError, TransientStepError
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import Artifact, StepResult
 from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
@@ -207,8 +208,29 @@ def step(_fn=None, *, name: str | None = None):
                     extra=result.extra,
                 )
                 return result
+            except PermanentStepError as e:
+                ctx.emit(
+                    "step.failed",
+                    kind="permanent",
+                    error=str(e),
+                    code=e.code,
+                    advice=e.advice,
+                )
+                raise  # engine decides whether to stop dependents
+
+            except TransientStepError as e:
+                ctx.emit(
+                    "step.failed",
+                    kind="transient",
+                    error=str(e),
+                    code=e.code,
+                    advice=e.advice,
+                )
+                raise
+
             except Exception as e:
-                ctx.emit("step.failed", error=str(e))
+                # Unknown -> treat as permanent by default (TODO: Not sure whether to treat as 'transient' once?)
+                ctx.emit("step.failed", kind="permanent", error=str(e))
                 raise
 
         # Step metadata (for builder/engine)
