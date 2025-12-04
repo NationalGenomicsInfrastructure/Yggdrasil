@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from yggdrasil.flow.errors import PermanentStepError, TransientStepError
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import Plan, StepResult, StepSpec
 from yggdrasil.flow.step import StepContext
@@ -202,8 +203,35 @@ class Engine:
                 run_id=run_id,
             )
 
-            # returns StepResult (decorator wraps emissions)
-            result = fn(ctx, **spec.params)
+            try:
+                # returns StepResult (decorator wraps emissions)
+                result = fn(ctx, **spec.params)
+            except TransientStepError as e:
+                # The @step wrapper has already emitted "step.failed".
+                # Add a precise diagnostic so operators know retry isn't wired yet.
+                # TODO: Implement retry.
+                self.emitter.emit(
+                    {
+                        "type": "step.retry_unimplemented",
+                        "realm": plan.realm,
+                        "scope": plan.scope,
+                        "plan_id": plan.plan_id,
+                        "step_id": spec.step_id,
+                        "error": str(e),
+                        "kind": "transient",
+                        "_spool_path": {
+                            "realm": plan.realm,
+                            "plan_id": plan.plan_id,
+                            "step_id": spec.step_id,
+                            "run_id": run_id,
+                            "filename": "retry_unimplemented.json",
+                        },
+                    }
+                )
+                # Treat transient as permanent until retries are implemented.
+                raise PermanentStepError(
+                    f"Retry not implemented for transient failure: {e}"
+                ) from e
 
             if result is not None and not isinstance(result, StepResult):
                 logger.warning(
