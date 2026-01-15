@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.ops.sinks.couch import OpsWriter
-from yggdrasil.flow.engine import Engine
+from yggdrasil.core.engine import Engine
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.planner import PlanningContext
