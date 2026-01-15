@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from yggdrasil.flow.engine import (
+from yggdrasil.core.engine import (
     Engine,
     _default_fingerprint,
     _json_sha256,

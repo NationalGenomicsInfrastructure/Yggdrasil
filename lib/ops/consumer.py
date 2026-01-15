@@ -53,19 +53,66 @@ def _safe_load(p: Path) -> dict[str, Any]:
         return {}
 
 
+# TODO: Remove old version once verified working well.
+# def _find_any_event(plan_spool_dir: Path) -> dict[str, Any] | None:
+#     # Walk: <spool>/<realm>/<plan_id>/<step_id>/<run_id>/*.json
+#     for step_dir in (p for p in plan_spool_dir.iterdir() if p.is_dir()):
+#         for run_dir in (r for r in step_dir.iterdir() if r.is_dir()):
+#             # prefer early event if present
+#             evs = sorted(
+#                 e for e in run_dir.glob("*.json") if not e.name.endswith(".tmp")
+#             )
+#             if evs:
+#                 try:
+#                     return json.loads(evs[0].read_text())
+#                 except Exception:
+#                     continue
+#     return None
+
+
 def _find_any_event(plan_spool_dir: Path) -> dict[str, Any] | None:
-    # Walk: <spool>/<realm>/<plan_id>/<step_id>/<run_id>/*.json
+    """Locate an early event (prefer 'plan.draft') to extract scope.
+
+    Expected layout:
+        <spool>/<realm>/<plan_id>/<step_id>/<run_id>/*.json
+    Fallback layout (pre-engine draft):
+        <spool>/<realm>/<plan_id>/<step_id>/*.json
+    """
+
+    def _load_first_json(files: list[Path]) -> dict[str, Any] | None:
+        for f in files:
+            if f.suffix != ".json" or f.name.endswith(".tmp"):
+                continue
+            try:
+                ev = json.loads(f.read_text(encoding="utf-8"))
+                if isinstance(ev, dict) and ev.get("scope"):
+                    return ev
+            except Exception:
+                continue
+        return None
+
     for step_dir in (p for p in plan_spool_dir.iterdir() if p.is_dir()):
-        for run_dir in (r for r in step_dir.iterdir() if r.is_dir()):
-            # prefer early event if present
-            evs = sorted(
-                e for e in run_dir.glob("*.json") if not e.name.endswith(".tmp")
+        run_dirs = [r for r in step_dir.iterdir() if r.is_dir()]
+
+        # 1) Fallback: files directly under step_dir (e.g., plan.draft)
+        if not run_dirs:
+            files = sorted(step_dir.glob("*.json"))
+            # Prefer plan.draft if present
+            draft_first = sorted(
+                files, key=lambda p: (0 if "plan_draft" in p.name else 1, p.name)
             )
-            if evs:
-                try:
-                    return json.loads(evs[0].read_text())
-                except Exception:
-                    continue
+            ev = _load_first_json(draft_first)
+            if ev:
+                return ev
+            continue
+
+        # 2) Normal case: under run_id/
+        for run_dir in run_dirs:
+            files = sorted(run_dir.glob("*.json"))
+            ev = _load_first_json(files)
+            if ev:
+                return ev
+
     return None
 
 
