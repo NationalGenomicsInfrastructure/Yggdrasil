@@ -112,12 +112,12 @@ class TestUtcnowIso(unittest.TestCase):
         self.assertEqual(len(result1), 20)
         self.assertEqual(len(result2), 20)
 
-    def test_year_2025(self):
-        """utcnow_iso should return year 2025 for current date."""
+    def test_year_current(self):
+        """utcnow_iso should return current year."""
         result = utcnow_iso()
         year = result[:4]
-        # Test assumes running in 2025
-        self.assertEqual(year, "2025")
+        expected_year = str(datetime.now(UTC).year)
+        self.assertEqual(year, expected_year)
 
     def test_multiple_calls_within_second(self):
         """Multiple calls within same second should have same timestamp."""

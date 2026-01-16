@@ -219,7 +219,7 @@ class TestUtilityFunctions(unittest.TestCase):
         # Should not raise
         _lint_missing_inputs(spec, fn)
 
-    @patch("yggdrasil.flow.engine.logger")
+    @patch("yggdrasil.core.engine.logger")
     def test_lint_missing_inputs_warns_on_suspicious_params(self, mock_logger):
         """Test that warning is logged for path-like params without declarations."""
         spec = StepSpec(
@@ -563,7 +563,7 @@ class TestEngine(unittest.TestCase):
             return StepResult()
 
         # Mock resolve_callable to return our test function
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_001",
                 realm="test",
@@ -594,7 +594,7 @@ class TestEngine(unittest.TestCase):
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_002",
                 realm="test",
@@ -623,7 +623,7 @@ class TestEngine(unittest.TestCase):
             received_params.update(kwargs)
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_003",
                 realm="test",
@@ -653,7 +653,7 @@ class TestEngine(unittest.TestCase):
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_004",
                 realm="test",
@@ -685,7 +685,7 @@ class TestEngine(unittest.TestCase):
             execution_count[0] += 1
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan1 = Plan(
                 plan_id="plan_005",
                 realm="test",
@@ -724,7 +724,7 @@ class TestEngine(unittest.TestCase):
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_006",
                 realm="test",
@@ -760,7 +760,7 @@ class TestEngine(unittest.TestCase):
             received_context["workdir"] = ctx.workdir
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_007",
                 realm="test_realm",
@@ -787,7 +787,7 @@ class TestEngine(unittest.TestCase):
             received_emitter["emitter"] = ctx.emitter
             return StepResult()
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=test_step):
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=test_step):
             plan = Plan(
                 plan_id="plan_008",
                 realm="test",
@@ -829,8 +829,8 @@ class TestEngine(unittest.TestCase):
         def bad_step(ctx: StepContext, **kwargs):
             return "not a StepResult"
 
-        with patch("yggdrasil.flow.engine.resolve_callable", return_value=bad_step):
-            with patch("yggdrasil.flow.engine.logger") as mock_logger:
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=bad_step):
+            with patch("yggdrasil.core.engine.logger") as mock_logger:
                 plan = Plan(
                     plan_id="plan_010",
                     realm="test",
@@ -866,7 +866,7 @@ class TestEngine(unittest.TestCase):
                 metrics={"total": 200},
             )
 
-        with patch("yggdrasil.flow.engine.resolve_callable") as mock_resolve:
+        with patch("yggdrasil.core.engine.resolve_callable") as mock_resolve:
             # Configure mock to return different functions
             mock_resolve.side_effect = [step1, step2]
 
