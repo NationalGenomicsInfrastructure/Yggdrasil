@@ -6,12 +6,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from lib.core_utils.plan_eligibility import is_plan_eligible
 from lib.core_utils.singleton_decorator import singleton
+from lib.couchdb.plan_db_manager import PlanDBManager
 from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
 
 # from lib.handlers.flowcell_handler import FlowcellHandler
 from lib.watchers.couchdb_watcher import CouchDBWatcher
+from lib.watchers.plan_watcher import PlanWatcher
 from lib.watchers.seq_data_watcher import SeqDataWatcher, YggdrasilEvent
 from yggdrasil.core.engine import Engine
 
@@ -68,12 +71,10 @@ class YggdrasilCore:
 
     def _persist_plan_draft(self, draft: PlanDraft, handler_realm: str) -> str:
         """
-        Persist a PlanDraft to the database for auditability and potential approval.
+        Persist a PlanDraft to the yggdrasil_plans database.
 
-        TODO: Implement actual persistence logic. Options:
-          1. Write to yggdrasil_db with status='draft' or 'approved'
-          2. Include metadata: realm, scope, trigger reason, timestamp
-          3. Return the persisted plan's document ID for tracking
+        Creates or updates the plan document with status based on auto_run flag.
+        On regeneration, execution tokens are reset (plan becomes eligible again).
 
         Args:
             draft: The PlanDraft returned by the handler
@@ -82,32 +83,23 @@ class YggdrasilCore:
         Returns:
             str: The database document ID of the persisted plan
         """
-        # PLACEHOLDER: Actual DB write goes here
-        plan_doc_id = f"{draft.plan.plan_id}"  # temp: use plan_id as doc_id
+        plan_db = PlanDBManager()
 
-        self._logger.info(
-            "[PLACEHOLDER] Would persist plan '%s' (realm=%s, auto_run=%s, approvals_required=%s)",
-            draft.plan.plan_id,
-            handler_realm,
-            draft.auto_run,
-            draft.approvals_required,
+        plan_doc_id = plan_db.save_plan(
+            plan=draft.plan,
+            realm=handler_realm,
+            scope=draft.plan.scope,
+            auto_run=draft.auto_run,
+            preview=draft.preview,
+            notes=draft.notes,
         )
 
-        # TODO: Actual implementation would look like:
-        # plan_doc = {
-        #     "_id": draft.plan.plan_id,
-        #     "type": "yggdrasil_plan",
-        #     "realm": handler_realm,
-        #     "scope": draft.plan.scope,
-        #     "status": "approved" if draft.auto_run else "draft",
-        #     "approvals_required": draft.approvals_required,
-        #     "plan": draft.plan.to_dict(),  # serialize plan
-        #     "notes": draft.notes,
-        #     "preview": draft.preview,
-        #     "created_at": utcnow_iso(),
-        #     "executed_at": None,
-        # }
-        # self.ydm.save_document(plan_doc)
+        self._logger.info(
+            "Persisted plan '%s' to yggdrasil_plans (realm=%s, auto_run=%s)",
+            plan_doc_id,
+            handler_realm,
+            draft.auto_run,
+        )
 
         return plan_doc_id
 
@@ -326,6 +318,7 @@ class YggdrasilCore:
         """
         self._logger.info("Setting up watchers...")
         self._setup_fs_watchers()
+        self._setup_plan_watcher()
         # self._setup_cdb_watchers()
         # Potentially more: self._setup_hpc_watchers(), etc.
         self._logger.info("Watchers setup done.")
@@ -397,6 +390,169 @@ class YggdrasilCore:
         # )
         # self.register_watcher(cdb_ydm_watcher)
         # self._logger.debug("Registered CouchDBWatcher for YggdrasilDB.")
+
+    def _setup_plan_watcher(self) -> None:
+        """
+        Set up the PlanWatcher to monitor yggdrasil_plans for approved plans.
+
+        The watcher emits PLAN_EXECUTION_EVENT for eligible plans, which
+        triggers execute_approved_plan() via handle_plan_execution_event().
+        """
+        poll_interval = self.config.get("plan_watcher_poll_interval", 5.0)
+
+        plan_watcher = PlanWatcher(
+            on_event=self._handle_plan_execution_event,
+            poll_interval_sec=poll_interval,
+            logger=self._logger,
+        )
+        self.register_watcher(plan_watcher)
+        self._plan_watcher = plan_watcher  # Keep reference for recovery
+        self._logger.info("Registered PlanWatcher (poll_interval=%.1fs)", poll_interval)
+
+    def _handle_plan_execution_event(self, event: YggdrasilEvent) -> None:
+        """
+        Handle EventType.PLAN_EXECUTION from PlanWatcher.
+
+        This is the callback invoked when PlanWatcher detects an eligible plan.
+        It schedules execution via execute_approved_plan().
+
+        Args:
+            event: YggdrasilEvent with payload containing plan_doc_id and plan_doc
+        """
+        if event.event_type != EventType.PLAN_EXECUTION:
+            self._logger.warning(
+                "Unexpected event type in plan execution handler: %s", event.event_type
+            )
+            return
+
+        payload = event.payload or {}
+        plan_doc_id = payload.get("plan_doc_id")
+        plan_doc = payload.get("plan_doc")
+
+        if not plan_doc_id:
+            self._logger.error("Plan execution event missing 'plan_doc_id'")
+            return
+
+        self._logger.info(
+            "Received plan execution event for '%s' from '%s'",
+            plan_doc_id,
+            event.source,
+        )
+
+        # Schedule execution (non-blocking)
+        asyncio.create_task(self._execute_approved_plan(plan_doc_id, plan_doc))
+
+    async def _execute_approved_plan(
+        self,
+        plan_doc_id: str,
+        plan_doc: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Execute an approved plan via Engine and update executed_run_token.
+
+        This is the core execution logic triggered by PlanWatcher events.
+        On success, updates executed_run_token to prevent re-execution.
+        On failure, leaves token unchanged so plan remains eligible for retry.
+
+        Args:
+            plan_doc_id: The plan document ID in yggdrasil_plans
+            plan_doc: Optional plan document (if already fetched by watcher)
+        """
+        plan_db = PlanDBManager()
+
+        try:
+            # Fetch plan document if not provided
+            if plan_doc is None:
+                plan_doc = plan_db.fetch_plan(plan_doc_id)
+                if not plan_doc:
+                    self._logger.error(
+                        "Plan document '%s' not found; cannot execute", plan_doc_id
+                    )
+                    return
+
+            # Re-verify eligibility (race protection)
+            if not is_plan_eligible(plan_doc):
+                self._logger.info(
+                    "Plan '%s' no longer eligible; skipping execution", plan_doc_id
+                )
+                return
+
+            # Get the Plan model for execution
+            plan = plan_db.fetch_plan_as_model(plan_doc_id)
+            if not plan:
+                self._logger.error(
+                    "Failed to deserialize plan '%s'; cannot execute", plan_doc_id
+                )
+                return
+
+            run_token = plan_doc.get("run_token", 0)
+            realm = plan_doc.get("realm", "unknown")
+
+            self._logger.info(
+                "Executing plan '%s' (realm=%s, run_token=%d)",
+                plan_doc_id,
+                realm,
+                run_token,
+            )
+
+            # Execute via Engine
+            self.engine.run(plan)
+
+            self._logger.info(
+                "✓ Plan '%s' execution completed successfully", plan_doc_id
+            )
+
+            # Update executed_run_token (marks as executed, prevents re-run)
+            success = plan_db.update_executed_token(plan_doc_id, run_token)
+            if success:
+                self._logger.info(
+                    "Updated executed_run_token=%d for plan '%s'",
+                    run_token,
+                    plan_doc_id,
+                )
+            else:
+                self._logger.warning(
+                    "Failed to update executed_run_token for plan '%s'; "
+                    "plan may be re-executed on restart",
+                    plan_doc_id,
+                )
+
+        except Exception as exc:
+            self._logger.exception("Failed to execute plan '%s': %s", plan_doc_id, exc)
+            # Token NOT updated → plan remains eligible for retry
+
+    async def _recover_approved_plans(self) -> None:
+        """
+        Startup recovery: execute any approved plans that were missed.
+
+        This is called when the PlanWatcher checkpoint is missing or invalid.
+        It queries all eligible plans and executes them.
+
+        The recovery process:
+        1. Query all approved pending plans
+        2. Execute each via _execute_approved_plan()
+        3. Initialize checkpoint after recovery
+
+        Note: This is a fallback mechanism. Normal operation uses the
+        _changes feed via PlanWatcher for incremental updates.
+        """
+        if not hasattr(self, "_plan_watcher") or self._plan_watcher is None:
+            self._logger.warning("No PlanWatcher configured; skipping recovery")
+            return
+
+        self._logger.info("Starting approved plan recovery...")
+
+        try:
+            # Use PlanWatcher's recovery method (which queries + emits)
+            eligible_plans = await self._plan_watcher.recover_pending_plans()
+
+            self._logger.info(
+                "Recovery complete: %d plans queued for execution",
+                len(eligible_plans),
+            )
+
+        except Exception as exc:
+            self._logger.exception("Error during plan recovery: %s", exc)
 
     async def start(self) -> None:
         """
@@ -519,7 +675,7 @@ class YggdrasilCore:
             )
             return
 
-        # Build the minimal, consistent payload the Tenx handler expects
+        # Build the minimal, consistent payload the handlers expect
         reason: str = f"run_once:{doc.get('project_id') or doc_id}"
         payload: dict[str, Any] = {
             "doc": doc,
@@ -553,12 +709,12 @@ class YggdrasilCore:
                 # Persist the plan
                 realm_id = getattr(handler, "realm_id", "unknown_realm")
                 plan_doc_id = self._persist_plan_draft(draft, realm_id)
-                self._logger.info("Persisted plan '%s' to database", draft.plan.plan_id)
+                self._logger.info("Persisted plan '%s' to database", plan_doc_id)
 
                 # Execute via Engine (CLI mode skips approval checks)
-                self._logger.info("Executing plan '%s' via Engine", draft.plan.plan_id)
+                self._logger.info("Executing plan '%s' via Engine", plan_doc_id)
                 self.engine.run(draft.plan)
-                self._logger.info("✓ Plan '%s' execution completed", draft.plan.plan_id)
+                self._logger.info("✓ Plan '%s' execution completed", plan_doc_id)
 
             except Exception as e:
                 self._logger.exception(
@@ -668,7 +824,7 @@ class YggdrasilCore:
             plan_doc_id = self._persist_plan_draft(draft, realm_id)
             self._logger.info(
                 "Persisted plan '%s' (auto_run=%s, approvals_required=%s)",
-                draft.plan.plan_id,
+                plan_doc_id,
                 draft.auto_run,
                 draft.approvals_required,
             )
@@ -677,14 +833,14 @@ class YggdrasilCore:
             if draft.auto_run:
                 self._logger.info(
                     "Plan '%s' marked for auto-run; executing via Engine (realm=%s)",
-                    draft.plan.plan_id,
+                    plan_doc_id,
                     realm_id,
                 )
                 self.engine.run(draft.plan)
             else:
                 self._logger.info(
                     "Plan '%s' persisted and awaiting approval (approvals_required=%s)",
-                    draft.plan.plan_id,
+                    plan_doc_id,
                     draft.approvals_required,
                 )
                 # TODO: When approval arrives via CouchDB change watcher:
@@ -693,7 +849,7 @@ class YggdrasilCore:
                 # 3. Core fetches plan from DB, deserializes, executes via Engine
                 return
             self._logger.info(
-                "✓ Plan '%s' execution completed successfully", draft.plan.plan_id
+                "✓ Plan '%s' execution completed successfully", plan_doc_id
             )
 
             # NOTE: Execution tracking happens via @step decorator emissions to ops DB.

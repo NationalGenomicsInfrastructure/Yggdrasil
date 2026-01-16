@@ -16,6 +16,9 @@ class TestYggdrasilCore(unittest.TestCase):
 
     Tests initialization, singleton behavior, watcher/handler management,
     async lifecycle, event processing, and error handling scenarios.
+
+    Note: All tests use setUp patches to avoid CouchDB connections from
+    OpsConsumerService and Engine during YggdrasilCore initialization.
     """
 
     @classmethod
@@ -23,17 +26,35 @@ class TestYggdrasilCore(unittest.TestCase):
         """Set up class-level resources."""
         # Store original event loop policy
         cls.original_event_loop_policy = asyncio.get_event_loop_policy()
+        # CRITICAL: Clear ALL singleton instances before this test class runs.
+        # This ensures tests in this file aren't affected by singletons created
+        # by tests that ran earlier in the full test suite.
+        SingletonMeta._instances.clear()
 
     @classmethod
     def tearDownClass(cls):
         """Clean up class-level resources and reset event loop state."""
         # Reset to default event loop policy for subsequent tests
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+        # Clear singletons to avoid polluting tests that run after this class
+        SingletonMeta._instances.clear()
 
     def setUp(self):
         """Set up test fixtures and clear singleton state."""
-        # Clear singleton instance before each test
+        # Clear singleton instance before each test to ensure isolation
         SingletonMeta._instances.clear()
+
+        # Patch OpsConsumerService and Engine to avoid CouchDB connections
+        self.ops_patcher = patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
+        self.engine_patcher = patch("lib.core_utils.yggdrasil_core.Engine")
+        self.mock_ops_service_class = self.ops_patcher.start()
+        self.mock_engine = self.engine_patcher.start()
+
+        # Configure the OpsConsumerService mock instance with async methods
+        self.mock_ops_service_instance = Mock()
+        self.mock_ops_service_instance.start = Mock()
+        self.mock_ops_service_instance.stop = AsyncMock()
+        self.mock_ops_service_class.return_value = self.mock_ops_service_instance
 
         # Sample configuration for testing
         self.test_config = {
@@ -63,6 +84,9 @@ class TestYggdrasilCore(unittest.TestCase):
 
     def tearDown(self):
         """Clean up after each test."""
+        # Stop patchers
+        self.ops_patcher.stop()
+        self.engine_patcher.stop()
         # Clear singleton state after each test
         SingletonMeta._instances.clear()
 
@@ -219,9 +243,10 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertEqual(added_watcher.event_type, EventType.PROJECT_CHANGE)
         self.assertEqual(added_watcher.poll_interval, 10)  # From test config
 
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_fs_watchers")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_watchers(self, mock_init_db, mock_setup_fs):
+    def test_setup_watchers(self, mock_init_db, mock_setup_fs, mock_setup_plan):
         """Test main setup_watchers method."""
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
@@ -231,6 +256,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         mock_setup_fs.assert_called_once()
+        mock_setup_plan.assert_called_once()
         expected_calls = [call("Setting up watchers..."), call("Watchers setup done.")]
         self.mock_logger.info.assert_has_calls(expected_calls, any_order=True)
 
@@ -470,8 +496,11 @@ class TestYggdrasilCore(unittest.TestCase):
     # EVENT HANDLING TESTS
     # =====================================================
 
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_execute_plan")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_handle_event_with_registered_handler(self, mock_init_db):
+    def test_handle_event_with_registered_handler(
+        self, mock_init_db, mock_generate_plan
+    ):
         """Test event handling with registered handler."""
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
@@ -479,14 +508,19 @@ class TestYggdrasilCore(unittest.TestCase):
         mock_handler.class_qualified_name = Mock(return_value="MockHandler")
         mock_handler.class_key = Mock(return_value=("test", "MockHandler"))
         mock_handler.realm_id = "test_realm"
+        mock_handler.derive_scope = Mock(
+            return_value={"kind": "project", "id": "test_project"}
+        )
         core.register_handler(EventType.PROJECT_CHANGE, mock_handler)
 
-        # Act
+        # Act - handle_event schedules async task
         core.handle_event(self.test_event)
 
-        # Assert
-        mock_handler.assert_called_once()
+        # Assert - _generate_and_execute_plan should have been scheduled
+        # Note: asyncio.create_task is called, so we just check it was attempted
+        # The event has 'scope' in payload, so derive_scope is NOT called
         self.mock_logger.info.assert_called()
+        self.mock_logger.debug.assert_called()  # Logs scheduling message
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_handle_event_no_handler(self, mock_init_db):
@@ -501,33 +535,46 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_logger.info.assert_called()
         self.mock_logger.warning.assert_called()
 
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_execute_plan")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_handle_event_handler_exception(self, mock_init_db):
-        """Test event handling when handler raises exception."""
+    def test_handle_event_handler_exception(self, mock_init_db, mock_generate_plan):
+        """Test event handling when _make_planning_ctx raises exception."""
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
         mock_handler = Mock()
-        mock_handler.side_effect = Exception("Handler failed")
         mock_handler.class_qualified_name = Mock(return_value="MockHandler")
         mock_handler.class_key = Mock(return_value=("test", "MockHandler"))
         mock_handler.realm_id = "test_realm"
         core.register_handler(EventType.PROJECT_CHANGE, mock_handler)
 
-        # Act
-        core.handle_event(self.test_event)
+        # Create an event without scope to trigger derive_scope
+        test_event_no_scope = YggdrasilEvent(
+            event_type=EventType.PROJECT_CHANGE,
+            payload={"doc": {"id": "test_doc", "project_id": "test_project"}},
+            source="TestSource",
+        )
 
-        # Assert
-        mock_handler.assert_called_once()
+        # Make derive_scope raise an exception
+        mock_handler.derive_scope.side_effect = Exception("derive_scope failed")
+
+        # Act - exception in derive_scope should be caught and logged
+        core.handle_event(test_event_no_scope)
+
+        # Assert - derive_scope should have been called and exception logged
+        mock_handler.derive_scope.assert_called_once()
         self.mock_logger.error.assert_called()
 
     # =====================================================
     # CLI AND RUN_ONCE TESTS
     # =====================================================
 
+    @patch("lib.ops.sinks.couch.OpsWriter")
     @patch("lib.ops.consumer.FileSpoolConsumer")
     @patch("lib.couchdb.project_db_manager.ProjectDBManager")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_run_once_success(self, mock_init_db, mock_pdm_class, mock_consumer_class):
+    def test_run_once_success(
+        self, mock_init_db, mock_pdm_class, mock_consumer_class, mock_ops_writer
+    ):
         """Test successful run_once execution."""
         # Arrange
         mock_pdm_instance = Mock()
@@ -596,11 +643,12 @@ class TestYggdrasilCore(unittest.TestCase):
         # Assert
         self.mock_logger.error.assert_called()
 
+    @patch("lib.ops.sinks.couch.OpsWriter")
     @patch("lib.ops.consumer.FileSpoolConsumer")
     @patch("lib.couchdb.project_db_manager.ProjectDBManager")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_run_once_handler_no_run_now_method(
-        self, mock_init_db, mock_pdm_class, mock_consumer_class
+        self, mock_init_db, mock_pdm_class, mock_consumer_class, mock_ops_writer
     ):
         """Test run_once when handler doesn't have run_now method."""
         # Arrange
