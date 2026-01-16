@@ -6,6 +6,19 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from lib.core_utils.event_types import EventType
 from lib.handlers.base_handler import BaseHandler
+from yggdrasil.flow.model import Plan
+from yggdrasil.flow.planner.api import PlanDraft
+
+
+def make_dummy_plan_draft(plan_id: str = "test_plan") -> PlanDraft:
+    """Helper to create a minimal PlanDraft for tests."""
+    plan = Plan(
+        plan_id=plan_id,
+        realm="test",
+        scope={"kind": "project", "id": "P12345"},
+        steps=[],
+    )
+    return PlanDraft(plan=plan, auto_run=True)
 
 
 class TestBaseHandler(unittest.TestCase):
@@ -14,6 +27,8 @@ class TestBaseHandler(unittest.TestCase):
 
     Tests the handler interface contract, abstract method enforcement, synchronous
     and asynchronous execution patterns, and integration with the event system.
+
+    NOTE: BaseHandler now uses `generate_plan_draft` instead of the old `generate_plan_draft`.
     """
 
     @classmethod
@@ -36,25 +51,27 @@ class TestBaseHandler(unittest.TestCase):
             event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
 
             def __init__(self):
-                self.handle_task_called = False
+                self.generate_plan_draft_called = False
                 self.call_called = False
                 self.last_payload = None
-                self.handle_task_mock = AsyncMock()
+                self.generate_plan_draft_mock = AsyncMock(
+                    return_value=make_dummy_plan_draft()
+                )
 
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 # Simple test implementation
                 return {"kind": "project", "id": doc.get("project_id", "test_project")}
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
-                self.handle_task_called = True
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+                self.generate_plan_draft_called = True
                 self.last_payload = payload
-                await self.handle_task_mock(payload)
+                return await self.generate_plan_draft_mock(payload)
 
             def __call__(self, payload: dict[str, Any]) -> None:
                 self.call_called = True
                 self.last_payload = payload
                 # Schedule the async task
-                asyncio.create_task(self.handle_task(payload))
+                asyncio.create_task(self.generate_plan_draft(payload))
 
         # Create incomplete handler for testing abstract enforcement
         class IncompleteHandler(BaseHandler):
@@ -63,7 +80,7 @@ class TestBaseHandler(unittest.TestCase):
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 return {"kind": "flowcell", "id": doc.get("flowcell_id", "test_fc")}
 
-            # Missing handle_task implementation
+            # Missing generate_plan_draft implementation
             def __call__(self, payload: dict[str, Any]) -> None:
                 pass
 
@@ -73,8 +90,8 @@ class TestBaseHandler(unittest.TestCase):
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 return {"kind": "project", "id": "test"}
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
-                pass
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+                return make_dummy_plan_draft()
 
             # Missing __call__ implementation
 
@@ -97,12 +114,12 @@ class TestBaseHandler(unittest.TestCase):
 
     def test_abstract_method_enforcement(self):
         """Test that abstract methods are properly enforced."""
-        # Incomplete handler missing handle_task should not be instantiable
+        # Incomplete handler missing generate_plan_draft should not be instantiable
         with self.assertRaises(TypeError) as context:
             self.IncompleteHandler()  # type: ignore
 
         error_message = str(context.exception)
-        self.assertIn("handle_task", error_message)
+        self.assertIn("generate_plan_draft", error_message)
 
         # Handler missing __call__ should not be instantiable
         with self.assertRaises(TypeError) as context:
@@ -153,8 +170,10 @@ class TestBaseHandler(unittest.TestCase):
                         "id": doc.get("flowcell_id", "inner_fc"),
                     }
 
-                async def handle_task(self, payload: dict[str, Any]) -> None:
-                    pass
+                async def generate_plan_draft(
+                    self, payload: dict[str, Any]
+                ) -> PlanDraft:
+                    return make_dummy_plan_draft()
 
                 def __call__(self, payload: dict[str, Any]) -> None:
                     pass
@@ -162,8 +181,8 @@ class TestBaseHandler(unittest.TestCase):
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 return {"kind": "project", "id": doc.get("project_id", "outer_project")}
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
-                pass
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+                return make_dummy_plan_draft()
 
             def __call__(self, payload: dict[str, Any]) -> None:
                 pass
@@ -242,8 +261,8 @@ class TestBaseHandler(unittest.TestCase):
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 return {"kind": "project", "id": doc.get("project_id", "dedup_project")}
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
-                pass
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+                return make_dummy_plan_draft()
 
             def __call__(self, payload: dict[str, Any]) -> None:
                 pass
@@ -309,17 +328,17 @@ class TestBaseHandler(unittest.TestCase):
     # ABSTRACT METHOD SIGNATURE TESTS
     # =====================================================
 
-    def test_handle_task_method_signature(self):
-        """Test handle_task method signature and behavior."""
+    def test_generate_plan_draft_method_signature(self):
+        """Test generate_plan_draft method signature and behavior."""
         handler = self.ConcreteHandler()
 
         # Should be a coroutine function
-        self.assertTrue(asyncio.iscoroutinefunction(handler.handle_task))
+        self.assertTrue(asyncio.iscoroutinefunction(handler.generate_plan_draft))
 
         # Should accept payload parameter
         import inspect
 
-        sig = inspect.signature(handler.handle_task)
+        sig = inspect.signature(handler.generate_plan_draft)
         self.assertIn("payload", sig.parameters)
 
         # Parameter should be typed as dict[str, Any]
@@ -354,18 +373,18 @@ class TestBaseHandler(unittest.TestCase):
         self.assertTrue(hasattr(handler, "run_now"))
         self.assertTrue(callable(handler.run_now))
 
-    def test_run_now_calls_handle_task(self):
-        """Test that run_now properly calls handle_task."""
+    def test_run_now_calls_generate_plan_draft(self):
+        """Test that run_now properly calls generate_plan_draft."""
         handler = self.ConcreteHandler()
         test_payload = {"test": "data", "id": "12345"}
 
         # Call run_now
         handler.run_now(test_payload)
 
-        # Should have called handle_task with the payload
-        self.assertTrue(handler.handle_task_called)
+        # Should have called generate_plan_draft with the payload
+        self.assertTrue(handler.generate_plan_draft_called)
         self.assertEqual(handler.last_payload, test_payload)
-        handler.handle_task_mock.assert_called_once_with(test_payload)
+        handler.generate_plan_draft_mock.assert_called_once_with(test_payload)
 
     def test_run_now_blocks_until_completion(self):
         """Test that run_now blocks until async operation completes."""
@@ -380,15 +399,16 @@ class TestBaseHandler(unittest.TestCase):
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 return {"kind": "project", "id": doc.get("project_id", "timed_project")}
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
                 import time
 
                 self.start_time = time.time()
                 await asyncio.sleep(0.1)  # Simulate async work
                 self.end_time = time.time()
+                return make_dummy_plan_draft()
 
             def __call__(self, payload: dict[str, Any]) -> None:
-                asyncio.create_task(self.handle_task(payload))
+                asyncio.create_task(self.generate_plan_draft(payload))
 
         handler = TimedHandler()
         test_payload = {"test": "blocking"}
@@ -408,7 +428,7 @@ class TestBaseHandler(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0.1)  # At least the sleep duration
 
     def test_run_now_with_exception_handling(self):
-        """Test run_now behavior when handle_task raises an exception."""
+        """Test run_now behavior when generate_plan_draft raises an exception."""
 
         class ExceptionHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
@@ -419,11 +439,11 @@ class TestBaseHandler(unittest.TestCase):
                     "id": doc.get("project_id", "exception_project"),
                 }
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
                 raise ValueError("Test exception")
 
             def __call__(self, payload: dict[str, Any]) -> None:
-                asyncio.create_task(self.handle_task(payload))
+                asyncio.create_task(self.generate_plan_draft(payload))
 
         handler = ExceptionHandler()
         test_payload = {"test": "exception"}
@@ -463,11 +483,11 @@ class TestBaseHandler(unittest.TestCase):
             test_payload = {"async_test": True, "data": [1, 2, 3]}
 
             # Create and await the task manually
-            task = asyncio.create_task(handler.handle_task(test_payload))
+            task = asyncio.create_task(handler.generate_plan_draft(test_payload))
             await task
 
             # Should have processed the payload
-            self.assertTrue(handler.handle_task_called)
+            self.assertTrue(handler.generate_plan_draft_called)
             self.assertEqual(handler.last_payload, test_payload)
 
         # Run the async test
@@ -486,7 +506,7 @@ class TestBaseHandler(unittest.TestCase):
 
             # Create multiple tasks
             tasks = [
-                asyncio.create_task(handler.handle_task(payload))
+                asyncio.create_task(handler.generate_plan_draft(payload))
                 for payload in payloads
             ]
 
@@ -494,10 +514,12 @@ class TestBaseHandler(unittest.TestCase):
             await asyncio.gather(*tasks)
 
             # All should have been called
-            self.assertEqual(handler.handle_task_mock.call_count, 3)
+            self.assertEqual(handler.generate_plan_draft_mock.call_count, 3)
 
             # Check that all payloads were processed
-            call_args = [call[0][0] for call in handler.handle_task_mock.call_args_list]
+            call_args = [
+                call[0][0] for call in handler.generate_plan_draft_mock.call_args_list
+            ]
             self.assertEqual(len(call_args), 3)
             for payload in payloads:
                 self.assertIn(payload, call_args)
@@ -528,7 +550,7 @@ class TestBaseHandler(unittest.TestCase):
 
         # Should receive exact payload
         self.assertEqual(handler.last_payload, complex_payload)
-        handler.handle_task_mock.assert_called_once_with(complex_payload)
+        handler.generate_plan_draft_mock.assert_called_once_with(complex_payload)
 
     def test_empty_payload_handling(self):
         """Test handling of empty payloads."""
@@ -538,7 +560,7 @@ class TestBaseHandler(unittest.TestCase):
         handler.run_now(empty_payload)
 
         self.assertEqual(handler.last_payload, empty_payload)
-        handler.handle_task_mock.assert_called_once_with(empty_payload)
+        handler.generate_plan_draft_mock.assert_called_once_with(empty_payload)
 
     def test_payload_immutability_concern(self):
         """Test that handlers should not modify the original payload."""
@@ -552,13 +574,14 @@ class TestBaseHandler(unittest.TestCase):
                     "id": doc.get("project_id", "modify_project"),
                 }
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
                 # Simulate handler modifying payload (bad practice)
                 payload["modified"] = True
                 payload["original_keys"] = list(payload.keys())
+                return make_dummy_plan_draft()
 
             def __call__(self, payload: dict[str, Any]) -> None:
-                asyncio.create_task(self.handle_task(payload))
+                asyncio.create_task(self.generate_plan_draft(payload))
 
         handler = PayloadModifyingHandler()
         original_payload = {"test": "data", "immutable": True}
@@ -627,7 +650,7 @@ class TestBaseHandler(unittest.TestCase):
         handler.run_now(cli_payload)
 
         # Should complete synchronously
-        self.assertTrue(handler.handle_task_called)
+        self.assertTrue(handler.generate_plan_draft_called)
         self.assertEqual(handler.last_payload, cli_payload)
 
     def test_error_propagation_patterns(self):
@@ -642,14 +665,15 @@ class TestBaseHandler(unittest.TestCase):
             def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
                 return {"kind": "project", "id": doc.get("project_id", "error_project")}
 
-            async def handle_task(self, payload: dict[str, Any]) -> None:
+            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
                 if self.error_type:
                     raise self.error_type("Handler error")
+                return make_dummy_plan_draft()
 
             def __call__(self, payload: dict[str, Any]) -> None:
                 # In real implementation, this would create_task
                 # but for testing, we'll just call directly
-                asyncio.create_task(self.handle_task(payload))
+                asyncio.create_task(self.generate_plan_draft(payload))
 
         # Test synchronous error propagation
         sync_handler = ErrorHandler(ValueError)
@@ -660,7 +684,7 @@ class TestBaseHandler(unittest.TestCase):
         async def test_async_error():
             async_handler = ErrorHandler(RuntimeError)
             with self.assertRaises(RuntimeError):
-                await async_handler.handle_task({"test": "async_error"})
+                await async_handler.generate_plan_draft({"test": "async_error"})
 
         asyncio.run(test_async_error())
 
@@ -681,19 +705,21 @@ class TestBaseHandler(unittest.TestCase):
         # Test payload type compliance
         import inspect
 
-        handle_task_sig = inspect.signature(handler.handle_task)
+        generate_plan_draft_sig = inspect.signature(handler.generate_plan_draft)
         call_sig = inspect.signature(handler.__call__)
         run_now_sig = inspect.signature(handler.run_now)
 
         # All should have payload parameter
-        self.assertIn("payload", handle_task_sig.parameters)
+        self.assertIn("payload", generate_plan_draft_sig.parameters)
         self.assertIn("payload", call_sig.parameters)
         self.assertIn("payload", run_now_sig.parameters)
 
         # Return types should be correct
-        self.assertEqual(handle_task_sig.return_annotation, None)
+        # generate_plan_draft returns PlanDraft (coroutine that returns PlanDraft)
+        self.assertEqual(generate_plan_draft_sig.return_annotation, PlanDraft)
         self.assertEqual(call_sig.return_annotation, None)
-        self.assertEqual(run_now_sig.return_annotation, None)
+        # run_now also returns PlanDraft (blocking version of generate_plan_draft)
+        self.assertEqual(run_now_sig.return_annotation, PlanDraft)
 
     def test_interface_contract_compliance(self):
         """Test that concrete implementations satisfy the interface contract."""
@@ -703,17 +729,17 @@ class TestBaseHandler(unittest.TestCase):
         self.assertTrue(hasattr(handler.__class__, "event_type"))
 
         # Must implement required methods
-        self.assertTrue(hasattr(handler, "handle_task"))
+        self.assertTrue(hasattr(handler, "generate_plan_draft"))
         self.assertTrue(hasattr(handler, "__call__"))
         self.assertTrue(hasattr(handler, "run_now"))
 
         # Methods must be callable
-        self.assertTrue(callable(handler.handle_task))
+        self.assertTrue(callable(handler.generate_plan_draft))
         self.assertTrue(callable(handler.__call__))
         self.assertTrue(callable(handler.run_now))
 
-        # handle_task must be async
-        self.assertTrue(asyncio.iscoroutinefunction(handler.handle_task))
+        # generate_plan_draft must be async
+        self.assertTrue(asyncio.iscoroutinefunction(handler.generate_plan_draft))
 
         # __call__ and run_now must be sync
         self.assertFalse(asyncio.iscoroutinefunction(handler.__call__))
