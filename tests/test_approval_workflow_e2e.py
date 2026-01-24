@@ -52,11 +52,11 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         shutil.rmtree(self.work_root, ignore_errors=True)
         shutil.rmtree(self.spool_dir, ignore_errors=True)
 
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     @patch("lib.core_utils.yggdrasil_core.Engine")
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
     def test_auto_run_plan_executes_immediately(
-        self, mock_ops, mock_engine_cls, mock_plan_db_cls
+        self, mock_ops, mock_engine_cls, mock_init_db
     ):
         """Test that auto_run=True plans execute without human approval."""
         from yggdrasil.flow.model import Plan, StepSpec
@@ -92,13 +92,6 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         # Mock handler to return our draft
         mock_handler.generate_plan_draft = AsyncMock(return_value=draft)
 
-        # Mock PlanDBManager
-        mock_plan_db = mock_plan_db_cls.return_value
-        mock_plan_db.save_plan.return_value = "pln_autorun_001"
-
-        # Mock Engine
-        mock_engine = mock_engine_cls.return_value
-
         # Import after patching
         from lib.core_utils.yggdrasil_core import YggdrasilCore
 
@@ -106,9 +99,7 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         SingletonMeta._instances.clear()
 
         config = {"work_root": self.work_root}
-        with patch("lib.couchdb.project_db_manager.ProjectDBManager"):
-            with patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDBManager"):
-                core = YggdrasilCore(config)
+        core = YggdrasilCore(config)
 
         # Simulate the flow that happens in _generate_and_execute_plan
         # when auto_run=True
@@ -197,7 +188,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
     def test_watcher_filters_draft_plans(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
     ):
-        """Test that _process_change filters out non-approved plans."""
+        """Test that _evaluate_change filters out non-approved plans."""
         from lib.watchers.plan_watcher import PlanWatcher
 
         events_emitted = []
@@ -211,7 +202,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
         watcher = PlanWatcher(on_event=capture_event, poll_interval_sec=0.1)
 
-        # Test _process_change directly with a draft plan
+        # Test _evaluate_change directly with a draft plan
         draft_change = {
             "seq": "1-abc",
             "id": "pln_draft_001",
@@ -220,10 +211,11 @@ class TestApprovalRequiredE2E(unittest.TestCase):
                 "status": "draft",  # Not eligible
                 "run_token": 1,
                 "executed_run_token": 0,
+                "execution_authority": "daemon",
             },
         }
 
-        asyncio.run(watcher._process_change(draft_change))
+        asyncio.run(watcher._evaluate_change(draft_change))
 
         # No events should be emitted for draft plans
         self.assertEqual(len(events_emitted), 0)
@@ -235,7 +227,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
     def test_watcher_emits_event_for_approved_plan(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
     ):
-        """Test that _process_change emits event for approved plans."""
+        """Test that _evaluate_change emits event for approved plans."""
         from lib.core_utils.event_types import EventType
         from lib.watchers.plan_watcher import PlanWatcher
 
@@ -250,7 +242,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
         watcher = PlanWatcher(on_event=capture_event, poll_interval_sec=0.1)
 
-        # Test _process_change directly with an approved plan
+        # Test _evaluate_change directly with an approved plan
         approved_change = {
             "seq": "1-abc",
             "id": "pln_approved_001",
@@ -259,11 +251,12 @@ class TestApprovalRequiredE2E(unittest.TestCase):
                 "status": "approved",  # Eligible
                 "run_token": 1,
                 "executed_run_token": 0,
+                "execution_authority": "daemon",
                 "plan": {},
             },
         }
 
-        asyncio.run(watcher._process_change(approved_change))
+        asyncio.run(watcher._evaluate_change(approved_change))
 
         # Should emit one event
         self.assertEqual(len(events_emitted), 1)
@@ -385,6 +378,7 @@ class TestStartupRecoveryE2E(unittest.TestCase):
                 "status": "approved",
                 "run_token": 1,
                 "executed_run_token": 0,
+                "execution_authority": "daemon",
             },
             # Note: pln_recovery_002 would NOT be returned by query_approved_pending
             # because run_token == executed_run_token
