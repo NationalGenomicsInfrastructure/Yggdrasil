@@ -9,6 +9,7 @@ separate from operational data (yggdrasil_ops) and project data (projects).
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from ibm_cloud_sdk_core.api_exception import ApiException
@@ -19,6 +20,38 @@ from lib.couchdb.couchdb_connection import CouchDBHandler
 from yggdrasil.flow.model import Plan
 
 logging = custom_logger(__name__.split(".")[-1])
+
+# Valid values for execution_authority field
+VALID_EXECUTION_AUTHORITIES = frozenset({"daemon", "run_once"})
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively coerce plan documents into JSON-serializable structures.
+
+    CouchDB client calls ``json.dumps`` under the hood. Realm planners can
+    sometimes return pathlib.Path (or other non-JSON types) inside params or
+    preview payloads. This helper walks the structure and converts:
+    - Path -> str
+    - set/tuple -> list
+    - dict/list elements recursively
+    """
+
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _validate_execution_authority(authority: str) -> None:
+    """Raise ValueError if execution_authority is invalid."""
+    if authority not in VALID_EXECUTION_AUTHORITIES:
+        raise ValueError(
+            f"Invalid execution_authority: {authority!r}. "
+            f"Must be one of: {sorted(VALID_EXECUTION_AUTHORITIES)}"
+        )
 
 
 def _utc_now_iso() -> str:
@@ -56,20 +89,6 @@ class PlanDBManager(CouchDBHandler):
         """Initialize connection to yggdrasil_plans database."""
         super().__init__("yggdrasil_plans")
 
-    def generate_plan_doc_id(self, realm: str, scope_id: str, version: int = 1) -> str:
-        """
-        Generate canonical plan document ID.
-
-        Args:
-            realm: Realm identifier (e.g., 'tenx')
-            scope_id: Scope identifier (e.g., 'P36805')
-            version: Plan version (default 1)
-
-        Returns:
-            str: Document ID in format "pln_<realm>_<scope_id>_v<version>"
-        """
-        return f"pln_{realm}_{scope_id}_v{version}"
-
     def save_plan(
         self,
         plan: Plan,
@@ -77,6 +96,8 @@ class PlanDBManager(CouchDBHandler):
         scope: dict[str, Any],
         *,
         auto_run: bool = False,
+        execution_authority: str = "daemon",
+        execution_owner: str | None = None,
         preview: dict[str, Any] | None = None,
         source_doc_id: str | None = None,
         source_doc_rev: str | None = None,
@@ -88,24 +109,34 @@ class PlanDBManager(CouchDBHandler):
         Creates or overwrites the plan document. On regeneration, this resets
         execution tokens to ensure the new plan is eligible for execution.
 
+        The document ID is taken from ``plan.plan_id``, which is owned by the
+        realm/planner. PlanDBManager is a generic CRUD layer and never derives
+        the document ID from (realm, scope).
+
         Args:
-            plan: The Plan object to persist
+            plan: The Plan object to persist (plan.plan_id is used as _id)
             realm: Realm identifier
             scope: Scope dict with 'kind' and 'id' keys
             auto_run: If True, set status='approved'; else status='draft'
+            execution_authority: Who has authority to execute - "daemon" (default) or "run_once"
+            execution_owner: Unique token for run_once isolation (e.g., "run_once:<uuid>")
             preview: Optional preview data for UI display
             source_doc_id: Optional source document ID that triggered this plan
             source_doc_rev: Optional source document revision
             notes: Optional notes about the plan
 
         Returns:
-            str: The document ID of the persisted plan
+            str: The document ID of the persisted plan (same as plan.plan_id)
 
         Raises:
+            ValueError: If execution_authority is invalid or plan.plan_id is missing
             ApiException: On database errors
         """
-        scope_id = scope.get("id", "unknown")
-        doc_id = self.generate_plan_doc_id(realm, scope_id)
+        # Validate inputs
+        _validate_execution_authority(execution_authority)
+        doc_id = plan.plan_id
+        if not doc_id:
+            raise ValueError("plan.plan_id is required for persistence")
 
         # Check for existing document to get _rev
         existing = self.fetch_document_by_id(doc_id)
@@ -122,6 +153,8 @@ class PlanDBManager(CouchDBHandler):
             "preview": preview or {},
             "run_token": 0,
             "executed_run_token": -1,
+            "execution_authority": execution_authority,
+            "execution_owner": execution_owner,
             "created_at": existing.get("created_at", now) if existing else now,
             "updated_at": now,
         }
@@ -138,12 +171,13 @@ class PlanDBManager(CouchDBHandler):
         if notes:
             plan_doc["notes"] = notes
 
-        # Persist to database
+        # Persist to database (after ensuring JSON-serializable payload)
         try:
+            serializable_doc = cast(Document, _json_safe(plan_doc))
             self.server.put_document(
                 db=self.db_name,
                 doc_id=doc_id,
-                document=cast(Document, plan_doc),
+                document=serializable_doc,
             ).get_result()
 
             logging.info(
@@ -190,6 +224,9 @@ class PlanDBManager(CouchDBHandler):
             return None
 
         try:
+            # Note: Path reconstruction is handled by Engine via coerce_params_to_signature_types()
+            # (from yggdrasil.flow.utils.typing_coerce) based on step function type hints.
+            # Params remain as strings in the persisted document.
             return Plan.from_dict(plan_data)
         except (KeyError, TypeError) as e:
             logging.error("Failed to deserialize plan '%s': %s", doc_id, e)
@@ -341,3 +378,45 @@ class PlanDBManager(CouchDBHandler):
         except ApiException as e:
             logging.error("Failed to delete plan '%s': %s", doc_id, e)
             return False
+
+    def plan_exists(self, doc_id: str) -> bool:
+        """
+        Check if a plan document exists (without fetching full content).
+
+        Used for overwrite detection in CLI mode.
+
+        Args:
+            doc_id: The plan document ID
+
+        Returns:
+            bool: True if document exists, False otherwise
+        """
+        return self.fetch_document_by_id(doc_id) is not None
+
+    def get_plan_summary(self, doc_id: str) -> dict[str, Any] | None:
+        """
+        Fetch minimal plan summary for display.
+
+        Returns key metadata without the full plan content.
+        Useful for displaying existing plan info during overwrite warnings.
+
+        Args:
+            doc_id: The plan document ID
+
+        Returns:
+            dict with keys: status, execution_authority, execution_owner,
+                updated_at, realm, run_token, executed_run_token
+            or None if not found
+        """
+        doc = self.fetch_document_by_id(doc_id)
+        if not doc:
+            return None
+        return {
+            "status": doc.get("status", "unknown"),
+            "execution_authority": doc.get("execution_authority", "daemon"),
+            "execution_owner": doc.get("execution_owner"),
+            "updated_at": doc.get("updated_at", "unknown"),
+            "realm": doc.get("realm", "unknown"),
+            "run_token": doc.get("run_token", 0),
+            "executed_run_token": doc.get("executed_run_token", -1),
+        }

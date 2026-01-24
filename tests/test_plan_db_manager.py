@@ -3,6 +3,11 @@ Unit tests for PlanDBManager.
 
 Tests CRUD operations on plan documents without requiring a live database.
 All CouchDB operations are mocked.
+
+NOTE: Pylance reports type errors on mock assertion methods (e.g., assert_called_once,
+return_value, call_args) because it doesn't recognize that self.manager.server methods
+are replaced with MagicMock instances. These are false positives and can be ignored.
+The tests run correctly despite these warnings.
 """
 
 import unittest
@@ -34,12 +39,15 @@ class TestPlanDBManager(unittest.TestCase):
 
         # Create mock connection manager instance
         self.mock_connection = MagicMock()
-        self.mock_connection.server = MagicMock()
+        self.mock_server = MagicMock()  # Explicit mock for server
+        self.mock_connection.server = self.mock_server
         self.mock_connection.ensure_db.return_value = "yggdrasil_plans"
         self.mock_connection_class.return_value = self.mock_connection
 
         # Create manager instance (will use mocked connection)
         self.manager = PlanDBManager()
+        # Explicitly assign mock server to satisfy Pylance type checking
+        self.manager.server = self.mock_server  # type: ignore[assignment]
 
         # Create sample plan for testing
         self.sample_plan = Plan(
@@ -61,31 +69,6 @@ class TestPlanDBManager(unittest.TestCase):
         self.connection_patcher.stop()
 
     # ==========================================
-    # generate_plan_doc_id Tests
-    # ==========================================
-
-    def test_generate_plan_doc_id_basic(self):
-        """Test basic doc ID generation."""
-        doc_id = self.manager.generate_plan_doc_id("tenx", "P12345")
-        self.assertEqual(doc_id, "pln_tenx_P12345_v1")
-
-    def test_generate_plan_doc_id_with_version(self):
-        """Test doc ID generation with custom version."""
-        doc_id = self.manager.generate_plan_doc_id("tenx", "P12345", version=2)
-        self.assertEqual(doc_id, "pln_tenx_P12345_v2")
-
-    def test_generate_plan_doc_id_different_realms(self):
-        """Test doc ID generation for different realms."""
-        self.assertEqual(
-            self.manager.generate_plan_doc_id("smartseq3", "P99999"),
-            "pln_smartseq3_P99999_v1",
-        )
-        self.assertEqual(
-            self.manager.generate_plan_doc_id("mars", "PROJ001"),
-            "pln_mars_PROJ001_v1",
-        )
-
-    # ==========================================
     # save_plan Tests
     # ==========================================
 
@@ -105,13 +88,14 @@ class TestPlanDBManager(unittest.TestCase):
             auto_run=False,
         )
 
-        self.assertEqual(doc_id, "pln_tenx_P12345_v1")
+        # Document ID comes from plan.plan_id (realm owns identity)
+        self.assertEqual(doc_id, self.sample_plan.plan_id)
         self.manager.server.put_document.assert_called_once()
 
         # Verify document structure
         call_kwargs = self.manager.server.put_document.call_args[1]
         doc = call_kwargs["document"]
-        self.assertEqual(doc["_id"], "pln_tenx_P12345_v1")
+        self.assertEqual(doc["_id"], self.sample_plan.plan_id)
         self.assertEqual(doc["realm"], "tenx")
         self.assertEqual(doc["status"], "draft")  # auto_run=False
         self.assertEqual(doc["run_token"], 0)
@@ -516,6 +500,163 @@ class TestPlanDBManager(unittest.TestCase):
         result = self.manager.delete_plan("pln_tenx_P12345_v1")
 
         self.assertFalse(result)
+
+    # ==========================================
+    # Execution Origin & Owner Tests (Phase 1)
+    # ==========================================
+
+    def test_save_plan_default_execution_origin_is_daemon(self):
+        """Test that default execution_authority is 'daemon'."""
+        self.manager.fetch_document_by_id = Mock(return_value=None)
+        mock_result = Mock()
+        mock_result.get_result.return_value = {"ok": True}
+        self.manager.server.put_document.return_value = mock_result
+
+        self.manager.save_plan(
+            self.sample_plan,
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+        )
+
+        call_kwargs = self.manager.server.put_document.call_args[1]
+        doc = call_kwargs["document"]
+        self.assertEqual(doc["execution_authority"], "daemon")
+        self.assertIsNone(doc["execution_owner"])
+
+    def test_save_plan_with_run_once_origin(self):
+        """Test saving plan with execution_authority='run_once'."""
+        self.manager.fetch_document_by_id = Mock(return_value=None)
+        mock_result = Mock()
+        mock_result.get_result.return_value = {"ok": True}
+        self.manager.server.put_document.return_value = mock_result
+
+        self.manager.save_plan(
+            self.sample_plan,
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            execution_authority="run_once",
+        )
+
+        call_kwargs = self.manager.server.put_document.call_args[1]
+        doc = call_kwargs["document"]
+        self.assertEqual(doc["execution_authority"], "run_once")
+
+    def test_save_plan_with_execution_owner(self):
+        """Test saving plan with execution_owner token."""
+        self.manager.fetch_document_by_id = Mock(return_value=None)
+        mock_result = Mock()
+        mock_result.get_result.return_value = {"ok": True}
+        self.manager.server.put_document.return_value = mock_result
+
+        owner_token = "run_once:550e8400-e29b-41d4-a716-446655440000"
+        self.manager.save_plan(
+            self.sample_plan,
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            execution_authority="run_once",
+            execution_owner=owner_token,
+        )
+
+        call_kwargs = self.manager.server.put_document.call_args[1]
+        doc = call_kwargs["document"]
+        self.assertEqual(doc["execution_authority"], "run_once")
+        self.assertEqual(doc["execution_owner"], owner_token)
+
+    def test_save_plan_invalid_execution_origin_raises(self):
+        """Test that invalid execution_authority raises ValueError."""
+        with self.assertRaises(ValueError) as ctx:
+            self.manager.save_plan(
+                self.sample_plan,
+                realm="tenx",
+                scope={"kind": "project", "id": "P12345"},
+                execution_authority="invalid_origin",
+            )
+
+        self.assertIn("Invalid execution_authority", str(ctx.exception))
+        self.assertIn("invalid_origin", str(ctx.exception))
+        # Should not have attempted to save
+        self.manager.server.put_document.assert_not_called()
+
+    # ==========================================
+    # plan_exists Tests
+    # ==========================================
+
+    def test_plan_exists_returns_true_for_existing(self):
+        """Test plan_exists returns True for existing plan."""
+        existing_doc = {"_id": "pln_tenx_P12345_v1", "_rev": "1-abc"}
+        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
+
+        result = self.manager.plan_exists("pln_tenx_P12345_v1")
+
+        self.assertTrue(result)
+        self.manager.fetch_document_by_id.assert_called_once_with("pln_tenx_P12345_v1")
+
+    def test_plan_exists_returns_false_for_missing(self):
+        """Test plan_exists returns False for non-existent plan."""
+        self.manager.fetch_document_by_id = Mock(return_value=None)
+
+        result = self.manager.plan_exists("pln_nonexistent_v1")
+
+        self.assertFalse(result)
+
+    # ==========================================
+    # get_plan_summary Tests
+    # ==========================================
+
+    def test_get_plan_summary_returns_expected_fields(self):
+        """Test get_plan_summary returns correct subset of fields."""
+        existing_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "_rev": "2-xyz",
+            "status": "approved",
+            "execution_authority": "run_once",
+            "execution_owner": "run_once:test-uuid",
+            "updated_at": "2025-01-15T10:30:00Z",
+            "realm": "tenx",
+            "run_token": 1,
+            "executed_run_token": 0,
+            "plan": {"large": "data", "not": "included"},
+        }
+        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
+
+        result = self.manager.get_plan_summary("pln_tenx_P12345_v1")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "approved")
+        self.assertEqual(result["execution_authority"], "run_once")
+        self.assertEqual(result["execution_owner"], "run_once:test-uuid")
+        self.assertEqual(result["updated_at"], "2025-01-15T10:30:00Z")
+        self.assertEqual(result["realm"], "tenx")
+        self.assertEqual(result["run_token"], 1)
+        self.assertEqual(result["executed_run_token"], 0)
+        # Should NOT include full plan data
+        self.assertNotIn("plan", result)
+        self.assertNotIn("_rev", result)
+
+    def test_get_plan_summary_returns_none_for_missing(self):
+        """Test get_plan_summary returns None for non-existent plan."""
+        self.manager.fetch_document_by_id = Mock(return_value=None)
+
+        result = self.manager.get_plan_summary("pln_nonexistent_v1")
+
+        self.assertIsNone(result)
+
+    def test_get_plan_summary_handles_missing_fields(self):
+        """Test get_plan_summary provides defaults for missing fields."""
+        existing_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            # Missing: execution_authority, execution_owner, etc.
+        }
+        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
+
+        result = self.manager.get_plan_summary("pln_tenx_P12345_v1")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["execution_authority"], "daemon")  # default
+        self.assertIsNone(result["execution_owner"])  # default
+        self.assertEqual(result["run_token"], 0)
+        self.assertEqual(result["executed_run_token"], -1)
 
 
 if __name__ == "__main__":
