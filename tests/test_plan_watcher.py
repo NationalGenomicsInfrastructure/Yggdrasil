@@ -102,44 +102,45 @@ class TestPlanWatcher(unittest.TestCase):
         self.assertEqual(self.watcher.poll_interval_sec, 0.1)
 
     # ==========================================
-    # _process_change Tests
+    # _evaluate_change Tests
     # ==========================================
 
-    def test_process_change_skips_design_docs(self):
+    def test_evaluate_change_skips_design_docs(self):
         """Test that design documents are skipped."""
         change = {"id": "_design/views", "seq": "1", "doc": {"views": {}}}
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         self.mock_on_event.assert_not_called()
 
-    def test_process_change_skips_deleted_docs(self):
+    def test_evaluate_change_skips_deleted_docs(self):
         """Test that deleted documents are skipped."""
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "deleted": True}
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         self.mock_on_event.assert_not_called()
 
-    def test_process_change_skips_no_doc(self):
+    def test_evaluate_change_skips_no_doc(self):
         """Test that changes without doc are skipped."""
         change = {"id": "pln_tenx_P12345_v1", "seq": "1"}  # no 'doc' field
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         self.mock_on_event.assert_not_called()
 
-    def test_process_change_emits_eligible_plan(self):
+    def test_evaluate_change_emits_eligible_plan(self):
         """Test that eligible plans trigger event emission."""
         eligible_doc = {
             "_id": "pln_tenx_P12345_v1",
             "status": "approved",
             "run_token": 0,
             "executed_run_token": -1,
+            "execution_authority": "daemon",  # Required field
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": eligible_doc}
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         # Verify emit was called
         self.mock_on_event.assert_called_once()
@@ -148,45 +149,48 @@ class TestPlanWatcher(unittest.TestCase):
         self.assertEqual(event.payload["plan_doc_id"], "pln_tenx_P12345_v1")
         self.assertEqual(event.payload["plan_doc"], eligible_doc)
 
-    def test_process_change_skips_ineligible_draft(self):
+    def test_evaluate_change_skips_ineligible_draft(self):
         """Test that draft plans are skipped."""
         draft_doc = {
             "_id": "pln_tenx_P12345_v1",
             "status": "draft",
             "run_token": 0,
             "executed_run_token": -1,
+            "execution_authority": "daemon",
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": draft_doc}
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         self.mock_on_event.assert_not_called()
 
-    def test_process_change_skips_already_executed(self):
+    def test_evaluate_change_skips_already_executed(self):
         """Test that already-executed plans are skipped."""
         executed_doc = {
             "_id": "pln_tenx_P12345_v1",
             "status": "approved",
             "run_token": 0,
             "executed_run_token": 0,  # tokens equal
+            "execution_authority": "daemon",
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": executed_doc}
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         self.mock_on_event.assert_not_called()
 
-    def test_process_change_emits_rerun(self):
+    def test_evaluate_change_emits_rerun(self):
         """Test that manual re-run (incremented token) triggers emission."""
         rerun_doc = {
             "_id": "pln_tenx_P12345_v1",
             "status": "approved",
             "run_token": 1,  # incremented
             "executed_run_token": 0,
+            "execution_authority": "daemon",
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": rerun_doc}
 
-        asyncio.run(self.watcher._process_change(change))
+        asyncio.run(self.watcher._evaluate_change(change))
 
         self.mock_on_event.assert_called_once()
 
@@ -210,12 +214,14 @@ class TestPlanWatcher(unittest.TestCase):
                 "status": "approved",
                 "run_token": 0,
                 "executed_run_token": -1,
+                "execution_authority": "daemon",
             },
             {
                 "_id": "pln_tenx_P2_v1",
                 "status": "approved",
                 "run_token": 1,
                 "executed_run_token": 0,
+                "execution_authority": "daemon",
             },
         ]
         self.mock_plan_db.query_approved_pending.return_value = eligible_plans
@@ -374,6 +380,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
                     "status": "approved",
                     "run_token": 0,
                     "executed_run_token": -1,
+                    "execution_authority": "daemon",
                 },
             },
             {
@@ -384,6 +391,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
                     "status": "draft",
                     "run_token": 0,
                     "executed_run_token": -1,
+                    "execution_authority": "daemon",
                 },
             },
             {
@@ -394,13 +402,14 @@ class TestPlanWatcherIntegration(unittest.TestCase):
                     "status": "approved",
                     "run_token": 0,
                     "executed_run_token": 0,
+                    "execution_authority": "daemon",
                 },
             },
         ]
 
         async def test():
             for change in changes:
-                await watcher._process_change(change)
+                await watcher._evaluate_change(change)
 
         asyncio.run(test())
 
@@ -427,6 +436,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
                     "status": "approved",
                     "run_token": 0,
                     "executed_run_token": -1,
+                    "execution_authority": "daemon",
                 },
             },
             {
@@ -437,6 +447,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
                     "status": "approved",
                     "run_token": 0,
                     "executed_run_token": -1,
+                    "execution_authority": "daemon",
                 },
             },
         ]
@@ -451,7 +462,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
             watcher._running = True
             async for change in watcher.changes_fetcher.fetch_changes(since="0"):
                 new_seq = change.get("seq")
-                await watcher._process_change(change)
+                await watcher._evaluate_change(change)
                 if new_seq:
                     watcher.checkpoint_store.save_checkpoint(new_seq)
             watcher._running = False
@@ -462,6 +473,296 @@ class TestPlanWatcherIntegration(unittest.TestCase):
         self.assertEqual(self.mock_checkpoint.save_checkpoint.call_count, 2)
         # Verify last checkpoint was final seq
         self.mock_checkpoint.save_checkpoint.assert_called_with("101-def")
+
+
+class TestPlanWatcherFiltering(unittest.TestCase):
+    """Unit tests for PlanWatcher execution origin and owner filtering."""
+
+    def setUp(self):
+        """Set up test fixtures with mocked DB connections."""
+        # Patch PlanDBManager
+        self.plan_db_patcher = patch("lib.watchers.plan_watcher.PlanDBManager")
+        self.mock_plan_db_class = self.plan_db_patcher.start()
+        self.mock_plan_db = MagicMock()
+        self.mock_plan_db_class.return_value = self.mock_plan_db
+
+        # Patch YggdrasilDBManager
+        self.ygg_db_patcher = patch("lib.watchers.plan_watcher.YggdrasilDBManager")
+        self.mock_ygg_db_class = self.ygg_db_patcher.start()
+        self.mock_ygg_db = MagicMock()
+        self.mock_ygg_db_class.return_value = self.mock_ygg_db
+
+        # Patch WatcherCheckpointStore
+        self.checkpoint_patcher = patch(
+            "lib.watchers.plan_watcher.WatcherCheckpointStore"
+        )
+        self.mock_checkpoint_class = self.checkpoint_patcher.start()
+        self.mock_checkpoint = MagicMock()
+        self.mock_checkpoint.get_checkpoint.return_value = None
+        self.mock_checkpoint_class.return_value = self.mock_checkpoint
+
+        # Patch ChangesFetcher
+        self.fetcher_patcher = patch("lib.watchers.plan_watcher.ChangesFetcher")
+        self.mock_fetcher_class = self.fetcher_patcher.start()
+        self.mock_fetcher = MagicMock()
+        self.mock_fetcher_class.return_value = self.mock_fetcher
+
+        # Create event callback mock
+        self.mock_on_event = Mock()
+
+    def tearDown(self):
+        """Clean up patches."""
+        self.plan_db_patcher.stop()
+        self.ygg_db_patcher.stop()
+        self.checkpoint_patcher.stop()
+        self.fetcher_patcher.stop()
+
+    # ==========================================
+    # Execution Origin Filter Tests
+    # ==========================================
+
+    def test_daemon_watcher_skips_run_once_plans(self):
+        """Test that daemon watcher skips plans with authority='run_once'."""
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="daemon",
+        )
+
+        run_once_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            "execution_authority": "run_once",
+            "execution_owner": "run_once:test-uuid",
+        }
+        change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": run_once_doc}
+
+        asyncio.run(watcher._evaluate_change(change))
+
+        self.mock_on_event.assert_not_called()
+
+    def test_daemon_watcher_processes_daemon_plans(self):
+        """Test that daemon watcher processes plans with authority='daemon'."""
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="daemon",
+        )
+
+        daemon_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            "execution_authority": "daemon",
+        }
+        change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": daemon_doc}
+
+        asyncio.run(watcher._evaluate_change(change))
+
+        self.mock_on_event.assert_called_once()
+
+    def test_scoped_watcher_filters_by_owner(self):
+        """Test that scoped watcher only processes matching owner."""
+        my_owner = "run_once:my-session-uuid"
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="run_once",
+            execution_owner_filter=my_owner,
+        )
+
+        my_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            "execution_authority": "run_once",
+            "execution_owner": my_owner,
+        }
+        change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": my_doc}
+
+        asyncio.run(watcher._evaluate_change(change))
+
+        self.mock_on_event.assert_called_once()
+
+    def test_scoped_watcher_skips_other_owners(self):
+        """Test that scoped watcher skips plans with different owner."""
+        my_owner = "run_once:my-session-uuid"
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="run_once",
+            execution_owner_filter=my_owner,
+        )
+
+        other_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            "execution_authority": "run_once",
+            "execution_owner": "run_once:other-session-uuid",
+        }
+        change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": other_doc}
+
+        asyncio.run(watcher._evaluate_change(change))
+
+        self.mock_on_event.assert_not_called()
+
+    def test_watcher_skips_missing_execution_origin(self):
+        """Test that watcher skips plans without execution_authority field."""
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="daemon",
+        )
+
+        legacy_doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            # no execution_authority field
+        }
+        change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": legacy_doc}
+
+        asyncio.run(watcher._evaluate_change(change))
+
+        self.mock_on_event.assert_not_called()
+
+    def test_no_filter_processes_all_origins(self):
+        """Test that watcher with no filter processes all origins."""
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            # No filter set
+        )
+
+        # Note: without filters, missing execution_authority still skips
+        daemon_doc = {
+            "_id": "pln_tenx_P1_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            "execution_authority": "daemon",
+        }
+        run_once_doc = {
+            "_id": "pln_tenx_P2_v1",
+            "status": "approved",
+            "run_token": 0,
+            "executed_run_token": -1,
+            "execution_authority": "run_once",
+        }
+
+        asyncio.run(
+            watcher._evaluate_change(
+                {"id": "pln_tenx_P1_v1", "seq": "1", "doc": daemon_doc}
+            )
+        )
+        asyncio.run(
+            watcher._evaluate_change(
+                {"id": "pln_tenx_P2_v1", "seq": "2", "doc": run_once_doc}
+            )
+        )
+
+        self.assertEqual(self.mock_on_event.call_count, 2)
+
+    # ==========================================
+    # Recovery Filtering Tests
+    # ==========================================
+
+    def test_recovery_respects_origin_filter(self):
+        """Test that recover_pending_plans respects execution_authority filter."""
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="daemon",
+        )
+
+        # Simulate mixed plans from DB
+        all_plans = [
+            {
+                "_id": "pln_tenx_P1_v1",
+                "status": "approved",
+                "run_token": 0,
+                "executed_run_token": -1,
+                "execution_authority": "daemon",
+            },
+            {
+                "_id": "pln_tenx_P2_v1",
+                "status": "approved",
+                "run_token": 0,
+                "executed_run_token": -1,
+                "execution_authority": "run_once",
+            },
+        ]
+        self.mock_plan_db.query_approved_pending.return_value = all_plans
+
+        result = asyncio.run(watcher.recover_pending_plans())
+
+        # Only daemon plan should be recovered
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["_id"], "pln_tenx_P1_v1")
+        self.mock_on_event.assert_called_once()
+
+    def test_recovery_respects_owner_filter(self):
+        """Test that recover_pending_plans respects execution_owner filter."""
+        my_owner = "run_once:my-session"
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="run_once",
+            execution_owner_filter=my_owner,
+        )
+
+        all_plans = [
+            {
+                "_id": "pln_tenx_P1_v1",
+                "execution_authority": "run_once",
+                "execution_owner": my_owner,
+            },
+            {
+                "_id": "pln_tenx_P2_v1",
+                "execution_authority": "run_once",
+                "execution_owner": "run_once:other-session",
+            },
+        ]
+        self.mock_plan_db.query_approved_pending.return_value = all_plans
+
+        result = asyncio.run(watcher.recover_pending_plans())
+
+        # Only my plan should be recovered
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["_id"], "pln_tenx_P1_v1")
+
+    def test_recovery_skips_missing_execution_origin(self):
+        """Test that recovery skips plans without execution_authority."""
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="daemon",
+        )
+
+        all_plans = [
+            {
+                "_id": "pln_tenx_P1_v1",
+                "execution_authority": "daemon",
+            },
+            {
+                "_id": "pln_tenx_P2_v1",
+                # No execution_authority (legacy)
+            },
+        ]
+        self.mock_plan_db.query_approved_pending.return_value = all_plans
+
+        result = asyncio.run(watcher.recover_pending_plans())
+
+        # Only plan with execution_authority should be recovered
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["_id"], "pln_tenx_P1_v1")
 
 
 if __name__ == "__main__":

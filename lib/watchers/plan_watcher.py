@@ -53,6 +53,9 @@ class PlanWatcher(AbstractWatcher):
         self,
         on_event: Callable[[YggdrasilEvent], None],
         poll_interval_sec: float = 5.0,
+        *,
+        execution_authority_filter: str | None = None,
+        execution_owner_filter: str | None = None,
         logger: logging.Logger | None = None,
     ):
         """
@@ -61,6 +64,12 @@ class PlanWatcher(AbstractWatcher):
         Args:
             on_event: Callback to invoke when eligible plan is detected
             poll_interval_sec: Seconds between _changes poll cycles (default 5.0)
+            execution_authority_filter: If set, only process plans with this origin.
+                - "daemon": Normal daemon operation (skips run_once plans)
+                - "run_once": Scoped run-once operation
+                - None: Process all plans (legacy behavior, NOT recommended)
+            execution_owner_filter: If set, only process plans with this owner.
+                Used in run-once mode to isolate concurrent CLI invocations.
             logger: Optional logger; uses module logger if None
         """
         super().__init__(
@@ -71,6 +80,8 @@ class PlanWatcher(AbstractWatcher):
         )
 
         self.poll_interval_sec = poll_interval_sec
+        self.execution_authority_filter = execution_authority_filter
+        self.execution_owner_filter = execution_owner_filter
 
         # Initialize DB managers
         self.plan_db = PlanDBManager()
@@ -91,7 +102,10 @@ class PlanWatcher(AbstractWatcher):
         )
 
         self._logger.debug(
-            "PlanWatcher initialized (poll_interval=%.1fs)", poll_interval_sec
+            "PlanWatcher initialized (poll_interval=%.1fs, authority_filter=%r, owner_filter=%r)",
+            poll_interval_sec,
+            execution_authority_filter,
+            execution_owner_filter,
         )
 
     async def start(self) -> None:
@@ -137,8 +151,8 @@ class PlanWatcher(AbstractWatcher):
                     if new_seq:
                         current_seq = new_seq
 
-                    # Process the change
-                    await self._process_change(change)
+                    # Evaluate the change (filter + eligibility check + emit)
+                    await self._evaluate_change(change)
 
                     # Save checkpoint after each change (durability)
                     if new_seq:
@@ -167,11 +181,12 @@ class PlanWatcher(AbstractWatcher):
         self._logger.info("Stopping PlanWatcher...")
         self._running = False
 
-    async def _process_change(self, change: dict[str, Any]) -> None:
+    async def _evaluate_change(self, change: dict[str, Any]) -> None:
         """
-        Process a single change entry from _changes feed.
+        Evaluate a single change entry from _changes feed.
 
-        Checks eligibility and emits event if plan is ready for execution.
+        Applies filtering criteria (origin, owner), checks eligibility,
+        and emits event if plan is ready for execution.
 
         Args:
             change: Change entry with 'id', 'seq', 'doc' fields
@@ -194,11 +209,47 @@ class PlanWatcher(AbstractWatcher):
             self._logger.warning("Change has no 'doc' field: %s", doc_id)
             return
 
-        # Check eligibility
+        # --- Execution origin filtering ---
+        doc_authority = doc.get("execution_authority")
+
+        # Schema validation: skip plans missing execution_authority
+        if doc_authority is None:
+            self._logger.warning(
+                "Skipping plan with missing execution_authority: %s", doc_id
+            )
+            return
+
+        # Origin filter: skip plans that don't match our filter
+        if (
+            self.execution_authority_filter
+            and doc_authority != self.execution_authority_filter
+        ):
+            self._logger.debug(
+                "Skipping plan %s: authority=%r doesn't match filter=%r",
+                doc_id,
+                doc_authority,
+                self.execution_authority_filter,
+            )
+            return
+
+        # --- Execution owner filtering (for run-once scoping) ---
+        if self.execution_owner_filter:
+            doc_owner = doc.get("execution_owner")
+            if doc_owner != self.execution_owner_filter:
+                self._logger.debug(
+                    "Skipping plan %s: owner=%r doesn't match filter=%r",
+                    doc_id,
+                    doc_owner,
+                    self.execution_owner_filter,
+                )
+                return
+
+        # Check eligibility (status + token logic)
         if is_plan_eligible(doc):
             self._logger.info(
-                "Eligible plan detected: %s (run_token=%s, executed_run_token=%s)",
+                "Eligible plan detected: %s (authority=%s, run_token=%s, executed_run_token=%s)",
                 doc_id,
+                doc_authority,
                 doc.get("run_token", 0),
                 doc.get("executed_run_token", -1),
             )
@@ -217,7 +268,8 @@ class PlanWatcher(AbstractWatcher):
         Query and emit events for all approved pending plans.
 
         This is the startup recovery fallback when checkpoint is missing.
-        It queries all plans where status='approved' and run_token > executed_run_token.
+        It queries all plans where status='approved' and run_token > executed_run_token,
+        then applies execution_authority and execution_owner filters.
 
         Returns:
             list: Plan documents that were emitted for execution
@@ -231,11 +283,55 @@ class PlanWatcher(AbstractWatcher):
             "Running startup recovery: querying approved pending plans..."
         )
 
-        eligible_plans = self.plan_db.query_approved_pending()
+        # Get all eligible plans (approval + token logic)
+        all_eligible = self.plan_db.query_approved_pending()
 
-        self._logger.info("Found %d eligible plans for recovery", len(eligible_plans))
+        # Apply origin and owner filters
+        filtered_plans: list[dict[str, Any]] = []
+        for plan_doc in all_eligible:
+            doc_id = plan_doc.get("_id", "unknown")
+            doc_authority = plan_doc.get("execution_authority")
+            doc_owner = plan_doc.get("execution_owner")
 
-        for plan_doc in eligible_plans:
+            # Skip plans missing execution_authority
+            if doc_authority is None:
+                self._logger.warning(
+                    "Recovery: skipping %s (missing execution_authority)", doc_id
+                )
+                continue
+
+            # Apply execution_authority filter
+            if (
+                self.execution_authority_filter
+                and doc_authority != self.execution_authority_filter
+            ):
+                self._logger.debug(
+                    "Recovery: skipping %s (authority=%s, filter=%s)",
+                    doc_id,
+                    doc_authority,
+                    self.execution_authority_filter,
+                )
+                continue
+
+            # Skip if owner doesn't match filter
+            if self.execution_owner_filter and doc_owner != self.execution_owner_filter:
+                self._logger.debug(
+                    "Recovery: skipping %s (owner=%r != filter=%r)",
+                    doc_id,
+                    doc_owner,
+                    self.execution_owner_filter,
+                )
+                continue
+
+            filtered_plans.append(plan_doc)
+
+        self._logger.info(
+            "Found %d eligible plans for recovery (of %d total eligible)",
+            len(filtered_plans),
+            len(all_eligible),
+        )
+
+        for plan_doc in filtered_plans:
             doc_id = plan_doc.get("_id", "unknown")
             self._logger.info("Recovery: emitting eligible plan %s", doc_id)
             payload = {
@@ -244,4 +340,4 @@ class PlanWatcher(AbstractWatcher):
             }
             await self.emit(payload, source="PlanWatcher:recovery")
 
-        return eligible_plans
+        return filtered_plans
