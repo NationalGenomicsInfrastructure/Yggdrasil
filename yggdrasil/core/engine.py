@@ -14,6 +14,7 @@ from yggdrasil.flow.model import Plan, StepResult, StepSpec
 from yggdrasil.flow.step import StepContext
 from yggdrasil.flow.utils.callable_ref import resolve_callable
 from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
+from yggdrasil.flow.utils.typing_coerce import coerce_params_to_signature_types
 from yggdrasil.flow.utils.ygg_time import utcnow_compact, utcnow_iso
 
 logger = logging.getLogger("yggdrasil.flow.engine")
@@ -72,8 +73,10 @@ def _default_fingerprint(spec: StepSpec, fn: Any) -> str:
         input_keys = getattr(fn, "_input_keys", ())
 
         for key in input_keys:
-            if key in spec.params and isinstance(spec.params[key], str):
-                declared[key] = spec.params[key]
+            value = spec.params.get(key)
+            # Accept Path or str (defensive: accept Path values if provided)
+            if isinstance(value, (str, Path)):
+                declared[key] = str(value)
 
     # Hash only declared inputs
     for key, path_str in declared.items():
@@ -204,8 +207,10 @@ class Engine:
             )
 
             try:
+                # Coerce string params to Path where function signature expects it
+                coerced_params = coerce_params_to_signature_types(fn, spec.params)
                 # returns StepResult (decorator wraps emissions)
-                result = fn(ctx, **spec.params)
+                result = fn(ctx, **coerced_params)
             except TransientStepError as e:
                 # The @step wrapper has already emitted "step.failed".
                 # Add a precise diagnostic so operators know retry isn't wired yet.

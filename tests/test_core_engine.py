@@ -900,5 +900,294 @@ class TestEngine(unittest.TestCase):
             self.assertTrue((plan_dir / "s2" / "success.fingerprint").exists())
 
 
+class TestEngineTypingCoercion(unittest.TestCase):
+    """
+    Tests for typing parameter coercion in Engine.
+
+    The Engine now calls coerce_params_to_signature_types() before invoking
+    step functions, converting string parameters to Path objects where
+    the function signature expects Path type.
+    """
+
+    def setUp(self):
+        """Set up test engine and temporary directory."""
+        self.temp_dir = TemporaryDirectory()
+        self.work_root = Path(self.temp_dir.name)
+        self.mock_emitter = Mock(spec=EventEmitter)
+        self.engine = Engine(work_root=self.work_root, emitter=self.mock_emitter)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        self.temp_dir.cleanup()
+
+    def test_string_param_coerced_to_path(self):
+        """Test that string parameters are coerced to Path objects."""
+        received_params = {}
+
+        def step_fn(ctx: StepContext, input_path: Path, **kwargs) -> StepResult:
+            received_params["input_path"] = input_path
+            return StepResult(artifacts=[])
+
+        plan = Plan(
+            plan_id="test-coerce-1",
+            realm="test",
+            scope={"kind": "test", "id": "test-1"},
+            steps=[
+                StepSpec(
+                    step_id="coerce_step",
+                    name="coerce_step",
+                    fn_ref="m:coerce_step",
+                    params={"input_path": "/tmp/some/path"},  # String param
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan)
+
+        # Verify parameter was coerced to Path
+        self.assertIsInstance(received_params["input_path"], Path)
+        self.assertEqual(str(received_params["input_path"]), "/tmp/some/path")
+
+    def test_non_path_params_unchanged(self):
+        """Test that non-Path parameters are not modified."""
+        received_params = {}
+
+        def step_fn(ctx: StepContext, count: int, name: str, **kwargs) -> StepResult:
+            received_params["count"] = count
+            received_params["name"] = name
+            return StepResult(artifacts=[])
+
+        plan = Plan(
+            plan_id="test-coerce-2",
+            realm="test",
+            scope={"kind": "test", "id": "test-2"},
+            steps=[
+                StepSpec(
+                    step_id="type_step",
+                    name="type_step",
+                    fn_ref="m:type_step",
+                    params={"count": 42, "name": "test"},
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan)
+
+        # Verify non-Path params unchanged
+        self.assertEqual(received_params["count"], 42)
+        self.assertEqual(received_params["name"], "test")
+
+    def test_mixed_params_with_path_coercion(self):
+        """Test that mixed parameter types are handled correctly."""
+        received_params = {}
+
+        def step_fn(
+            ctx: StepContext, input_file: Path, output_dir: Path, count: int, **kwargs
+        ) -> StepResult:
+            received_params["input_file"] = input_file
+            received_params["output_dir"] = output_dir
+            received_params["count"] = count
+            return StepResult(artifacts=[])
+
+        plan = Plan(
+            plan_id="test-coerce-3",
+            realm="test",
+            scope={"kind": "test", "id": "test-3"},
+            steps=[
+                StepSpec(
+                    step_id="mixed_step",
+                    name="mixed_step",
+                    fn_ref="m:mixed_step",
+                    params={
+                        "input_file": "/data/in.txt",
+                        "output_dir": "/data/out",
+                        "count": 10,
+                    },
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan)
+
+        # Verify Path coercion for paths, unchanged for int
+        self.assertIsInstance(received_params["input_file"], Path)
+        self.assertIsInstance(received_params["output_dir"], Path)
+        self.assertEqual(received_params["count"], 10)
+
+    def test_path_object_param_preserved(self):
+        """Test that Path objects in params are preserved."""
+        received_params = {}
+
+        def step_fn(ctx: StepContext, file_path: Path, **kwargs) -> StepResult:
+            received_params["file_path"] = file_path
+            return StepResult(artifacts=[])
+
+        # Create a real Path object
+        test_path = Path("/tmp/test_file.txt")
+
+        plan = Plan(
+            plan_id="test-coerce-4",
+            realm="test",
+            scope={"kind": "test", "id": "test-4"},
+            steps=[
+                StepSpec(
+                    step_id="path_obj_step",
+                    name="path_obj_step",
+                    fn_ref="m:path_obj_step",
+                    params={"file_path": test_path},
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan)
+
+        # Verify Path object preserved
+        self.assertIsInstance(received_params["file_path"], Path)
+        self.assertEqual(received_params["file_path"], test_path)
+
+    def test_fingerprint_includes_path_params(self):
+        """Test that fingerprints include path parameters correctly."""
+
+        def step_fn(ctx: StepContext, input_path: Path, **kwargs) -> StepResult:
+            return StepResult(artifacts=[])
+
+        step_fn._input_keys = {"input_path"}
+
+        # First execution
+        plan1 = Plan(
+            plan_id="test-fp-1",
+            realm="test",
+            scope={"kind": "test", "id": "test-fp-1"},
+            steps=[
+                StepSpec(
+                    step_id="fp_step",
+                    name="fp_step",
+                    fn_ref="m:fp_step",
+                    params={"input_path": "/data/file1.txt"},
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan1)
+
+        # Get first fingerprint
+        fp_file_1 = self.work_root / "test-fp-1" / "fp_step" / "success.fingerprint"
+        fp_1 = fp_file_1.read_text().strip()
+
+        # Second execution with different path
+        plan2 = Plan(
+            plan_id="test-fp-2",
+            realm="test",
+            scope={"kind": "test", "id": "test-fp-2"},
+            steps=[
+                StepSpec(
+                    step_id="fp_step",
+                    name="fp_step",
+                    fn_ref="m:fp_step",
+                    params={"input_path": "/data/file2.txt"},
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan2)
+
+        # Get second fingerprint
+        fp_file_2 = self.work_root / "test-fp-2" / "fp_step" / "success.fingerprint"
+        fp_2 = fp_file_2.read_text().strip()
+
+        # Different inputs should produce different fingerprints
+        self.assertNotEqual(fp_1, fp_2)
+
+    def test_signature_without_annotations_handled_gracefully(self):
+        """Test that functions without type annotations work correctly."""
+        received_params = {}
+
+        def step_fn(ctx, **kwargs):  # No type annotations
+            received_params["params"] = kwargs
+            return StepResult(artifacts=[])
+
+        plan = Plan(
+            plan_id="test-coerce-5",
+            realm="test",
+            scope={"kind": "test", "id": "test-5"},
+            steps=[
+                StepSpec(
+                    step_id="no_annot_step",
+                    name="no_annot_step",
+                    fn_ref="m:no_annot_step",
+                    params={"param1": "/some/path", "param2": 42},
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan)
+
+        # Verify params passed through (no coercion if no annotation)
+        self.assertEqual(received_params["params"]["param1"], "/some/path")
+        self.assertEqual(received_params["params"]["param2"], 42)
+
+    def test_coercion_with_optional_path_param(self):
+        """Test coercion with Optional[Path] parameters."""
+
+        received_params = {}
+
+        def step_fn(
+            ctx: StepContext, config_path: Path | None = None, **kwargs
+        ) -> StepResult:
+            received_params["config_path"] = config_path
+            return StepResult(artifacts=[])
+
+        plan = Plan(
+            plan_id="test-coerce-6",
+            realm="test",
+            scope={"kind": "test", "id": "test-6"},
+            steps=[
+                StepSpec(
+                    step_id="opt_path_step",
+                    name="opt_path_step",
+                    fn_ref="m:opt_path_step",
+                    params={"config_path": "/etc/config.yaml"},
+                    scope=None,
+                    deps=[],
+                    inputs={},
+                )
+            ],
+        )
+
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=step_fn):
+            self.engine.run(plan)
+
+        # Verify Optional[Path] was coerced
+        self.assertIsInstance(received_params["config_path"], Path)
+
+
 if __name__ == "__main__":
     unittest.main()
