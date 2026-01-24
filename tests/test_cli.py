@@ -113,7 +113,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_session.init_dev_mode.assert_called_once_with(True)
 
     def test_run_doc_mode_arguments(self):
-        """Test run-doc mode argument parsing."""
+        """Test run-doc mode defaults to --plan-only and calls create_plan_from_doc."""
         sys.argv = ["yggdrasil", "run-doc", "test_doc_id"]
 
         with (
@@ -124,17 +124,21 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
             mock_core_class.return_value = mock_core
 
             main()
 
-            # Verify run-doc mode was processed correctly
+            # Verify run-doc mode was processed correctly (defaults to plan-only)
             mock_core.setup_handlers.assert_called_once()
-            mock_core.run_once.assert_called_once_with(doc_id="test_doc_id")
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="test_doc_id",
+                force_overwrite=False,
+            )
             mock_session.init_manual_submit.assert_called_once_with(False)
 
     def test_run_doc_mode_with_manual_submit(self):
-        """Test run-doc mode with manual submit flag."""
+        """Test run-doc mode with manual submit flag uses plan-only."""
         sys.argv = ["yggdrasil", "run-doc", "test_doc_id", "--manual-submit"]
 
         with (
@@ -145,16 +149,20 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
             mock_core_class.return_value = mock_core
 
             main()
 
-            # Verify manual submit was set to True
+            # Verify manual submit was set to True and plan-only used
             mock_session.init_manual_submit.assert_called_once_with(True)
-            mock_core.run_once.assert_called_once_with(doc_id="test_doc_id")
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="test_doc_id",
+                force_overwrite=False,
+            )
 
     def test_run_doc_mode_short_manual_submit_flag(self):
-        """Test run-doc mode with short -m flag."""
+        """Test run-doc mode with short -m flag defaults to plan-only."""
         sys.argv = ["yggdrasil", "run-doc", "test_doc_id", "-m"]
 
         with (
@@ -165,12 +173,14 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
             mock_core_class.return_value = mock_core
 
             main()
 
             # Verify manual submit was set to True
             mock_session.init_manual_submit.assert_called_once_with(True)
+            mock_core.create_plan_from_doc.assert_called_once()
 
     def test_run_doc_missing_doc_id(self):
         """Test run-doc mode without document ID."""
@@ -368,8 +378,8 @@ class TestYggdrasilCLI(unittest.TestCase):
     # =====================================================
 
     def test_run_doc_mode_full_flow(self):
-        """Test complete run-doc mode execution flow."""
-        sys.argv = ["yggdrasil", "run-doc", "test_document_id"]
+        """Test complete run-doc mode execution flow with explicit --plan-only."""
+        sys.argv = ["yggdrasil", "run-doc", "test_document_id", "--plan-only"]
 
         with (
             patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
@@ -379,14 +389,18 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
             mock_core_class.return_value = mock_core
 
             main()
 
-            # Verify complete run-doc flow
+            # Verify complete run-doc flow (plan-only mode)
             mock_session.init_manual_submit.assert_called_once_with(False)
             mock_core.setup_handlers.assert_called_once()
-            mock_core.run_once.assert_called_once_with(doc_id="test_document_id")
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="test_document_id",
+                force_overwrite=False,
+            )
 
             # Verify watchers are NOT set up in run-doc mode
             mock_core.setup_watchers.assert_not_called()
@@ -404,12 +418,16 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
             mock_core_class.return_value = mock_core
 
             main()
 
             # Verify special characters are passed correctly
-            mock_core.run_once.assert_called_once_with(doc_id=special_doc_id)
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id=special_doc_id,
+                force_overwrite=False,
+            )
 
     # =====================================================
     # ERROR HANDLING TESTS
@@ -553,6 +571,7 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_integration_123"
             mock_core_class.return_value = mock_core
 
             main()
@@ -565,7 +584,10 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_core_class.assert_called_once_with(self.mock_config)
             mock_core.setup_handlers.assert_called_once()
             mock_session.init_manual_submit.assert_called_once_with(True)
-            mock_core.run_once.assert_called_once_with(doc_id="integration_test_doc")
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="integration_test_doc",
+                force_overwrite=False,
+            )
 
     def test_minimal_daemon_invocation(self):
         """Test minimal daemon mode invocation."""
@@ -589,7 +611,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             )  # Default dev=False
 
     def test_minimal_run_doc_invocation(self):
-        """Test minimal run-doc mode invocation."""
+        """Test minimal run-doc mode invocation defaults to plan-only."""
         sys.argv = ["yggdrasil", "run-doc", "minimal_doc"]
 
         with (
@@ -599,13 +621,16 @@ class TestYggdrasilCLI(unittest.TestCase):
         ):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
-            mock_core_class.return_value = Mock()
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_minimal_123"
+            mock_core_class.return_value = mock_core
 
             main()
 
-            # Verify minimal setup works
+            # Verify minimal setup works (defaults to plan-only)
             mock_session.init_dev_mode.assert_called_once_with(False)
             mock_session.init_manual_submit.assert_called_once_with(False)
+            mock_core.create_plan_from_doc.assert_called_once()
 
     def test_command_line_order_independence(self):
         """Test that global flags must come before subcommands (argparse behavior)."""
@@ -626,7 +651,9 @@ class TestYggdrasilCLI(unittest.TestCase):
         ):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
-            mock_core_class.return_value = Mock()
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
 
             main()
 
@@ -665,12 +692,16 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_empty_123"
             mock_core_class.return_value = mock_core
 
             main()
 
             # Even empty string should be passed through
-            mock_core.run_once.assert_called_once_with(doc_id="")
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="",
+                force_overwrite=False,
+            )
 
     def test_very_long_doc_id(self):
         """Test run-doc mode with very long document ID."""
@@ -685,12 +716,16 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             mock_config_loader.return_value.load_config.return_value = self.mock_config
             mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_long_123"
             mock_core_class.return_value = mock_core
 
             main()
 
             # Long document ID should be handled
-            mock_core.run_once.assert_called_once_with(doc_id=long_doc_id)
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id=long_doc_id,
+                force_overwrite=False,
+            )
 
     def test_daemon_mode_with_manual_submit_error(self):
         """Test daemon mode doesn't have manual_submit attribute (defensive code coverage)."""
@@ -742,6 +777,275 @@ class TestYggdrasilCLI(unittest.TestCase):
             # Verify main() executed correctly
             mock_config_loader.assert_called_once()
             mock_core_class.assert_called_once()
+
+
+class TestRunDocModeFlags(unittest.TestCase):
+    """
+    Tests for the new run-doc mode flags introduced in Phase 3:
+    - --plan-only (-p): Create plan only, no execution
+    - --run-once (-r): Create and execute plan via scoped watcher
+    - --force (-f): Overwrite existing plan without confirmation
+    """
+
+    def setUp(self):
+        """Set up test fixtures and reset global state."""
+        from lib.core_utils.ygg_session import YggSession
+
+        YggSession._YggSession__dev_mode = False  # type: ignore
+        YggSession._YggSession__dev_already_set = False  # type: ignore
+        YggSession._YggSession__manual_submit = False  # type: ignore
+        YggSession._YggSession__manual_already_set = False  # type: ignore
+
+        self.original_argv = sys.argv.copy()
+        self.mock_config = {"test": "config"}
+
+    def tearDown(self):
+        """Clean up after each test."""
+        sys.argv = self.original_argv
+        from lib.core_utils.ygg_session import YggSession
+
+        YggSession._YggSession__dev_mode = False  # type: ignore
+        YggSession._YggSession__dev_already_set = False  # type: ignore
+        YggSession._YggSession__manual_submit = False  # type: ignore
+        YggSession._YggSession__manual_already_set = False  # type: ignore
+
+    def test_run_doc_without_mode_defaults_to_plan_only(self):
+        """Test that run-doc without mode flag defaults to --plan-only."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            # Should call create_plan_from_doc (plan-only mode)
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=False,
+            )
+            # Should NOT call run_once_with_watcher
+            mock_core.run_once_with_watcher.assert_not_called()
+
+    def test_run_doc_plan_only_flag(self):
+        """Test explicit --plan-only flag."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--plan-only"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=False,
+            )
+
+    def test_run_doc_plan_only_short_flag(self):
+        """Test short -p flag for plan-only mode."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "-p"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_core.create_plan_from_doc.assert_called_once()
+
+    def test_run_doc_run_once_flag(self):
+        """Test --run-once flag calls run_once_with_watcher."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--run-once"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.run_once_with_watcher.return_value = 0  # Success exit code
+            mock_core_class.return_value = mock_core
+
+            # run_once mode raises SystemExit with the return code
+            with self.assertRaises(SystemExit) as context:
+                main()
+            self.assertEqual(context.exception.code, 0)
+
+            # Should call run_once_with_watcher with timeout_seconds
+            mock_core.run_once_with_watcher.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=False,
+                timeout_seconds=1800,  # Default timeout
+            )
+            # Should NOT call create_plan_from_doc
+            mock_core.create_plan_from_doc.assert_not_called()
+
+    def test_run_doc_run_once_short_flag(self):
+        """Test short -r flag for run-once mode."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "-r"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.run_once_with_watcher.return_value = 0  # Success exit code
+            mock_core_class.return_value = mock_core
+
+            # run_once mode raises SystemExit with the return code
+            with self.assertRaises(SystemExit) as context:
+                main()
+            self.assertEqual(context.exception.code, 0)
+
+            mock_core.run_once_with_watcher.assert_called_once()
+
+    def test_run_doc_plan_only_and_run_once_mutually_exclusive(self):
+        """Test that --plan-only and --run-once are mutually exclusive."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--plan-only", "--run-once"]
+
+        with self.assertRaises(SystemExit) as context:
+            with patch("sys.stderr", new_callable=StringIO):
+                main()
+
+        # argparse exits with code 2 for mutually exclusive violations
+        self.assertEqual(context.exception.code, 2)
+
+    def test_run_doc_force_flag_with_plan_only(self):
+        """Test --force flag is passed to create_plan_from_doc."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--plan-only", "--force"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=True,
+            )
+
+    def test_run_doc_force_flag_with_run_once(self):
+        """Test --force flag is passed to run_once_with_watcher."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--run-once", "--force"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.run_once_with_watcher.return_value = 0  # Success exit code
+            mock_core_class.return_value = mock_core
+
+            # run_once mode raises SystemExit with the return code
+            with self.assertRaises(SystemExit) as context:
+                main()
+            self.assertEqual(context.exception.code, 0)
+
+            mock_core.run_once_with_watcher.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=True,
+                timeout_seconds=1800,  # Default timeout
+            )
+
+    def test_run_doc_force_short_flag(self):
+        """Test short -f flag for force overwrite."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "-p", "-f"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=True,
+            )
+
+    def test_run_doc_plan_creation_failure_exits_with_error(self):
+        """Test that plan creation failure (returns None) exits with code 1."""
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--plan-only"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = None  # Failure case
+            mock_core_class.return_value = mock_core
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+
+    def test_run_doc_all_flags_combined(self):
+        """Test combining multiple flags: --plan-only --force --manual-submit."""
+        sys.argv = [
+            "yggdrasil",
+            "run-doc",
+            "P12345",
+            "--plan-only",
+            "--force",
+            "--manual-submit",
+        ]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession") as mock_session,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_session.init_manual_submit.assert_called_once_with(True)
+            mock_core.create_plan_from_doc.assert_called_once_with(
+                doc_id="P12345",
+                force_overwrite=True,
+            )
 
 
 if __name__ == "__main__":
