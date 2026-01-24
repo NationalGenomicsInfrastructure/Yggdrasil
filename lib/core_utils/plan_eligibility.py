@@ -31,6 +31,13 @@ def is_plan_eligible(plan_doc: dict[str, Any]) -> bool:
 
     Manual re-runs work by incrementing run_token.
 
+    Note:
+        This function does NOT check `execution_authority` or `execution_owner`.
+        Those fields are used for ownership filtering in PlanWatcher, not
+        eligibility. A daemon watcher filters by authority="daemon"; a run-once
+        CLI filters by authority="run_once" and its specific owner token.
+        This separation keeps eligibility logic pure and reusable.
+
     Args:
         plan_doc: Plan document from yggdrasil_plans DB
 
