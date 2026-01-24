@@ -2,6 +2,7 @@ import asyncio
 import importlib.metadata
 import logging
 import os
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from lib.core_utils.plan_eligibility import is_plan_eligible
 from lib.core_utils.singleton_decorator import singleton
 from lib.couchdb.plan_db_manager import PlanDBManager
+from lib.couchdb.project_db_manager import ProjectDBManager
 from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
 
@@ -24,6 +26,18 @@ from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 
 # from lib.core_utils.event_types import EventType
+
+
+def _generate_run_once_owner() -> str:
+    """
+    Generate unique execution owner token for run-once invocation.
+
+    Format: run_once:<uuid4>
+
+    This token uniquely identifies a CLI session, ensuring concurrent
+    run-once invocations don't interfere with each other.
+    """
+    return f"run_once:{uuid.uuid4()}"
 
 
 @singleton
@@ -69,7 +83,14 @@ class YggdrasilCore:
 
         self._logger.info("YggdrasilCore initialized.")
 
-    def _persist_plan_draft(self, draft: PlanDraft, handler_realm: str) -> str:
+    def _persist_plan_draft(
+        self,
+        draft: PlanDraft,
+        handler_realm: str,
+        *,
+        execution_authority: str = "daemon",
+        execution_owner: str | None = None,
+    ) -> str:
         """
         Persist a PlanDraft to the yggdrasil_plans database.
 
@@ -79,26 +100,29 @@ class YggdrasilCore:
         Args:
             draft: The PlanDraft returned by the handler
             handler_realm: The realm_id from the handler that generated this draft
+            execution_authority: Who owns execution - "daemon" (default) or "run_once"
+            execution_owner: Unique token for run_once isolation (e.g., "run_once:<uuid>")
 
         Returns:
             str: The database document ID of the persisted plan
         """
-        plan_db = PlanDBManager()
-
-        plan_doc_id = plan_db.save_plan(
+        plan_doc_id = self.plan_dbm.save_plan(
             plan=draft.plan,
             realm=handler_realm,
             scope=draft.plan.scope,
             auto_run=draft.auto_run,
+            execution_authority=execution_authority,
+            execution_owner=execution_owner,
             preview=draft.preview,
             notes=draft.notes,
         )
 
         self._logger.info(
-            "Persisted plan '%s' to yggdrasil_plans (realm=%s, auto_run=%s)",
+            "Persisted plan '%s' to yggdrasil_plans (realm=%s, auto_run=%s, authority=%s)",
             plan_doc_id,
             handler_realm,
             draft.auto_run,
+            execution_authority,
         )
 
         return plan_doc_id
@@ -106,16 +130,22 @@ class YggdrasilCore:
     def _init_db_managers(self):
         """
         Initializes database managers or other central resources.
-        You can also place HPC or Prefect orchestrator initialization here.
+
+        Managers initialized:
+        - pdm: ProjectDBManager for 'projects' database
+        - ydm: YggdrasilDBManager for 'yggdrasil' database
+        - plan_dbm: PlanDBManager for 'yggdrasil_plans' database
+
+        All managers share the singleton CouchDBConnectionManager, so this
+        is safe and efficient for both daemon and CLI modes.
         """
         self._logger.info("Initializing DB managers...")
 
-        # Example usage
-        from lib.couchdb.project_db_manager import ProjectDBManager
         from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 
         self.pdm = ProjectDBManager()
         self.ydm = YggdrasilDBManager()
+        self.plan_dbm = PlanDBManager()
 
         self._logger.info("DB managers initialized.")
 
@@ -393,7 +423,11 @@ class YggdrasilCore:
 
     def _setup_plan_watcher(self) -> None:
         """
-        Set up the PlanWatcher to monitor yggdrasil_plans for approved plans.
+        Set up the PlanWatcher for daemon mode.
+
+        The daemon's PlanWatcher is configured to only process plans with
+        execution_authority='daemon', skipping 'run_once' plans which are
+        managed by their respective CLI sessions.
 
         The watcher emits PLAN_EXECUTION_EVENT for eligible plans, which
         triggers execute_approved_plan() via handle_plan_execution_event().
@@ -403,11 +437,15 @@ class YggdrasilCore:
         plan_watcher = PlanWatcher(
             on_event=self._handle_plan_execution_event,
             poll_interval_sec=poll_interval,
+            execution_authority_filter="daemon",  # Skip run_once plans
             logger=self._logger,
         )
         self.register_watcher(plan_watcher)
         self._plan_watcher = plan_watcher  # Keep reference for recovery
-        self._logger.info("Registered PlanWatcher (poll_interval=%.1fs)", poll_interval)
+        self._logger.info(
+            "Registered PlanWatcher for daemon mode (poll_interval=%.1fs, authority_filter='daemon')",
+            poll_interval,
+        )
 
     def _handle_plan_execution_event(self, event: YggdrasilEvent) -> None:
         """
@@ -458,12 +496,10 @@ class YggdrasilCore:
             plan_doc_id: The plan document ID in yggdrasil_plans
             plan_doc: Optional plan document (if already fetched by watcher)
         """
-        plan_db = PlanDBManager()
-
         try:
             # Fetch plan document if not provided
             if plan_doc is None:
-                plan_doc = plan_db.fetch_plan(plan_doc_id)
+                plan_doc = self.plan_dbm.fetch_plan(plan_doc_id)
                 if not plan_doc:
                     self._logger.error(
                         "Plan document '%s' not found; cannot execute", plan_doc_id
@@ -478,7 +514,7 @@ class YggdrasilCore:
                 return
 
             # Get the Plan model for execution
-            plan = plan_db.fetch_plan_as_model(plan_doc_id)
+            plan = self.plan_dbm.fetch_plan_as_model(plan_doc_id)
             if not plan:
                 self._logger.error(
                     "Failed to deserialize plan '%s'; cannot execute", plan_doc_id
@@ -503,7 +539,7 @@ class YggdrasilCore:
             )
 
             # Update executed_run_token (marks as executed, prevents re-run)
-            success = plan_db.update_executed_token(plan_doc_id, run_token)
+            success = self.plan_dbm.update_executed_token(plan_doc_id, run_token)
             if success:
                 self._logger.info(
                     "Updated executed_run_token=%d for plan '%s'",
@@ -657,13 +693,11 @@ class YggdrasilCore:
         import os
         from pathlib import Path
 
-        from lib.couchdb.project_db_manager import ProjectDBManager
         from lib.ops.consumer import FileSpoolConsumer
         from lib.ops.sinks.couch import OpsWriter
 
         self._logger.info("run_once: fetching project %s", doc_id)
-        pdm = ProjectDBManager()
-        doc = pdm.fetch_document_by_id(doc_id)
+        doc = self.pdm.fetch_document_by_id(doc_id)
         if not doc:
             self._logger.error("No project with ID %s", doc_id)
             return
@@ -732,6 +766,545 @@ class YggdrasilCore:
         ).consume()
 
         self._logger.info("run_once: done.")
+
+    # --------------------------------------------------------------------------
+    # CLI Mode Methods (--plan-only, --run-once)
+    # --------------------------------------------------------------------------
+
+    def _check_plan_overwrite(
+        self,
+        plan_doc_id: str,
+        force: bool,
+    ) -> tuple[str, bool]:
+        """
+        Check if plan already exists and handle overwrite logic.
+
+        Uses the actual plan_doc_id (from draft.plan.plan_id) to ensure
+        the check matches the exact document that will be persisted.
+
+        Args:
+            plan_doc_id: The exact plan document ID to check
+            force: Whether to force overwrite
+
+        Returns:
+            tuple: (plan_doc_id, should_continue)
+                - should_continue=False means caller should abort
+        """
+        summary = self.plan_dbm.get_plan_summary(plan_doc_id)
+        if summary is None:
+            # No existing plan, proceed
+            return plan_doc_id, True
+
+        # Plan exists - display warning
+        self._logger.warning(
+            "\n╭─ Existing Plan Found ─────────────────────────────────────╮\n"
+            "│ Plan ID:    %s\n"
+            "│ Status:     %s\n"
+            "│ Origin:     %s\n"
+            "│ Updated:    %s\n"
+            "│ Run Token:  %d (executed: %d)\n"
+            "╰───────────────────────────────────────────────────────────╯",
+            plan_doc_id,
+            summary["status"],
+            summary["execution_authority"],
+            summary["updated_at"],
+            summary["run_token"],
+            summary["executed_run_token"],
+        )
+
+        if force:
+            self._logger.info("--force specified; overwriting existing plan.")
+            return plan_doc_id, True
+
+        # Not forced - abort
+        self._logger.error(
+            "Plan '%s' already exists. Use --force to overwrite.",
+            plan_doc_id,
+        )
+        return plan_doc_id, False
+
+    def create_plan_from_doc(
+        self,
+        doc_id: str,
+        *,
+        force_overwrite: bool = False,
+    ) -> str | None:
+        """
+        Create and persist a plan from a project document (no execution).
+
+        This is the --plan-only mode: creates a plan with execution_authority='daemon'
+        for later approval via Genstat and execution by the daemon.
+
+        Args:
+            doc_id: Project document ID
+            force_overwrite: If True, overwrite existing plan without prompting
+
+        Returns:
+            str: Plan document ID if successful, None otherwise
+        """
+        self._logger.info("create_plan_from_doc: fetching project %s", doc_id)
+        doc = self.pdm.fetch_document_by_id(doc_id)
+        if not doc:
+            self._logger.error("No project with ID %s", doc_id)
+            return None
+
+        handlers = self.subscriptions.get(EventType.PROJECT_CHANGE) or []
+        if not handlers:
+            self._logger.error(
+                "No handlers registered for %s", EventType.PROJECT_CHANGE.name
+            )
+            return None
+
+        plan_doc_id: str | None = None
+
+        # Process with first matching handler (typical case: one handler per event)
+        for handler in handlers:
+            try:
+                # Derive scope
+                if not (
+                    hasattr(handler, "derive_scope") and callable(handler.derive_scope)
+                ):
+                    self._logger.error(
+                        "Handler %s lacks derive_scope; skipping.",
+                        handler.class_qualified_name(),
+                    )
+                    continue
+
+                scope = handler.derive_scope(doc)
+                realm_id = getattr(handler, "realm_id", "unknown_realm")
+
+                # Build planning context
+                reason = f"plan-only:{doc.get('project_id') or doc_id}"
+                ctx = self._make_planning_ctx(handler, scope, doc=doc, reason=reason)
+                payload = {
+                    "doc": doc,
+                    "reason": reason,
+                    "planning_ctx": ctx,
+                }
+
+                # Generate plan draft FIRST (to get actual plan_doc_id)
+                self._logger.info(
+                    "Generating plan draft via %s", handler.class_qualified_name()
+                )
+                draft = handler.run_now(payload)
+
+                # Get the actual plan_doc_id from the draft (single source of truth)
+                actual_plan_doc_id = draft.plan.plan_id
+
+                # Check for existing plan using the ACTUAL plan_doc_id
+                _, should_continue = self._check_plan_overwrite(
+                    actual_plan_doc_id, force_overwrite
+                )
+                if not should_continue:
+                    return None
+
+                # Force draft status for plan-only mode
+                draft.auto_run = False
+
+                # Persist with daemon origin (for later daemon execution)
+                plan_doc_id = self._persist_plan_draft(
+                    draft,
+                    realm_id,
+                    execution_authority="daemon",
+                    execution_owner=None,
+                )
+                self._logger.info(
+                    "✓ Plan '%s' created (status=draft, authority=daemon). "
+                    "Awaiting approval via Genstat.",
+                    plan_doc_id,
+                )
+                break  # Only process first handler
+
+            except Exception as e:
+                self._logger.exception(
+                    "Handler %s raised during create_plan_from_doc: %s",
+                    handler.class_qualified_name(),
+                    e,
+                )
+
+        return plan_doc_id
+
+    def run_once_with_watcher(
+        self,
+        doc_id: str,
+        *,
+        force_overwrite: bool = False,
+        timeout_seconds: int = 1800,
+    ) -> int:
+        """
+        Create and execute plan(s) via scoped PlanWatcher (--run-once mode).
+
+        IMPORTANT: This method uses a single execution route via PlanWatcher
+        regardless of auto_run status. The watcher is the sole path to execution.
+
+        Creates plans for ALL matching handlers (not just the first).
+        Plans are executed when they become eligible as observed from the DB.
+
+        Args:
+            doc_id: Project document ID
+            force_overwrite: If True, overwrite existing plans without prompting
+            timeout_seconds: Maximum seconds to wait for approval (default 1800)
+
+        Returns:
+            int: Exit code (0=success, 1=error, 130=interrupted)
+        """
+        from lib.ops.consumer import FileSpoolConsumer
+        from lib.ops.sinks.couch import OpsWriter
+
+        # Generate unique owner token for this entire session
+        execution_owner = _generate_run_once_owner()
+        self._logger.info(
+            "run_once_with_watcher: session owner=%s, timeout=%ds",
+            execution_owner,
+            timeout_seconds,
+        )
+
+        # ─────────────────────────────────────────────────────────────────
+        # Phase 1: Fetch document and create plans for ALL matching handlers
+        # ─────────────────────────────────────────────────────────────────
+        doc = self.pdm.fetch_document_by_id(doc_id)
+        if not doc:
+            self._logger.error("No project with ID %s", doc_id)
+            return 1
+
+        handlers = self.subscriptions.get(EventType.PROJECT_CHANGE) or []
+        if not handlers:
+            self._logger.error(
+                "No handlers registered for %s", EventType.PROJECT_CHANGE.name
+            )
+            return 1
+
+        # Create plans for ALL handlers (not just first)
+        pending_plan_ids: list[str] = []
+
+        for handler in handlers:
+            plan_doc_id = self._create_run_once_plan_for_handler(
+                handler=handler,
+                doc=doc,
+                doc_id=doc_id,
+                execution_owner=execution_owner,
+                force_overwrite=force_overwrite,
+            )
+            if plan_doc_id:
+                pending_plan_ids.append(plan_doc_id)
+            # Continue to next handler even if one fails
+
+        if not pending_plan_ids:
+            self._logger.error("Failed to create any plans for doc_id=%s", doc_id)
+            return 1
+
+        self._logger.info(
+            "Created %d plan(s): %s",
+            len(pending_plan_ids),
+            ", ".join(pending_plan_ids),
+        )
+
+        # ─────────────────────────────────────────────────────────────────
+        # Phase 2: Start scoped watcher and wait for all plans to complete
+        # ─────────────────────────────────────────────────────────────────
+        exit_code = asyncio.run(
+            self._run_once_watcher_loop(
+                pending_plan_ids=pending_plan_ids,
+                execution_owner=execution_owner,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+
+        # ─────────────────────────────────────────────────────────────────
+        # Phase 3: Consume event spool
+        # ─────────────────────────────────────────────────────────────────
+        spool_root = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
+        self._logger.info("Consuming event spool at %s", spool_root)
+        FileSpoolConsumer(
+            spool_root,
+            OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops")),
+        ).consume()
+
+        return exit_code
+
+    def _create_run_once_plan_for_handler(
+        self,
+        handler: BaseHandler,
+        doc: dict[str, Any],
+        doc_id: str,
+        execution_owner: str,
+        force_overwrite: bool,
+    ) -> str | None:
+        """
+        Create a single plan for one handler in run-once mode.
+
+        IMPORTANT: Overwrite check uses the actual plan_doc_id from the draft,
+        NOT a scope-derived ID, to avoid divergence from persisted _id.
+
+        Args:
+            handler: The handler to generate the plan
+            doc: Source document
+            doc_id: Document ID (fallback for reason string)
+            execution_owner: Unique session token
+            force_overwrite: Whether to overwrite existing plans
+
+        Returns:
+            str: Plan document ID if successful, None otherwise
+        """
+        try:
+            if not (
+                hasattr(handler, "derive_scope") and callable(handler.derive_scope)
+            ):
+                self._logger.error(
+                    "Handler %s lacks derive_scope; skipping.",
+                    handler.class_qualified_name(),
+                )
+                return None
+
+            scope = handler.derive_scope(doc)
+            realm_id = getattr(handler, "realm_id", "unknown_realm")
+
+            # Build planning context
+            reason = f"run-once:{doc.get('project_id') or doc_id}"
+            ctx = self._make_planning_ctx(handler, scope, doc=doc, reason=reason)
+            payload = {
+                "doc": doc,
+                "reason": reason,
+                "planning_ctx": ctx,
+            }
+
+            # Generate plan draft FIRST (to get actual plan_doc_id)
+            self._logger.info(
+                "Generating plan draft via %s", handler.class_qualified_name()
+            )
+            draft = handler.run_now(payload)
+
+            # Get the actual plan_doc_id from the draft (single source of truth)
+            plan_doc_id = draft.plan.plan_id
+
+            # Check for existing plan using the ACTUAL plan_doc_id
+            _, should_continue = self._check_plan_overwrite(
+                plan_doc_id, force_overwrite
+            )
+            if not should_continue:
+                return None
+
+            # Persist with run_once origin and our owner token
+            # NOTE: auto_run determines status (approved/draft), but we do NOT
+            # branch on it for execution - watcher handles all execution
+            persisted_id = self._persist_plan_draft(
+                draft,
+                realm_id,
+                execution_authority="run_once",
+                execution_owner=execution_owner,
+            )
+            self._logger.info(
+                "Plan '%s' created (realm=%s, status=%s, owner=%s)",
+                persisted_id,
+                realm_id,
+                "approved" if draft.auto_run else "draft",
+                execution_owner,
+            )
+            return persisted_id
+
+        except Exception as e:
+            self._logger.exception(
+                "Handler %s raised during plan creation: %s",
+                handler.class_qualified_name(),
+                e,
+            )
+            return None
+
+    async def _run_once_watcher_loop(
+        self,
+        pending_plan_ids: list[str],
+        execution_owner: str,
+        timeout_seconds: int,
+    ) -> int:
+        """
+        Run scoped watcher loop until all plans complete, timeout, or interrupt.
+
+        IMPORTANT: This is the SOLE execution path for run-once mode.
+        Whether auto_run=True or False, plans are executed here when eligible.
+
+        Completion is tracked in session-local memory only. The following
+        behaviors are explicitly prohibited:
+        - Writing completion markers back to the plan document
+        - Modifying executed_run_token for plans not executed by this process
+        - Updating plan status during ownership transfer detection
+
+        Args:
+            pending_plan_ids: List of plan doc IDs to track
+            execution_owner: Our unique session token
+            timeout_seconds: Max wait time
+
+        Returns:
+            int: Exit code (0=all completed, 1=error/timeout, 130=interrupted)
+        """
+        import signal
+
+        # Track completion: plan_doc_id -> completed (True/False)
+        # This is SESSION-LOCAL state only; never persisted to DB
+        completion_status: dict[str, bool] = {pid: False for pid in pending_plan_ids}
+        completion_event = asyncio.Event()
+        interrupted = False
+        error_occurred = False
+
+        def on_plan_eligible(event: YggdrasilEvent) -> None:
+            """
+            Callback when watcher detects an eligible plan.
+
+            Validates ownership, executes if still ours, updates local completion.
+            """
+            nonlocal error_occurred
+
+            payload = event.payload or {}
+            plan_doc_id = payload.get("plan_doc_id")
+            plan_doc = payload.get("plan_doc")
+
+            # IMPORTANT: Ignore plans not created in THIS session.
+            # This prevents "owner collision" side effects (unlikely with UUID, but safe).
+            if plan_doc_id not in completion_status:
+                self._logger.debug(
+                    "Ignoring event for plan not in this session: %s", plan_doc_id
+                )
+                return
+
+            if completion_status[plan_doc_id]:
+                # Already completed (locally)
+                return
+
+            # Fetch fresh doc to verify ownership (source of truth)
+            if plan_doc is None:
+                plan_doc = self.plan_dbm.fetch_plan(plan_doc_id)
+
+            if not plan_doc:
+                self._logger.error("Plan '%s' not found in DB", plan_doc_id)
+                error_occurred = True
+                completion_status[plan_doc_id] = True
+                _check_all_completed()
+                return
+
+            # Check if ownership was transferred (Genstat changed execution_authority)
+            if plan_doc.get("execution_authority") != "run_once":
+                self._logger.info(
+                    "Plan '%s' transferred to daemon; marking completed (no action)",
+                    plan_doc_id,
+                )
+                # Do NOT write anything to DB; just mark locally completed
+                completion_status[plan_doc_id] = True
+                _check_all_completed()
+                return
+
+            if plan_doc.get("execution_owner") != execution_owner:
+                self._logger.warning(
+                    "Plan '%s' owner changed to '%s'; marking completed (no action)",
+                    plan_doc_id,
+                    plan_doc.get("execution_owner"),
+                )
+                completion_status[plan_doc_id] = True
+                _check_all_completed()
+                return
+
+            # Re-verify eligibility from DB (source of truth)
+            if not is_plan_eligible(plan_doc):
+                self._logger.debug(
+                    "Plan '%s' no longer eligible; will retry on next poll",
+                    plan_doc_id,
+                )
+                return
+
+            # Execute!
+            self._logger.info("Executing plan '%s' via Engine...", plan_doc_id)
+            try:
+                plan = self.plan_dbm.fetch_plan_as_model(plan_doc_id)
+                if not plan:
+                    self._logger.error("Failed to deserialize plan '%s'", plan_doc_id)
+                    error_occurred = True
+                    completion_status[plan_doc_id] = True
+                    _check_all_completed()
+                    return
+
+                run_token = plan_doc.get("run_token", 0)
+                self.engine.run(plan)
+                self._logger.info("✓ Plan '%s' execution completed", plan_doc_id)
+
+                # Update executed token (we DID execute this plan)
+                self.plan_dbm.update_executed_token(plan_doc_id, run_token)
+                completion_status[plan_doc_id] = True
+                _check_all_completed()
+
+            except Exception as exc:
+                self._logger.exception(
+                    "Plan '%s' execution failed: %s", plan_doc_id, exc
+                )
+                error_occurred = True
+                completion_status[plan_doc_id] = True
+                _check_all_completed()
+
+        def _check_all_completed() -> None:
+            """Signal completion_event if all plans are done."""
+            if all(completion_status.values()):
+                completion_event.set()
+
+        # Create scoped watcher (filters by execution_owner only)
+        scoped_watcher = PlanWatcher(
+            on_event=on_plan_eligible,
+            poll_interval_sec=2.0,  # Responsive for interactive use
+            execution_owner_filter=execution_owner,
+            # NOTE: No execution_authority_filter; we check origin in callback
+            logger=self._logger,
+        )
+
+        # Handle Ctrl+C
+        def handle_interrupt(signum: int, frame: Any) -> None:
+            nonlocal interrupted
+            interrupted = True
+            completion_event.set()
+
+        original_handler = signal.signal(signal.SIGINT, handle_interrupt)
+
+        try:
+            # Start watcher task
+            watcher_task = asyncio.create_task(scoped_watcher.start())
+
+            # Wait with timeout
+            try:
+                await asyncio.wait_for(
+                    completion_event.wait(),
+                    timeout=float(timeout_seconds),
+                )
+            except TimeoutError:
+                pending = [pid for pid, done in completion_status.items() if not done]
+                self._logger.error(
+                    "Timeout after %ds waiting for plans: %s\n"
+                    "Plans left in DB for manual handling.",
+                    timeout_seconds,
+                    ", ".join(pending),
+                )
+                await scoped_watcher.stop()
+                watcher_task.cancel()
+                try:
+                    await watcher_task
+                except asyncio.CancelledError:
+                    pass
+                return 1
+
+            # Stop watcher
+            await scoped_watcher.stop()
+            watcher_task.cancel()
+            try:
+                await watcher_task
+            except asyncio.CancelledError:
+                pass
+
+            if interrupted:
+                pending = [pid for pid, done in completion_status.items() if not done]
+                self._logger.info(
+                    "\nInterrupted. Plan(s) left in current state: %s",
+                    ", ".join(pending) if pending else "(all completed)",
+                )
+                return 130  # Standard SIGINT exit code
+
+            return 1 if error_occurred else 0
+
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
 
     def handle_event(self, event: YggdrasilEvent) -> None:
         """
