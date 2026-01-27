@@ -330,6 +330,9 @@ class YggdrasilCore:
         # cli_handler = CLIHandler()
         # self.register_handler(EventType.<whatever>, cli_handler)
 
+        # 3. Register test realm handler (dev mode only)
+        self._register_test_realm_handler()
+
         # Pretty summary: EVENT_TYPE(count, ...)
         if not getattr(self, "subscriptions", None):
             self._logger.warning("No handler subscriptions found.")
@@ -341,6 +344,31 @@ class YggdrasilCore:
         )
         self._logger.debug("Handler Registrations: %s", summary)
 
+    def _register_test_realm_handler(self) -> None:
+        """
+        Register the test realm handler if running in dev mode.
+
+        The test realm provides controllable test scenarios for validating
+        the execution pipeline. Only available with --dev flag.
+        """
+        from lib.realms.test_realm import get_handler, is_test_realm_enabled
+
+        if not is_test_realm_enabled():
+            self._logger.debug("Test realm disabled (not in dev mode)")
+            return
+
+        handler = get_handler()
+        if handler is None:
+            self._logger.warning("Test realm enabled but handler creation failed")
+            return
+
+        self._derive_realm_id(handler)
+        self.register_handler(EventType.TEST_SCENARIO_CHANGE, handler)
+        self._logger.info(
+            "✓  registered internal handler 'test_realm' for event type '%s' (dev mode)",
+            EventType.TEST_SCENARIO_CHANGE.name,
+        )
+
     def setup_watchers(self):
         """
         Calls specialized methods to set up watchers of different types
@@ -350,8 +378,30 @@ class YggdrasilCore:
         self._setup_fs_watchers()
         self._setup_plan_watcher()
         # self._setup_cdb_watchers()
+        self._setup_test_realm_watcher()
         # Potentially more: self._setup_hpc_watchers(), etc.
         self._logger.info("Watchers setup done.")
+
+    def _setup_test_realm_watcher(self) -> None:
+        """
+        Set up the test realm watcher if running in dev mode.
+
+        The test realm watcher monitors the yggdrasil database for
+        documents with type="ygg_test_scenario".
+        """
+        from lib.realms.test_realm import get_watcher, is_test_realm_enabled
+
+        if not is_test_realm_enabled():
+            self._logger.debug("Test realm watcher disabled (not in dev mode)")
+            return
+
+        watcher = get_watcher(on_event=self.handle_event, logger=self._logger)
+        if watcher is None:
+            self._logger.warning("Test realm enabled but watcher creation failed")
+            return
+
+        self.register_watcher(watcher)
+        self._logger.info("✓  registered ScenarioDocWatcher for test realm (dev mode)")
 
     def _setup_fs_watchers(self):
         """
@@ -531,8 +581,9 @@ class YggdrasilCore:
                 run_token,
             )
 
-            # Execute via Engine
-            self.engine.run(plan)
+            # Execute via Engine in a thread pool to avoid blocking the event loop.
+            # This keeps watchers responsive during long-running plan executions.
+            await asyncio.to_thread(self.engine.run, plan)
 
             self._logger.info(
                 "✓ Plan '%s' execution completed successfully", plan_doc_id
@@ -1357,13 +1408,13 @@ class YggdrasilCore:
                     handler, scope, doc=doc, reason=reason
                 )
 
-                # NEW: Schedule async plan generation and execution
+                # Schedule async plan generation (PlanWatcher handles execution)
                 self._logger.debug(
                     "Scheduling plan generation for %s via %s",
                     event.event_type,
                     handler.class_qualified_name(),
                 )
-                asyncio.create_task(self._generate_and_execute_plan(handler, payload))
+                asyncio.create_task(self._generate_and_persist_plan(handler, payload))
 
             except Exception as exc:
                 self._logger.error(
@@ -1371,15 +1422,21 @@ class YggdrasilCore:
                     exc_info=True,
                 )
 
-    async def _generate_and_execute_plan(
+    async def _generate_and_persist_plan(
         self, handler: BaseHandler, payload: dict[str, Any]
     ) -> None:
         """
-        Orchestrate the full plan lifecycle:
-        1. Generate plan draft from handler
-        2. Persist to database
-        3. Check approval status (if needed)
-        4. Execute via Engine (if approved)
+        Generate and persist a plan from a handler (daemon mode).
+
+        In daemon mode, this method ONLY generates and persists the plan.
+        Execution is handled exclusively by PlanWatcher, which detects
+        eligible plans (approved + run_token > executed_run_token) and
+        triggers execution via _execute_approved_plan().
+
+        This separation ensures:
+        - Single execution path (no double-execution bugs)
+        - Consistent execution tracking via executed_run_token
+        - Proper support for approval workflows
 
         Args:
             handler: The handler that will generate the plan
@@ -1393,48 +1450,32 @@ class YggdrasilCore:
             draft = await handler.generate_plan_draft(payload)
 
             # Step 2: Persist plan to database
+            # PlanWatcher will detect eligible plans and trigger execution
             realm_id = getattr(handler, "realm_id", "unknown_realm")
             plan_doc_id = self._persist_plan_draft(draft, realm_id)
-            self._logger.info(
-                "Persisted plan '%s' (auto_run=%s, approvals_required=%s)",
-                plan_doc_id,
-                draft.auto_run,
-                draft.approvals_required,
-            )
 
-            # Step 3: Execute immediately only if auto_run=True
             if draft.auto_run:
                 self._logger.info(
-                    "Plan '%s' marked for auto-run; executing via Engine (realm=%s)",
+                    "Plan '%s' persisted (status=approved, auto_run=True). ",
                     plan_doc_id,
-                    realm_id,
                 )
-                self.engine.run(draft.plan)
             else:
                 self._logger.info(
-                    "Plan '%s' persisted and awaiting approval (approvals_required=%s)",
+                    "Plan '%s' persisted (status=draft). "
+                    "Awaiting for approval (approvals_required=%s).",
                     plan_doc_id,
                     draft.approvals_required,
                 )
-                # TODO: When approval arrives via CouchDB change watcher:
-                # 1. Watcher detects plan doc with status='approved'
-                # 2. Watcher calls: core.execute_approved_plan(plan_doc_id)
-                # 3. Core fetches plan from DB, deserializes, executes via Engine
-                return
-            self._logger.info(
-                "✓ Plan '%s' execution completed successfully", plan_doc_id
-            )
 
-            # NOTE: Execution tracking happens via @step decorator emissions to ops DB.
-            # Plan document remains immutable metadata; do not update status here.
+            # NOTE: No inline execution here. PlanWatcher handles all execution
+            # in daemon mode, ensuring single execution path and proper tracking.
 
         except Exception as exc:
             self._logger.exception(
-                "Failed to generate/execute plan via %s: %s",
+                "Failed to generate/persist plan via %s: %s",
                 handler.class_qualified_name(),
                 exc,
             )
-            # NOTE: Failure tracking also happens via step events/ops consumer
 
     # ---------------------------------
     # CLI or Semi-Automatic calls
