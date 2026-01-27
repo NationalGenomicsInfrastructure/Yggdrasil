@@ -119,6 +119,16 @@ class WatcherCheckpointStore:
         try:
             # Fetch current document to get _rev
             current_doc = self.db_handler.fetch_document_by_id(doc_id)
+
+            # No-op if the checkpoint is unchanged to avoid futile writes
+            if current_doc and current_doc.get("last_seq") == seq:
+                self._logger.debug(
+                    "Checkpoint for '%s' unchanged (seq='%s'); skipping save",
+                    self.watcher_name,
+                    seq,
+                )
+                return True
+
             rev = None
             if current_doc and "_rev" in current_doc:
                 rev = current_doc["_rev"]
