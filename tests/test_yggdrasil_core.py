@@ -508,7 +508,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # EVENT HANDLING TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_execute_plan")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_persist_plan")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_handle_event_with_registered_handler(
         self, mock_init_db, mock_generate_plan
@@ -528,7 +528,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Act - handle_event schedules async task
         core.handle_event(self.test_event)
 
-        # Assert - _generate_and_execute_plan should have been scheduled
+        # Assert - _generate_and_persist_plan should have been scheduled
         # Note: asyncio.create_task is called, so we just check it was attempted
         # The event has 'scope' in payload, so derive_scope is NOT called
         self.mock_logger.info.assert_called()
@@ -547,7 +547,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_logger.info.assert_called()
         self.mock_logger.warning.assert_called()
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_execute_plan")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_persist_plan")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_handle_event_handler_exception(self, mock_init_db, mock_generate_plan):
         """Test event handling when _make_planning_ctx raises exception."""
@@ -1327,12 +1327,12 @@ class TestYggdrasilCore(unittest.TestCase):
         core.plan_dbm.save_plan.assert_not_called()
 
     # =====================================================
-    # GENERATE_AND_EXECUTE_PLAN TESTS
+    # GENERATE_AND_PERSIST_PLAN TESTS
     # =====================================================
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_generate_and_execute_plan_auto_run_true(self, mock_init_db):
-        """Test generating and executing plan when auto_run=True."""
+    def test_generate_and_persist_plan_auto_run_true(self, mock_init_db):
+        """Test generating and persisting plan when auto_run=True."""
 
         async def test_generate():
             # Arrange
@@ -1362,16 +1362,16 @@ class TestYggdrasilCore(unittest.TestCase):
             payload = {"planning_ctx": Mock()}
 
             # Act
-            await core._generate_and_execute_plan(mock_handler, payload)
+            await core._generate_and_persist_plan(mock_handler, payload)
 
             # Assert
             core.plan_dbm.save_plan.assert_called_once()
-            core.engine.run.assert_called_once_with(mock_plan)
+            core.engine.run.assert_not_called()  # Daemon mode: no inline execution
 
         asyncio.run(test_generate())
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_generate_and_execute_plan_auto_run_false(self, mock_init_db):
+    def test_generate_and_persist_plan_auto_run_false(self, mock_init_db):
         """Test generating plan when auto_run=False (awaiting approval)."""
 
         async def test_generate():
@@ -1401,7 +1401,7 @@ class TestYggdrasilCore(unittest.TestCase):
             payload = {"planning_ctx": Mock()}
 
             # Act
-            await core._generate_and_execute_plan(mock_handler, payload)
+            await core._generate_and_persist_plan(mock_handler, payload)
 
             # Assert
             core.plan_dbm.save_plan.assert_called_once()
@@ -1410,7 +1410,7 @@ class TestYggdrasilCore(unittest.TestCase):
         asyncio.run(test_generate())
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_generate_and_execute_plan_handler_exception(self, mock_init_db):
+    def test_generate_and_persist_plan_handler_exception(self, mock_init_db):
         """Test handling exception during plan generation."""
 
         async def test_generate():
@@ -1426,7 +1426,7 @@ class TestYggdrasilCore(unittest.TestCase):
             payload = {"planning_ctx": Mock()}
 
             # Act
-            await core._generate_and_execute_plan(mock_handler, payload)
+            await core._generate_and_persist_plan(mock_handler, payload)
 
             # Assert - should log exception
             self.mock_logger.exception.assert_called()

@@ -101,11 +101,11 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         config = {"work_root": self.work_root}
         core = YggdrasilCore(config)
 
-        # Simulate the flow that happens in _generate_and_execute_plan
-        # when auto_run=True
+        # Simulate the flow that happens in _generate_and_persist_plan
+        # followed by PlanWatcher detecting the eligible plan
 
         # The key assertion: when auto_run=True, engine.run should be called
-        # This simulates what YggdrasilCore does
+        # (by PlanWatcher, not inline - but we simulate the execution here)
         if draft.auto_run:
             core.engine.run(draft.plan)
 
