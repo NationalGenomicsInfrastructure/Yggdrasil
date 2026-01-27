@@ -17,7 +17,7 @@ from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
 from yggdrasil.flow.utils.typing_coerce import coerce_params_to_signature_types
 from yggdrasil.flow.utils.ygg_time import utcnow_compact, utcnow_iso
 
-logger = logging.getLogger("yggdrasil.flow.engine")
+logger = logging.getLogger("yggdrasil.core.engine")
 
 
 # ------------ Utilities ------------
