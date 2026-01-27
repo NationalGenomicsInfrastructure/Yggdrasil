@@ -10,7 +10,6 @@ Callers apply their own filters and manage checkpoints independently.
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -85,27 +84,22 @@ class ChangesFetcher:
         )
 
         try:
-            response = self.db_handler.server.post_changes_as_stream(
+            # Use post_changes (not _as_stream) for feed="normal".
+            # feed="normal" returns a single JSON object: {"results":[...], "last_seq":...}
+            # Using _as_stream + iter_lines() would incorrectly parse it as NDJSON.
+            response = self.db_handler.server.post_changes(
                 db=self.db_handler.db_name,
                 feed="normal",  # Single-pass (not continuous)
                 since=since,
                 include_docs=self.include_docs,
             ).get_result()
 
-            # Type assertion for streaming response
-            changes_stream = response
+            # response is a dict: {"results": [...], "last_seq": "..."}
+            results = response.get("results", []) if response else []
 
-            for line in changes_stream.iter_lines():
-                if not line:
-                    continue
-
-                try:
-                    change = json.loads(line)
-                    if "id" in change and "seq" in change:
-                        yield change
-                except json.JSONDecodeError as e:
-                    self._logger.warning("Failed to parse JSON change: %s", e)
-                    continue
+            for change in results:
+                if "id" in change and "seq" in change:
+                    yield change
 
         except ApiException as e:
             self._logger.exception("API error fetching changes: %s", e)
