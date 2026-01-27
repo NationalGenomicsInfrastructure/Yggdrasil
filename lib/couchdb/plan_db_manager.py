@@ -271,7 +271,7 @@ class PlanDBManager(CouchDBHandler):
                     document=cast(Document, doc),
                 ).get_result()
 
-                logging.info(
+                logging.debug(
                     "Updated executed_run_token=%d for plan '%s'",
                     run_token,
                     doc_id,
