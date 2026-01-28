@@ -684,8 +684,12 @@ class YggdrasilCore:
         self._logger.info("All watchers stopped.")
 
         # Stop the ops consumer service
-        await self.ops_consumer.stop()
-        self._logger.info("Ops consumer service stopped.")
+        try:
+            await self.ops_consumer.stop()
+            self._logger.info("Ops consumer service stopped.")
+        except asyncio.CancelledError:
+            # Task was cancelled during shutdown (expected)
+            self._logger.debug("Ops consumer task cancelled (expected during shutdown)")
 
     # def run_once(self, doc_id: str):
     #     """

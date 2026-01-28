@@ -148,7 +148,13 @@ Examples:
             asyncio.run(core.start())
         except KeyboardInterrupt:
             logging.warning("[bold red blink] Shutting down Yggdrasil daemon... [/]")
-            asyncio.run(core.stop())
+            try:
+                asyncio.run(core.stop())
+            except (asyncio.CancelledError, RuntimeError) as e:
+                # CancelledError: Tasks were cancelled during shutdown (expected)
+                # RuntimeError: Event loop issues during cleanup (can be ignored)
+                logging.debug(f"Shutdown exception (expected): {e}")
+            logging.info("Yggdrasil daemon stopped.")
 
     elif args.mode == "run-doc":
         # Validate mode selection
