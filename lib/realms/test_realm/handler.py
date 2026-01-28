@@ -54,9 +54,66 @@ class TestRealmHandler(BaseHandler):
         doc_id = doc.get("_id", doc.get("scenario_id", "unknown"))
         return {"kind": "scenario", "id": doc_id}
 
+    def _parse_custom_steps(self, steps_config: list[dict[str, Any]]) -> list:
+        """
+        Parse custom steps from scenario document.
+
+        Args:
+            steps_config: List of step definitions from document
+
+        Returns:
+            List of StepSpec objects
+
+        Example step config:
+            {
+                "step_id": "my_step",
+                "name": "My Step",
+                "fn_name": "step_echo",
+                "params": {"message": "Hello"},
+                "deps": ["previous_step"]
+            }
+        """
+        from yggdrasil.flow.model import StepSpec
+
+        _FN_REF_PREFIX = "lib.realms.test_realm.steps"
+        steps = []
+
+        for step_cfg in steps_config:
+            if not isinstance(step_cfg, dict):
+                raise ValueError(f"Step config must be a dict, got: {type(step_cfg)}")
+
+            # Required fields
+            step_id = step_cfg.get("step_id")
+            fn_name = step_cfg.get("fn_name")
+
+            if not step_id or not fn_name:
+                raise ValueError(
+                    f"Step config must have 'step_id' and 'fn_name': {step_cfg}"
+                )
+
+            # Optional fields
+            name: str = step_cfg.get("name", step_id)  # type: ignore[assignment]
+            params: dict[str, Any] = step_cfg.get("params", {})  # type: ignore[assignment]
+            deps: list[str] = step_cfg.get("deps", [])  # type: ignore[assignment]
+
+            step = StepSpec(
+                step_id=step_id,
+                name=name,
+                fn_ref=f"{_FN_REF_PREFIX}.{fn_name}",
+                params=params,
+                deps=deps,
+            )
+            steps.append(step)
+
+        return steps
+
     async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
         """
         Generate a PlanDraft from the scenario document.
+
+        Supports two modes:
+        1. Template-based: Provide 'template' field (e.g., 'happy_path')
+        2. Custom steps: Provide 'steps' array directly
 
         Args:
             payload: Event payload containing:
@@ -66,33 +123,46 @@ class TestRealmHandler(BaseHandler):
         Returns:
             PlanDraft with plan, auto_run flag, and notes
         """
+
         doc = payload.get("doc", {})
         ctx: PlanningContext = payload["planning_ctx"]
 
-        # Extract template name (required)
+        # Determine if using template or custom steps
         template_name = doc.get("template")
-        if not template_name:
-            raise ValueError(
-                f"Scenario document missing 'template' field: {doc.get('_id')}"
+        custom_steps = doc.get("steps")
+
+        if template_name:
+            # Template-based mode
+            if template_name not in TEMPLATES:
+                raise ValueError(
+                    f"Unknown template '{template_name}'. "
+                    f"Available: {list(TEMPLATES.keys())}"
+                )
+
+            # Get optional overrides
+            overrides = doc.get("overrides", {})
+
+            # Generate steps from template
+            logging.info(
+                "Generating plan from template '%s' for scenario '%s'",
+                template_name,
+                doc.get("_id"),
             )
+            template_fn = get_template(template_name)
+            steps = template_fn(overrides=overrides)
 
-        if template_name not in TEMPLATES:
-            raise ValueError(
-                f"Unknown template '{template_name}'. "
-                f"Available: {list(TEMPLATES.keys())}"
+        elif custom_steps:
+            # Custom steps mode
+            logging.info(
+                "Generating plan from custom steps for scenario '%s'",
+                doc.get("_id"),
             )
+            steps = self._parse_custom_steps(custom_steps)
 
-        # Get optional overrides
-        overrides = doc.get("overrides", {})
-
-        # Generate steps from template
-        logging.info(
-            "Generating plan from template '%s' for scenario '%s'",
-            template_name,
-            doc.get("_id"),
-        )
-        template_fn = get_template(template_name)
-        steps = template_fn(overrides=overrides)
+        else:
+            raise ValueError(
+                f"Scenario document must have either 'template' or 'steps' field: {doc.get('_id')}"
+            )
 
         # Build Plan
         plan = Plan(

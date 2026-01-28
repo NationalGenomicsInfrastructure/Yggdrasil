@@ -22,6 +22,20 @@ from yggdrasil.flow.model import StepResult
 from yggdrasil.flow.step import StepContext
 
 
+class _SimpleRef:
+    """Simple artifact reference for test realm step registration."""
+
+    def __init__(self, key: str):
+        self.key_val = key
+
+    def key(self) -> str:
+        return self.key_val
+
+    def resolve_path(self, scope_dir: Path) -> Path:
+        # Not used for registration, but required by protocol
+        return scope_dir / self.key_val
+
+
 def step_echo(ctx: StepContext, message: str = "Hello from test realm") -> StepResult:
     """
     Simple echo step that emits a message and succeeds.
@@ -151,25 +165,6 @@ def step_random_fail(
             "message": success_message,
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# Helper: Simple artifact ref for step_write_file
-# ---------------------------------------------------------------------------
-
-
-class _SimpleRef:
-    """Minimal artifact ref implementation for test realm."""
-
-    def __init__(self, key: str):
-        self._key = key
-
-    def key(self) -> str:
-        return self._key
-
-    def resolve_path(self, scope_dir: Path) -> Path:
-        # Not used in step_write_file (we pass explicit path)
-        return scope_dir / self._key
 
 
 # ---------------------------------------------------------------------------

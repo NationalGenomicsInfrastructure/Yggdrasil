@@ -88,6 +88,61 @@ def happy_path(
 
 
 # ---------------------------------------------------------------------------
+# Template: random_fail
+# ---------------------------------------------------------------------------
+
+
+def random_fail(
+    overrides: dict[str, dict[str, Any]] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan with probabilistic failure.
+
+    Steps:
+        1. echo_start: Echo "Starting random test"
+        2. random_step: 50% chance of failure
+        3. echo_end: Echo "Random test survived" (only if step 2 succeeds)
+
+    Args:
+        overrides: Optional dict mapping step_id to param overrides
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="echo_start",
+            name="Echo Start",
+            fn_name="step_echo",
+            params={"message": "Starting random failure test"},
+        ),
+        _make_step(
+            step_id="random_step",
+            name="Random Failure Step",
+            fn_name="step_random_fail",
+            params={
+                "failure_probability": 0.5,
+                "success_message": "Survived random failure!",
+                "failure_message": "Random failure triggered",
+            },
+            deps=["echo_start"],
+        ),
+        _make_step(
+            step_id="echo_end",
+            name="Echo End",
+            fn_name="step_echo",
+            params={"message": "Random test completed successfully"},
+            deps=["random_step"],
+        ),
+    ]
+
+    # Apply overrides by step_id
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
 # Template: fail_fast
 # ---------------------------------------------------------------------------
 
@@ -338,6 +393,7 @@ def _apply_overrides(
 
 TEMPLATES: dict[str, Any] = {
     "happy_path": happy_path,
+    "random_fail": random_fail,
     "fail_fast": fail_fast,
     "fail_mid_plan": fail_mid_plan,
     "long_running": long_running,
