@@ -129,8 +129,10 @@ class CouchDBHandler:
             return None
         except ApiException as e:
             if e.code == 404:
-                logging.error(
-                    f"Document '{doc_id}' not found in the database {self.db_name}."
+                logging.debug(
+                    "Document '%s' not found in database '%s'",
+                    doc_id,
+                    self.db_name,
                 )
                 return None
             logging.error(
