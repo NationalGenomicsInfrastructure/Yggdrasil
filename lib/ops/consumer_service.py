@@ -37,4 +37,8 @@ class OpsConsumerService:
     async def stop(self) -> None:
         self._stop.set()
         if self._task:
-            await self._task
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                # Task was cancelled (expected during shutdown)
+                pass

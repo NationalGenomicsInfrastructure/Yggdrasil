@@ -16,16 +16,18 @@ class TestEventType(unittest.TestCase):
         self.assertTrue(hasattr(EventType, "PROJECT_CHANGE"))
         self.assertTrue(hasattr(EventType, "FLOWCELL_READY"))
         self.assertTrue(hasattr(EventType, "DELIVERY_READY"))
+        self.assertTrue(hasattr(EventType, "PLAN_EXECUTION"))
 
         # Test the actual string values
         self.assertEqual(EventType.PROJECT_CHANGE, "project_change")
         self.assertEqual(EventType.FLOWCELL_READY, "flowcell_ready")
         self.assertEqual(EventType.DELIVERY_READY, "delivery_ready")
+        self.assertEqual(EventType.PLAN_EXECUTION, "plan_execution")
 
     def test_enum_count(self):
         """Test that we have exactly the expected number of event types."""
         all_events = list(EventType)
-        expected_count = 3
+        expected_count = 4
         self.assertEqual(len(all_events), expected_count)
 
         # Ensure all expected members are present
@@ -33,6 +35,7 @@ class TestEventType(unittest.TestCase):
             EventType.PROJECT_CHANGE,
             EventType.FLOWCELL_READY,
             EventType.DELIVERY_READY,
+            EventType.PLAN_EXECUTION,
         }
         self.assertEqual(set(all_events), expected_events)
 
@@ -42,11 +45,13 @@ class TestEventType(unittest.TestCase):
         self.assertIsInstance(EventType.PROJECT_CHANGE, str)
         self.assertIsInstance(EventType.FLOWCELL_READY, str)
         self.assertIsInstance(EventType.DELIVERY_READY, str)
+        self.assertIsInstance(EventType.PLAN_EXECUTION, str)
 
         # Test string operations work on the value
         self.assertTrue(EventType.PROJECT_CHANGE.value.startswith("project"))
         self.assertTrue(EventType.FLOWCELL_READY.value.endswith("ready"))
         self.assertIn("_", EventType.DELIVERY_READY.value)
+        self.assertEqual(len(EventType.PLAN_EXECUTION.value), 14)
 
         # Test that string operations work on the enum itself (via equality comparison)
         self.assertTrue(EventType.PROJECT_CHANGE == "project_change")
@@ -62,6 +67,7 @@ class TestEventType(unittest.TestCase):
         self.assertEqual(EventType.PROJECT_CHANGE, "project_change")
         self.assertEqual("flowcell_ready", EventType.FLOWCELL_READY)
         self.assertNotEqual(EventType.DELIVERY_READY, "invalid_value")
+        self.assertNotEqual("another_invalid", EventType.PLAN_EXECUTION)
 
     def test_string_representation(self):
         """Test string representations of enum members."""
@@ -69,6 +75,7 @@ class TestEventType(unittest.TestCase):
         self.assertEqual(str(EventType.PROJECT_CHANGE), "EventType.PROJECT_CHANGE")
         self.assertEqual(str(EventType.FLOWCELL_READY), "EventType.FLOWCELL_READY")
         self.assertEqual(str(EventType.DELIVERY_READY), "EventType.DELIVERY_READY")
+        self.assertEqual(str(EventType.PLAN_EXECUTION), "EventType.PLAN_EXECUTION")
 
         # Test repr() function
         self.assertEqual(
@@ -85,12 +92,14 @@ class TestEventType(unittest.TestCase):
         self.assertEqual(EventType.PROJECT_CHANGE.name, "PROJECT_CHANGE")
         self.assertEqual(EventType.FLOWCELL_READY.name, "FLOWCELL_READY")
         self.assertEqual(EventType.DELIVERY_READY.name, "DELIVERY_READY")
+        self.assertEqual(EventType.PLAN_EXECUTION.name, "PLAN_EXECUTION")
 
     def test_value_attribute(self):
         """Test that enum members have correct value attributes."""
         self.assertEqual(EventType.PROJECT_CHANGE.value, "project_change")
         self.assertEqual(EventType.FLOWCELL_READY.value, "flowcell_ready")
         self.assertEqual(EventType.DELIVERY_READY.value, "delivery_ready")
+        self.assertEqual(EventType.PLAN_EXECUTION.value, "plan_execution")
 
     def test_enum_creation_from_value(self):
         """Test creating enum instances from string values."""
@@ -98,6 +107,7 @@ class TestEventType(unittest.TestCase):
         self.assertEqual(EventType("project_change"), EventType.PROJECT_CHANGE)
         self.assertEqual(EventType("flowcell_ready"), EventType.FLOWCELL_READY)
         self.assertEqual(EventType("delivery_ready"), EventType.DELIVERY_READY)
+        self.assertEqual(EventType("plan_execution"), EventType.PLAN_EXECUTION)
 
         # Test invalid value raises ValueError
         with self.assertRaises(ValueError):
@@ -127,6 +137,7 @@ class TestEventType(unittest.TestCase):
             EventType.PROJECT_CHANGE,
             EventType.FLOWCELL_READY,
             EventType.DELIVERY_READY,
+            EventType.PLAN_EXECUTION,
         ]
 
         # Check that all expected events are in the list
@@ -143,6 +154,7 @@ class TestEventType(unittest.TestCase):
             EventType.PROJECT_CHANGE: "handle_project_change",
             EventType.FLOWCELL_READY: "handle_flowcell_ready",
             EventType.DELIVERY_READY: "handle_delivery_ready",
+            EventType.PLAN_EXECUTION: "handle_plan_execution",
         }
 
         self.assertEqual(
@@ -154,14 +166,18 @@ class TestEventType(unittest.TestCase):
         self.assertEqual(
             event_handlers[EventType.DELIVERY_READY], "handle_delivery_ready"
         )
+        self.assertEqual(
+            event_handlers[EventType.PLAN_EXECUTION], "handle_plan_execution"
+        )
 
         # Test in sets
         event_set = {
             EventType.PROJECT_CHANGE,
             EventType.FLOWCELL_READY,
             EventType.DELIVERY_READY,
+            EventType.PLAN_EXECUTION,
         }
-        self.assertEqual(len(event_set), 3)
+        self.assertEqual(len(event_set), 4)
         self.assertIn(EventType.PROJECT_CHANGE, event_set)
 
     def test_type_checking(self):
@@ -170,6 +186,7 @@ class TestEventType(unittest.TestCase):
         self.assertIsInstance(EventType.PROJECT_CHANGE, EventType)
         self.assertIsInstance(EventType.FLOWCELL_READY, EventType)
         self.assertIsInstance(EventType.DELIVERY_READY, EventType)
+        self.assertIsInstance(EventType.PLAN_EXECUTION, EventType)
 
         # Test that string values are also instances of str
         self.assertIsInstance(EventType.PROJECT_CHANGE, str)
@@ -242,6 +259,7 @@ class TestEventType(unittest.TestCase):
         self.assertTrue(bool(EventType.PROJECT_CHANGE))
         self.assertTrue(bool(EventType.FLOWCELL_READY))
         self.assertTrue(bool(EventType.DELIVERY_READY))
+        self.assertTrue(bool(EventType.PLAN_EXECUTION))
 
         # Should be truthy in if statements
         if EventType.PROJECT_CHANGE:

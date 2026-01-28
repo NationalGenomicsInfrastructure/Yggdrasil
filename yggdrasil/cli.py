@@ -40,13 +40,59 @@ def main():
     sub.add_parser("daemon", help="Start the long-running service")
 
     # One‑off mode
-    run = sub.add_parser("run-doc", help="Run exactly one project-doc and exit")
+    run = sub.add_parser(
+        "run-doc",
+        help="Process a single document and exit",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Create plan only (for Genstat approval):
+  yggdrasil run-doc <doc_id> --plan-only
+
+  # Create and execute plan (auto_run=True by default, but blocking if approval is needed):
+  yggdrasil run-doc <doc_id> --run-once
+
+  # Overwrite existing plan:
+  yggdrasil run-doc <doc_id> --plan-only --force
+        """,
+    )
     run.add_argument("doc_id", help="Project document ID to process")
+
+    # Mode selection (mutually exclusive group)
+    mode_group = run.add_mutually_exclusive_group(required=False)
+    mode_group.add_argument(
+        "-p",
+        "--plan-only",
+        action="store_true",
+        help="Create plan only (no execution); sets execution_authority='daemon'",
+    )
+    mode_group.add_argument(
+        "-r",
+        "--run-once",
+        action="store_true",
+        help="Create and execute plan via scoped watcher",
+    )
+
+    # Other flags
+    run.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Overwrite existing plan without confirmation",
+    )
     run.add_argument(
         "-m",
         "--manual-submit",
         action="store_true",
         help="Force manual HPC submission for this run-doc invocation",
+    )
+    run.add_argument(
+        "-t",
+        "--timeout",
+        type=int,
+        default=1800,
+        metavar="SECONDS",
+        help="Timeout for approval wait in seconds (default: 1800)",
     )
 
     args = parser.parse_args()
@@ -102,15 +148,43 @@ def main():
             asyncio.run(core.start())
         except KeyboardInterrupt:
             logging.warning("[bold red blink] Shutting down Yggdrasil daemon... [/]")
-            asyncio.run(core.stop())
+            try:
+                asyncio.run(core.stop())
+            except (asyncio.CancelledError, RuntimeError) as e:
+                # CancelledError: Tasks were cancelled during shutdown (expected)
+                # RuntimeError: Event loop issues during cleanup (can be ignored)
+                logging.debug(f"Shutdown exception (expected): {e}")
+            logging.info("Yggdrasil daemon stopped.")
 
     elif args.mode == "run-doc":
-        # One‑off run
-        # Initialize manual-submit policy for this invocation
+        # Validate mode selection
+        if not args.plan_only and not args.run_once:
+            # Default to plan-only with notice
+            logging.info(
+                "No mode specified; defaulting to --plan-only. "
+                "Use --run-once to execute immediately."
+            )
+            args.plan_only = True
+
+        # Initialize session flags
         YggSession.init_manual_submit(args.manual_submit)
 
-        # Run once and exit
-        core.run_once(doc_id=args.doc_id)
+        # Dispatch to appropriate handler
+        if args.plan_only:
+            result = core.create_plan_from_doc(
+                doc_id=args.doc_id,
+                force_overwrite=args.force,
+            )
+            if result is None:
+                # Plan creation failed or aborted
+                raise SystemExit(1)
+        else:  # --run-once
+            exit_code = core.run_once_with_watcher(
+                doc_id=args.doc_id,
+                force_overwrite=args.force,
+                timeout_seconds=args.timeout,
+            )
+            raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
