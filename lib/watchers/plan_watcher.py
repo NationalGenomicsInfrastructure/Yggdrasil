@@ -19,6 +19,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from urllib3.exceptions import ProtocolError
+
 from lib.core_utils.event_types import EventType
 from lib.core_utils.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from lib.couchdb.changes_fetcher import ChangesFetcher
@@ -158,8 +161,17 @@ class PlanWatcher(AbstractWatcher):
                     if new_seq:
                         self.checkpoint_store.save_checkpoint(new_seq)
 
+            except (RequestsConnectionError, ProtocolError) as e:
+                # Connection resets are typically transient; log succinctly and retry.
+                # TODO: Consider longpoll + backoff/jitter and health checks to reduce churn.
+                self._logger.warning(
+                    "PlanWatcher connection error while polling changes (will retry): %s",
+                    e,
+                )
             except Exception as e:
-                self._logger.error("Error in PlanWatcher loop: %s", e, exc_info=True)
+                # Unexpected error: log succinctly (no full stacktrace) and continue.
+                # TODO: Add structured error classification and retry/backoff policy.
+                self._logger.error("Error in PlanWatcher loop: %s", e)
                 # Continue polling despite errors (resilience)
 
             # Sleep between poll cycles
