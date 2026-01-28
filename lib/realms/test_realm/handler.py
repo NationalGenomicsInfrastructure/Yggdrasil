@@ -6,7 +6,7 @@ execution plans from scenario documents stored in the yggdrasil database.
 """
 
 import asyncio
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.handlers.base_handler import BaseHandler
@@ -91,10 +91,10 @@ class TestRealmHandler(BaseHandler):
                     f"Step config must have 'step_id' and 'fn_name': {step_cfg}"
                 )
 
-            # Optional fields
-            name: str = step_cfg.get("name", step_id)  # type: ignore[assignment]
-            params: dict[str, Any] = step_cfg.get("params", {})  # type: ignore[assignment]
-            deps: list[str] = step_cfg.get("deps", [])  # type: ignore[assignment]
+            # Optional fields - use cast for type safety
+            name = cast(str, step_cfg.get("name", step_id))
+            params = cast(dict[str, Any], step_cfg.get("params", {}))
+            deps = cast(list[str], step_cfg.get("deps", []))
 
             step = StepSpec(
                 step_id=step_id,
