@@ -1,16 +1,13 @@
-"""
-WatcherManager orchestrates watcher backend lifecycle.
+"""WatcherManager orchestrates watcher backend lifecycle and fan-out.
 
-Phase 1 responsibilities:
+Responsibilities:
 - Parse connection config (endpoints + connections)
 - Instantiate backend instances (one per unique resource)
 - Start/stop backends concurrently
 - Validate backend type consistency
-
-Phase 2 will add:
-- WatchSpec collection from realms
-- Fan-out to matching specs
-- Filter evaluation
+- Collect WatchSpecs from realms
+- Fan-out raw events to matching WatchSpecs with filter evaluation
+- Transform raw events into domain-level YggdrasilEvents
 """
 
 from __future__ import annotations
@@ -21,11 +18,15 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from lib.watchers.backends.base import CheckpointStore, WatcherBackend
+from lib.watchers.abstract_watcher import YggdrasilEvent
+from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import CouchDBCheckpointStore
+from lib.watchers.filter_eval import FilterResult, evaluate_filter, raw_event_to_dict
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Callable
+
+    from lib.watchers.watchspec import BoundWatchSpec
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ class WatcherManager:
     def __init__(
         self,
         config: dict[str, Any] | None = None,
+        on_event: Callable[[YggdrasilEvent], None] | None = None,
         checkpoint_store: CheckpointStore | None = None,
         logger: logging.Logger | None = None,
     ):
@@ -126,6 +128,8 @@ class WatcherManager:
         Args:
             config: Configuration dict with "endpoints" and "connections" keys.
                     If None, loads from ConfigLoader("main.json")["external_systems"].
+            on_event: Callback invoked for each transformed YggdrasilEvent.
+                      Typically YggdrasilCore.handle_event.
             checkpoint_store: Storage for backend checkpoints.
                               Defaults to CouchDBCheckpointStore.
             logger: Optional logger instance.
@@ -154,10 +158,13 @@ class WatcherManager:
             config = self._load_default_config()
 
         self.config = config
+        self._on_event = on_event
         self.checkpoint_store = checkpoint_store or CouchDBCheckpointStore()
         self._logger = logger or logging.getLogger(f"{__name__}.WatcherManager")
 
         self._watcher_groups: dict[tuple[str, str], WatcherBackendGroup] = {}
+        # BoundWatchSpecs grouped by backend group key
+        self._bound_specs: dict[tuple[str, str], list[BoundWatchSpec]] = {}
         self._consumer_tasks: list[asyncio.Task[None]] = []
         self._running = False
 
@@ -252,6 +259,44 @@ class WatcherManager:
     def get_watcher_groups(self) -> dict[tuple[str, str], WatcherBackendGroup]:
         """Return a copy of the watcher groups dict."""
         return dict(self._watcher_groups)
+
+    # -------------------------------------------------------------------------
+    # WatchSpec Management
+    # -------------------------------------------------------------------------
+
+    def add_watchspec(self, bound_spec: BoundWatchSpec) -> None:
+        """
+        Register a BoundWatchSpec and ensure its backend group exists.
+
+        Multiple BoundWatchSpecs sharing the same (backend, connection)
+        will share a single backend instance.  Each will be evaluated
+        independently during fan-out.
+
+        Args:
+            bound_spec: WatchSpec bound to its owning realm.
+        """
+        key = bound_spec.backend_group_key
+
+        # Ensure backend group exists (dedup)
+        self.add_watcher_group(
+            backend_type=bound_spec.spec.backend,
+            connection=bound_spec.spec.connection,
+        )
+
+        # Register spec for fan-out
+        self._bound_specs.setdefault(key, []).append(bound_spec)
+
+        self._logger.debug(
+            "Registered WatchSpec: realm=%s, backend=%s, connection=%s, event_type=%s",
+            bound_spec.realm_id,
+            bound_spec.spec.backend,
+            bound_spec.spec.connection,
+            bound_spec.spec.event_type.name,
+        )
+
+    def get_bound_specs(self) -> dict[tuple[str, str], list[BoundWatchSpec]]:
+        """Return a copy of the bound specs dict."""
+        return {k: list(v) for k, v in self._bound_specs.items()}
 
     # -------------------------------------------------------------------------
     # Configuration Resolution
@@ -486,13 +531,153 @@ class WatcherManager:
             len(start_tasks),
         )
 
+        # Spawn consumer tasks for fan-out (one per backend group with specs)
+        for key, group in self._watcher_groups.items():
+            if group.backend_instance and key in self._bound_specs:
+                task = asyncio.create_task(
+                    self._consume_backend(group, self._bound_specs[key])
+                )
+                self._consumer_tasks.append(task)
+
+        if self._consumer_tasks:
+            self._logger.info(
+                "Spawned %d consumer task(s) for fan-out",
+                len(self._consumer_tasks),
+            )
+
+    # -------------------------------------------------------------------------
+    # Fan-out: Backend -> WatchSpecs -> YggdrasilEvents
+    # -------------------------------------------------------------------------
+
+    async def _consume_backend(
+        self,
+        group: WatcherBackendGroup,
+        bound_specs: list[BoundWatchSpec],
+    ) -> None:
+        """
+        Consume events from a backend and fan-out to matching WatchSpecs.
+
+        Runs as a long-lived task, one per backend group.  Each
+        :class:`RawWatchEvent` is evaluated against *all* bound specs
+        for this group.  Matching specs produce :class:`YggdrasilEvent`
+        objects which are dispatched via ``self._on_event``.
+
+        Args:
+            group: The watcher backend group to consume from.
+            bound_specs: All BoundWatchSpecs registered for this group.
+        """
+        backend = group.backend_instance
+        if not backend:
+            return
+
+        backend_key = backend.backend_key
+        self._logger.info(
+            "Consumer started for backend '%s' (%d spec(s))",
+            backend_key,
+            len(bound_specs),
+        )
+
+        try:
+            async for raw_event in backend.events():
+                self._fan_out(raw_event, bound_specs, source=backend_key)
+        except asyncio.CancelledError:
+            self._logger.debug("Consumer cancelled for backend '%s'", backend_key)
+        except Exception as exc:
+            self._logger.exception(
+                "Consumer error for backend '%s': %s", backend_key, exc
+            )
+
+    def _fan_out(
+        self,
+        raw_event: RawWatchEvent,
+        bound_specs: list[BoundWatchSpec],
+        source: str,
+    ) -> None:
+        """
+        Evaluate a raw event against all bound specs and dispatch matches.
+
+        For each matching BoundWatchSpec:
+        1. Evaluate filter_expr (if any)
+        2. Call build_scope() to extract scope
+        3. Call build_payload() to build domain payload
+        4. Inject routing hints (realm_id, target_handlers)
+        5. Emit YggdrasilEvent via on_event callback
+
+        Args:
+            raw_event: The raw backend event.
+            bound_specs: All specs registered for the source backend group.
+            source: Backend key string for event source identification.
+        """
+        event_dict = raw_event_to_dict(raw_event)
+
+        for bs in bound_specs:
+            spec = bs.spec
+
+            # Step 1: Filter evaluation
+            result: FilterResult = evaluate_filter(
+                spec.filter_expr, event_dict, logger=self._logger
+            )
+            if not result:
+                if result.error:
+                    self._logger.warning(
+                        "Filter error for realm '%s' on event '%s': %s",
+                        bs.realm_id,
+                        raw_event.id,
+                        result.error,
+                    )
+                continue
+
+            # Step 2-3: Build scope and payload
+            try:
+                scope = spec.build_scope(raw_event)
+                payload = spec.build_payload(raw_event)
+            except Exception as exc:
+                self._logger.error(
+                    "Scope/payload build failed for realm '%s' on event '%s': %s",
+                    bs.realm_id,
+                    raw_event.id,
+                    exc,
+                )
+                continue
+
+            # Step 4: Inject routing hints (into a copy to avoid cross-spec mutation)
+            payload = dict(payload)
+            payload["realm_id"] = bs.realm_id
+            payload["scope"] = scope
+            if spec.target_handlers:
+                payload["target_handlers"] = spec.target_handlers
+
+            # Step 5: Emit YggdrasilEvent
+            ygg_event = YggdrasilEvent(
+                event_type=spec.event_type,
+                payload=payload,
+                source=source,
+            )
+
+            if self._on_event:
+                try:
+                    self._on_event(ygg_event)
+                except Exception as exc:
+                    self._logger.error(
+                        "on_event callback failed for realm '%s', event '%s': %s",
+                        bs.realm_id,
+                        raw_event.id,
+                        exc,
+                        exc_info=True,
+                    )
+            else:
+                self._logger.warning(
+                    "No on_event callback; dropping event for realm '%s'",
+                    bs.realm_id,
+                )
+
     async def stop(self) -> None:
         """
         Stop all watcher backends gracefully.
 
         Contract:
+        - Cancels consumer tasks
         - Stops all backends
-        - Cancels any consumer tasks (Phase 2)
         - Waits for cleanup
         """
         if not self._running:
