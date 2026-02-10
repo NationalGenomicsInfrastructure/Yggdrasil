@@ -281,9 +281,7 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             # Verify config loading
             mock_config_loader.assert_called_once()
-            mock_config_loader_instance.load_config.assert_called_once_with(
-                "config.json"
-            )
+            mock_config_loader_instance.load_config.assert_called_once_with("main.json")
             mock_core_class.assert_called_once_with(self.mock_config)
 
     def test_yggdrasil_core_initialization(self):
@@ -552,7 +550,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_session.init_dev_mode.assert_called_once_with(True)
             # ConfigLoader and YggdrasilCore should be called the same way regardless
             mock_config_loader.return_value.load_config.assert_called_once_with(
-                "config.json"
+                "main.json"
             )
 
     # =====================================================
@@ -579,7 +577,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             # Verify complete integration flow
             mock_session.init_dev_mode.assert_called_once_with(True)
             mock_config_loader.return_value.load_config.assert_called_once_with(
-                "config.json"
+                "main.json"
             )
             mock_core_class.assert_called_once_with(self.mock_config)
             mock_core.setup_handlers.assert_called_once()

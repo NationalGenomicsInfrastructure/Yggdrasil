@@ -44,7 +44,7 @@ class SlurmJobManager:
         "OUT_OF_ME+",
     ]
 
-    configs: Mapping[str, Any] = ConfigLoader().load_config("config.json")
+    configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
 
     def __init__(
         self, polling_interval: float = 10.0, command_timeout: float = 8.0
@@ -57,7 +57,7 @@ class SlurmJobManager:
             command_timeout (float, optional): Timeout for Slurm commands in seconds.
                 Defaults to 8.0 seconds.
         """
-        self.polling_interval: float = self.configs.get(
+        self.polling_interval: float = self.configs.get("yggdrasil", {}).get(
             "job_monitor_poll_interval", polling_interval
         )
         self.command_timeout: float = command_timeout

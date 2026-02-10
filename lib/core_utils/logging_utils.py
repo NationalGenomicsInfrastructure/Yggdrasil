@@ -197,8 +197,8 @@ def configure_logging(debug: bool = False, console: bool = True) -> None:
     Returns:
         None
     """
-    configs: Mapping[str, Any] = ConfigLoader().load_config("config.json")
-    log_dir = Path(configs["yggdrasil_log_dir"])
+    configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
+    log_dir = Path(configs["yggdrasil"]["log_dir"])
     log_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")

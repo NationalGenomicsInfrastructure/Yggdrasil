@@ -134,7 +134,7 @@ Examples:
     logging.debug("Yggdrasil: Starting up...")
 
     # 4) Prepare core (load config, init core, register handlers)
-    config = ConfigLoader().load_config("config.json")
+    config = ConfigLoader().load_config("main.json")
     core = YggdrasilCore(config)
     core.setup_handlers()
 

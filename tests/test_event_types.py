@@ -17,25 +17,38 @@ class TestEventType(unittest.TestCase):
         self.assertTrue(hasattr(EventType, "FLOWCELL_READY"))
         self.assertTrue(hasattr(EventType, "DELIVERY_READY"))
         self.assertTrue(hasattr(EventType, "PLAN_EXECUTION"))
+        self.assertTrue(hasattr(EventType, "COUCHDB_DOC_CHANGED"))
+        self.assertTrue(hasattr(EventType, "COUCHDB_DOC_DELETED"))
+        self.assertTrue(hasattr(EventType, "TEST_SCENARIO_CHANGE"))
 
         # Test the actual string values
         self.assertEqual(EventType.PROJECT_CHANGE, "project_change")
         self.assertEqual(EventType.FLOWCELL_READY, "flowcell_ready")
         self.assertEqual(EventType.DELIVERY_READY, "delivery_ready")
         self.assertEqual(EventType.PLAN_EXECUTION, "plan_execution")
+        self.assertEqual(EventType.COUCHDB_DOC_CHANGED, "couchdb_doc_changed")
+        self.assertEqual(EventType.COUCHDB_DOC_DELETED, "couchdb_doc_deleted")
+        self.assertEqual(EventType.TEST_SCENARIO_CHANGE, "test_scenario_change")
 
     def test_enum_count(self):
         """Test that we have exactly the expected number of event types."""
         all_events = list(EventType)
-        expected_count = 4
+        # 3 generic ingress + 1 internal + 4 legacy = 8
+        expected_count = 7
         self.assertEqual(len(all_events), expected_count)
 
         # Ensure all expected members are present
         expected_events = {
+            # Generic ingress types
+            EventType.COUCHDB_DOC_CHANGED,
+            EventType.COUCHDB_DOC_DELETED,
+            # Internal types
+            EventType.PLAN_EXECUTION,
+            # Legacy types (deprecated)
             EventType.PROJECT_CHANGE,
             EventType.FLOWCELL_READY,
             EventType.DELIVERY_READY,
-            EventType.PLAN_EXECUTION,
+            EventType.TEST_SCENARIO_CHANGE,
         }
         self.assertEqual(set(all_events), expected_events)
 
@@ -134,10 +147,16 @@ class TestEventType(unittest.TestCase):
         """Test that EventType is iterable and returns all members."""
         event_list = list(EventType)
         expected_events = [
+            # Generic ingress types
+            EventType.COUCHDB_DOC_CHANGED,
+            EventType.COUCHDB_DOC_DELETED,
+            # Internal types
+            EventType.PLAN_EXECUTION,
+            # Legacy types
             EventType.PROJECT_CHANGE,
             EventType.FLOWCELL_READY,
             EventType.DELIVERY_READY,
-            EventType.PLAN_EXECUTION,
+            EventType.TEST_SCENARIO_CHANGE,
         ]
 
         # Check that all expected events are in the list

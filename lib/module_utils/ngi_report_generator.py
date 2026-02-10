@@ -1,16 +1,17 @@
 import subprocess
-from typing import Any, List, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 # from lib.core_utils.config_loader import configs
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 
 logging = custom_logger(__name__)
-configs: Mapping[str, Any] = ConfigLoader().load_config("config.json")
+configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
 
 
 def generate_ngi_report(
-    project_path: str, project_id: str, user_name: str, sample_list: List[str]
+    project_path: str, project_id: str, user_name: str, sample_list: list[str]
 ) -> bool:
     """Generate an NGI report for a specified project using external reporting tools.
 
@@ -28,7 +29,7 @@ def generate_ngi_report(
 
     try:
         # Command to activate the environment and run the NGI report generation
-        activate_env_cmd = configs.get("activate_ngi_cmd")
+        activate_env_cmd = configs.get("yggdrasil", {}).get("activate_ngi_cmd")
         if not activate_env_cmd:
             logging.error(
                 "NGI environment activation command not found in the configuration. "

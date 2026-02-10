@@ -581,13 +581,13 @@ class TestCouchDBHandler(unittest.TestCase):
         # Fetch non-existent document
         result = handler.fetch_document_by_id("nonexistent")
 
-        # Verify result is None and error was logged
+        # Verify result is None and debug was logged (404 is normal, not an error)
         self.assertIsNone(result)
         mock_server.get_document.assert_called_once_with(
             db="testdb", doc_id="nonexistent"
         )
-        # Verify error logging
-        mock_logging.error.assert_called()
+        # Verify debug logging (not error - 404 is expected behavior)
+        mock_logging.debug.assert_called()
 
     @patch("lib.couchdb.couchdb_connection.ConfigLoader")
     @patch("lib.couchdb.couchdb_connection.os.getenv")

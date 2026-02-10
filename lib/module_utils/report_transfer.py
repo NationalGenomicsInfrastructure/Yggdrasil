@@ -1,20 +1,21 @@
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any
 
 # from lib.core_utils.config_loader import configs
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 
 logging = custom_logger(__name__.split(".")[-1])
-configs: Mapping[str, Any] = ConfigLoader().load_config("config.json")
+configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
 
 
 def transfer_report(
     report_path: Path,
     project_id: str,
-    sample_id: Optional[str] = None,
-    destination_filename: Optional[str] = None,
+    sample_id: str | None = None,
+    destination_filename: str | None = None,
 ) -> bool:
     try:
         report_transfer_config = configs["report_transfer"]
