@@ -1,7 +1,7 @@
 # PRD: Generic Watcher Architecture Refactor for Yggdrasil
 
 ## Version
-v1.1
+v1.2
 
 Status: Draft
 Target branch: watcher-refactor
@@ -114,7 +114,7 @@ class WatcherBackend:
 Backends MUST implement checkpointing via a shared interface, e.g.:
 	•	load_checkpoint() -> Checkpoint | None
 	•	save_checkpoint(cp: Checkpoint) -> None
-	•	Checkpoint key is the dedupe key: (backend, connection, resource, op/event_name...)
+	•	Checkpoint key = `{backend}:{connection}` (stable, deterministic)
 	•	Checkpoints are persisted in the yggdrasil internal DB (like you do now with WatcherCheckpointStore) unless explicitly overridden.
 
 
@@ -150,8 +150,7 @@ Realms declare watcher intent via WatchSpecs.
 @dataclass(frozen=True)
 class WatchSpec:
     backend: str                 # "couchdb", "fs", ...
-    connection: str              # config key
-    resource: str                # backend-specific
+    connection: str              # config key (fully identifies the resource)
     event_type: EventType        # generic ingress EventType
     target_handlers: list[str] | None = None
     filter_expr: dict | None     # optional predicate  (evaluated on RawWatchEvent)
@@ -159,19 +158,65 @@ class WatchSpec:
     build_payload: Callable[[RawWatchEvent], dict]
 ```
 
+NOTE: `resource` is NOT a WatchSpec field. The `connection` config key fully identifies
+what to watch (endpoint + resource). This ensures a single source of truth and stable
+dedupe keys.
+
 Responsibilities:
-    • Express what to watch (backend/connection/resource)
+    • Express what to watch (backend + connection; resource is part of connection config)
     • Filter raw events (filter_expr)
     • Convert raw events into Yggdrasil scope + payload (build_scope/build_payload)
     • Optionally target specific handler(s) within the owning realm (target_handlers)
 
 Discovery:
-    • WatchSpecs are discovered via a dedicated entry point group `ygg.watchspec`
-      pointing to a provider function `get_watch_specs() -> list[WatchSpec]`.
-    • Handlers are discovered separately via `ygg.handler`.
-    • YggdrasilCore binds each WatchSpec to its owning realm at discovery time
-      (realm_id is derived from the ygg.watchspec provider entry point / distribution identity).
-      WatchSpecs do not carry realm_id themselves.
+    • WatchSpecs and handlers are discovered together via a unified `ygg.realm` entry point
+      pointing to a provider function `get_realm_descriptor() -> RealmDescriptor | None`.
+    • Each realm provides a `RealmDescriptor` containing:
+      - `realm_id: str` — explicit, required, validated unique at startup
+      - `handler_classes: list[type[BaseHandler]]` — classes (core instantiates with no args)
+      - `watchspecs: list[WatchSpec] | Callable[[], list[WatchSpec]]` — static or callable
+    • The callable form for `watchspecs` allows dev-mode gating (return `[]` when disabled).
+    • `realm_id` is the single source of truth for realm identity; no derivation from
+      entry point names or distribution metadata.
+    • WatchSpecs do not carry realm_id themselves; core binds them using `descriptor.realm_id`.
+
+8.1 RealmDescriptor
+
+Realms are discovered via the `ygg.realm` entry point group. Each entry point must
+reference a provider function returning a `RealmDescriptor`:
+
+```python
+@dataclass(frozen=True)
+class RealmDescriptor:
+    realm_id: str
+    handler_classes: list[type[BaseHandler]]
+    watchspecs: list[WatchSpec] | Callable[[], list[WatchSpec]] = field(default_factory=list)
+```
+
+Semantics:
+    • `realm_id` — Required. Must be unique across all realms. Missing or duplicate
+      realm_id is a fatal startup error.
+    • `handler_classes` — List of handler classes. Core instantiates each with no args (v1).
+      Factories/DI are deferred to future versions.
+    • `watchspecs` — Either a static list or a callable returning a list. The callable
+      form enables dev-mode gating: `lambda: [] if not enabled else [...]`.
+
+Provider pattern:
+```python
+# my_realm/__init__.py
+def get_realm_descriptor() -> RealmDescriptor:
+    return RealmDescriptor(
+        realm_id="my_realm",
+        handler_classes=[MyProjectHandler, MyDeliveryHandler],
+        watchspecs=get_watch_specs,  # callable for gating
+    )
+```
+
+Entry point registration:
+```toml
+[project.entry-points."ygg.realm"]
+my_realm = "my_realm:get_realm_descriptor"
+```
 
 Filter semantics:
     • filter_expr is evaluated against the full RawWatchEvent object.
@@ -197,7 +242,15 @@ Handler identity (STRICT):
     • Every handler MUST declare a stable `handler_id: ClassVar[str]`.
     • (realm_id, handler_id) MUST be unique at startup.
     • Missing handler_id or collisions are fatal startup/configuration errors.
-	• Enforcement is performed by YggdrasilCore during handler registration.
+    • Enforcement is performed by YggdrasilCore during handler registration.
+
+WatchSpec validation (STRICT):
+    • If `target_handlers` is set: every referenced handler_id MUST exist in that realm.
+    • If `target_handlers` is None: at least one handler in the realm MUST subscribe to
+      the WatchSpec's `event_type`. Otherwise, events would be produced with no receivers.
+    • WatchSpec-only realms (handlers=[], watchspecs=[...]) are invalid — fatal error.
+    • Handler-only realms (handlers=[...], watchspecs=[]) are valid (e.g., CLI triggers).
+    • All validation errors are fatal startup errors.
 
 ⸻
 9.	Event Flow (Detailed)
@@ -226,7 +279,7 @@ Handler identity (STRICT):
 	)
 	```
 	`realm_id` is used by core routing to deliver the event only to handlers belonging to the intended realm.
-	`bound_realm_id` is assigned by WatcherManager based on the `ygg.watchspec` provider entry point that supplied spec.
+	`bound_realm_id` is assigned by WatcherManager from the `RealmDescriptor.realm_id` that supplied the WatchSpec.
 	
 	5.	Existing flow continues
 		•	Realm planners generate PlanDraft
@@ -239,8 +292,8 @@ Handler identity (STRICT):
 WatcherManager orchestrates watcher lifecycle and fan-out.
 
 Responsibilities:
-	•	Collect WatchSpecs from all realms
-	•	Group by (backend, connection, resource) - (event_type is NOT part of the grouping key; it is handled at the WatchSpec level)
+	•	Collect WatchSpecs from all loaded RealmDescriptors (invoking callables as needed)
+	•	Group by (backend, connection) — the connection fully identifies the resource via config
 	•	Instantiate one backend watcher per group
 	•	Fan out raw events to all matching WatchSpecs (Fan-out is implemented by iterating only over WatchSpecs bound to the emitting backend group)
 	•	Validate WatchSpec → handler bindings at startup:
@@ -254,9 +307,10 @@ Deduplication guarantee:
 
 10.1 — Error Handling (v1)
 	•	Backends must handle transient failures internally (retry with simple backoff).
-	•	Backend failures must not crash YggdrasilCore.
-	•	If a WatchSpec’s filter_expr, build_scope, or build_payload raises:
-		•	Log includes: realm_id, handler_id(s), backend key, and a small excerpt of RawWatchEvent.
+	•	Backend start failures must be logged with the backend key; failed backends are marked unavailable but do not crash the manager.
+	•	If a WatchSpec's filter_expr, build_scope, or build_payload raises:
+		•	Log error includes: realm_id, handler_id(s), backend key, exception, and a small excerpt of RawWatchEvent.
+		•	Filter errors MUST be distinguishable from "filter rejected" in logs.
 		•	Other WatchSpecs continue unaffected.
 	•	No retries, dead-lettering, or circuit breakers in v1.
 
@@ -287,7 +341,9 @@ Example:
     },
     "lims_pg": {
       "backend": "postgres",
-      "dsn_env": "YGG_LIMS_DSN"
+      "auth": {
+        "dsn_env": "YGG_LIMS_DSN"
+      }
     }
   },
   "connections": {
@@ -299,7 +355,8 @@ Example:
 ```
 
 WatchSpecs refer to connections by logical name only.
-Secrets are injected via environment variables (or “env var references”), not stored in config.
+Secrets are injected via environment variables (or "env var references"), not stored in config.
+All env var references MUST be under the `auth` key for consistency across backends.
 
 11.1 — Graceful Shutdown
 	•	On SIGINT/SIGTERM:
@@ -316,7 +373,7 @@ Secrets are injected via environment variables (or “env var references”), no
 		•	WatchSpec match (debug-level)
 	•	Logs must include:
 		•	realm_id
-		•	backend key (backend, connection, resource)
+		•	backend key (`{backend}:{connection}`)
 	•	No metrics, health endpoints, or dashboards in v1.
 	•	Observability beyond logs is deferred.
 
@@ -346,12 +403,17 @@ Phase 1 — Infrastructure
 	•	Add WatcherManager
 
 Phase 2 — Realm Support
-	•	Add get_watch_specs() discovery
-	•	Wire WatchSpecs into core
+	•	Define `RealmDescriptor` dataclass
+	•	Implement `ygg.realm` entry point discovery (replaces `ygg.handler` + `ygg.watchspec`)
+	•	Update handler provisioning: classes only, core instantiates
+	•	Wire WatchSpecs into WatcherManager via descriptor
 
 Phase 3 — Incremental Migration
-	•	Migrate test realm watcher to WatchSpec provider via ygg.watchspec (reference implementation); remove _setup_test_realm_watcher() wiring.
-	•	Migrate any remaining domain watchers if needed
+	•	Migrate test realm to `ygg.realm` entry point (reference implementation):
+		- Provide `RealmDescriptor` with handler class + watchspecs callable
+		- Gate both handlers and watchspecs in non-dev mode (return empty lists)
+		- Remove `_setup_test_realm_watcher()` and `_register_test_realm_handler()` wiring
+	•	Migrate external realms from `ygg.handler` to `ygg.realm` (breaking change with migration guide)
 	•	Remove hardcoded domain watchers from core (without breaking PlanWatcher)
 
 No breaking changes to:
