@@ -2,16 +2,23 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from yggdrasil.core_utils.event_types import EventType  # type: ignore
+from lib.core_utils.event_types import EventType
 from yggdrasil.flow.planner.api import PlanDraft
 
 
 class BaseHandler(ABC):
     """
     All handlers must implement:
-      - generate_plan_draft: async method that returns a PlanDraft (new responsibilities)
+      - handler_id: stable identifier within the realm (REQUIRED)
+      - event_type: which EventType this handler subscribes to
+      - generate_plan_draft: async method that returns a PlanDraft
       - derive_scope: extract scope from document
       - __call__: for async dispatch (under the running event loop)
+
+    Handler provisioning (v1):
+      - Handlers are provided as CLASSES via RealmDescriptor.handler_classes
+      - Core instantiates each with no args: handler = handler_cls()
+      - Factories/DI are deferred to future versions
 
     YggdrasilCore will:
       - Call generate_plan_draft() to get a PlanDraft
@@ -20,8 +27,12 @@ class BaseHandler(ABC):
       - Pass plan to Engine for execution
     """
 
-    # realm authors must set this
+    # Realm authors MUST set these class variables
     event_type: ClassVar[EventType]
+    handler_id: ClassVar[str]  # Stable identifier within realm
+
+    # Set by core during registration (do not set manually)
+    realm_id: str | None = None
 
     # ---------- identity helpers ----------
     @classmethod

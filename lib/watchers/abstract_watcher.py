@@ -1,7 +1,10 @@
 import datetime
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
+
+from lib.core_utils.event_types import EventType
 
 
 class YggdrasilEvent:
@@ -9,7 +12,7 @@ class YggdrasilEvent:
     A lightweight container for events that watchers produce and YggdrasilCore consumes.
 
     Attributes:
-        event_type (str): A string identifying the type of event (e.g. "document_change").
+        event_type (EventType): The event type (e.g. EventType.PROJECT_CHANGE).
         payload (Any): Arbitrary data relevant to the event (e.g. info about a changed file).
         source (str): Identifier of the event source (e.g. "filesystem", "couchdb").
         timestamp (datetime.datetime): When the event was created.
@@ -17,8 +20,23 @@ class YggdrasilEvent:
 
     __slots__ = ("event_type", "payload", "source", "timestamp")
 
-    def __init__(self, event_type: str, payload: Any, source: str):
-        self.event_type = event_type
+    def __init__(self, event_type: EventType | str, payload: Any, source: str):
+        if isinstance(event_type, EventType):
+            normalized = event_type
+        elif isinstance(event_type, str):
+            try:
+                normalized = EventType(event_type)
+            except ValueError:
+                try:
+                    normalized = EventType[event_type]
+                except KeyError as exc:
+                    raise ValueError(f"Unknown event_type: {event_type!r}") from exc
+        else:
+            raise TypeError(
+                "event_type must be an EventType or str convertible to EventType"
+            )
+
+        self.event_type: EventType = normalized
         self.payload = payload
         self.source = source
         self.timestamp = datetime.datetime.now()
@@ -62,15 +80,15 @@ class AbstractWatcher(ABC):
     def __init__(
         self,
         on_event: Callable[[YggdrasilEvent], None],
-        event_type: str,
-        name: Optional[str] = None,
-        logger: Optional[logging.Logger] = None,
+        event_type: EventType,
+        name: str | None = None,
+        logger: logging.Logger | None = None,
     ):
         """
         Args:
             on_event: A callback to be invoked with a YggdrasilEvent whenever
                 a relevant change is detected.
-            event_type: string key that handlers will register for
+            event_type: EventType that handlers will register for
             name: optional human name for tracking/logging
             logger: (Optional) A logger instance. If None, a default logger
                 named after the concrete subclass will be used.
@@ -104,7 +122,7 @@ class AbstractWatcher(ABC):
         """Indicates whether the watcher is actively monitoring for events."""
         return self._running
 
-    async def emit(self, payload: Any, source: Optional[str] = None) -> None:
+    async def emit(self, payload: Any, source: str | None = None) -> None:
         """
         Create a YggdrasilEvent and invoke the callback. Subclasses can call
         this method whenever they detect a new event to be processed.

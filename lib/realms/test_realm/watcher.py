@@ -12,10 +12,10 @@ from collections.abc import Callable
 
 from requests import Response
 
+from lib.core_utils.event_types import EventType
 from lib.couchdb.watcher_checkpoint_store import WatcherCheckpointStore
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from lib.watchers.abstract_watcher import AbstractWatcher
-from yggdrasil.core_utils.event_types import EventType  # type: ignore
 
 
 class ScenarioDocWatcher(AbstractWatcher):

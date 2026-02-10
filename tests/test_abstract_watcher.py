@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock
 
+from lib.core_utils.event_types import EventType
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
 
 
@@ -10,7 +11,13 @@ class MockWatcher(AbstractWatcher):
     A concrete subclass of AbstractWatcher for testing purposes.
     """
 
-    def __init__(self, on_event, event_type="mock_event", name=None, logger=None):
+    def __init__(
+        self,
+        on_event,
+        event_type: EventType = EventType.PROJECT_CHANGE,
+        name=None,
+        logger=None,
+    ):
         super().__init__(on_event, event_type, name, logger)
 
     async def start(self):
@@ -70,7 +77,7 @@ class TestAbstractWatcher(unittest.TestCase):
         event = call_args[0]
 
         self.assertIsInstance(event, YggdrasilEvent)
-        self.assertEqual(event.event_type, "mock_event")
+        self.assertEqual(event.event_type, EventType.PROJECT_CHANGE)
         self.assertEqual(event.payload, {"dummy": 123})
         self.assertEqual(event.source, "mock_source")
         self.assertTrue(self.watcher.is_running)

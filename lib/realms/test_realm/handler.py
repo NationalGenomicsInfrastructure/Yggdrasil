@@ -8,10 +8,10 @@ execution plans from scenario documents stored in the yggdrasil database.
 import asyncio
 from typing import Any, ClassVar, cast
 
+from lib.core_utils.event_types import EventType
 from lib.core_utils.logging_utils import custom_logger
 from lib.handlers.base_handler import BaseHandler
 from lib.realms.test_realm.templates import TEMPLATES, get_template
-from yggdrasil.core_utils.event_types import EventType  # type: ignore
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 
@@ -38,7 +38,7 @@ class TestRealmHandler(BaseHandler):
     """
 
     event_type: ClassVar[EventType] = EventType.TEST_SCENARIO_CHANGE
-    realm_id: ClassVar[str] = "test_realm"
+    handler_id: ClassVar[str] = "scenario_handler"
 
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         """
@@ -167,7 +167,7 @@ class TestRealmHandler(BaseHandler):
         # Build Plan
         plan = Plan(
             plan_id=f"test_realm:{ctx.scope['id']}",
-            realm=self.realm_id,
+            realm=self.realm_id or "test_realm",
             scope=ctx.scope,
             steps=steps,
         )

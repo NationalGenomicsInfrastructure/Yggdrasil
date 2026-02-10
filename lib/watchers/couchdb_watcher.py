@@ -1,7 +1,9 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, Callable, Optional
+from collections.abc import AsyncIterable, Callable
+from typing import Any
 
+from lib.core_utils.event_types import EventType
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
 
 
@@ -27,10 +29,10 @@ class CouchDBWatcher(AbstractWatcher):
         self,
         on_event: Callable[[YggdrasilEvent], None],
         changes_fetcher: Callable[[], AsyncIterable[tuple[Any, Any]]],
-        event_type: str = "document_change",
+        event_type: EventType = EventType.COUCHDB_DOC_CHANGED,
         poll_interval: float = 5,
         name: str = "CouchDBWatcher",
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
     ):
         """
         Args:
@@ -50,8 +52,9 @@ class CouchDBWatcher(AbstractWatcher):
     async def start(self):
         """
         Start polling the CouchDB changes feed via 'changes_fetcher' in
-        a loop. For each (doc_data, module_loc) yielded, emit a 'document_change'
-        event. If '_running' is set to False, polling stops gracefully.
+        a loop. For each (doc_data, module_loc) yielded, emit a
+        COUCHDB_DOC_CHANGED event. If '_running' is set to False, polling
+        stops gracefully.
         """
         if self._running:
             return

@@ -53,6 +53,7 @@ scenario_doc = {
 
 # Create handler and planning context
 handler = TestRealmHandler()
+handler.realm_id = "test_realm"  # Set manually since not registered via core
 scope = handler.derive_scope(scenario_doc)
 
 work_root = Path(os.getenv("YGG_WORK_ROOT", "/tmp/ygg_work"))
