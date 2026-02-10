@@ -15,9 +15,8 @@ from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
 
 # from lib.handlers.flowcell_handler import FlowcellHandler
-from lib.watchers.couchdb_watcher import CouchDBWatcher
+from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.plan_watcher import PlanWatcher
-from lib.watchers.seq_data_watcher import SeqDataWatcher, YggdrasilEvent
 from yggdrasil.core.engine import Engine
 
 # NOTE: Import EventType via `yggdrasil.*` namespace (not `lib.*`), to match external handlers (enum identity issue)
@@ -197,7 +196,7 @@ class YggdrasilCore:
 
     def register_watcher(self, watcher) -> None:
         """
-        Attach a watcher (e.g. SeqDataWatcher, CouchDBWatcher).
+        Attach a watcher (e.g. CouchDBWatcher, PlanWatcher).
         The watchers will be started/stopped by YggdrasilCore.
         """
         self._logger.debug(f"Registering watcher: {watcher}")
@@ -375,11 +374,10 @@ class YggdrasilCore:
         without cluttering the main method.
         """
         self._logger.info("Setting up watchers...")
-        self._setup_fs_watchers()
         self._setup_plan_watcher()
         # self._setup_cdb_watchers()
         self._setup_test_realm_watcher()
-        # Potentially more: self._setup_hpc_watchers(), etc.
+        # NOTE: FS/CouchDB watchers will be set up via WatchSpecs in Phase 2.
         self._logger.info("Watchers setup done.")
 
     def _setup_test_realm_watcher(self) -> None:
@@ -403,49 +401,16 @@ class YggdrasilCore:
         self.register_watcher(watcher)
         self._logger.info("✓  registered ScenarioDocWatcher for test realm (dev mode)")
 
-    def _setup_fs_watchers(self):
-        """
-        Builds file-system watchers for each instrument specified in config["instrument_watch"].
-        """
-        instruments = self.config.get("instrument_watch", [])
-        # Example config:
-        # [
-        #   {"name": "NextSeq", "directory_to_watch": "/data/illumina/nextseq", "marker_files": ["RTAComplete.txt"]},
-        #   {"name": "Aviti", ...},
-        # ]
-        instruments = [
-            {
-                "name": "MiSeq",
-                "directory": "sim_out/ngi2016003/flowcell_sync/illumina/miseq",
-                "marker_files": ["RTAComplete.txt"],
-            }
-        ]
-
-        for instrument in instruments:
-            name = instrument.get("name", "UnnamedInstrument")
-            watcher = SeqDataWatcher(
-                on_event=self.handle_event,
-                event_type=EventType.FLOWCELL_READY,
-                name=f"SeqDataWatcher-{name}",
-                config={
-                    "instrument_name": name,
-                    "directory_to_watch": instrument.get("directory", ""),
-                    "marker_files": set(instrument.get("marker_files", ["test.txt"])),
-                },
-                recursive=True,
-                logger=self._logger,
-            )
-            self.register_watcher(watcher)
-            self._logger.debug(f"Registered SeqDataWatcher for {name}")
-
     def _setup_cdb_watchers(self):
         """
         Builds CouchDB watchers if config["couchdb"] is present.
         """
 
+        from lib.watchers.couchdb_watcher import CouchDBWatcher
+
         self._logger.info("Setting up CouchDB watchers...")
 
-        poll_interval = self.config.get("couchdb_poll_interval", 5)
+        poll_interval = self.config.get("couchdb", {}).get("poll_interval", 5)
 
         # Project DB
         cdb_pdm_watcher = CouchDBWatcher(

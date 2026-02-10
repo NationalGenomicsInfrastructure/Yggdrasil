@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from lib.core_utils.event_types import EventType
 from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.watchers.couchdb_watcher import CouchDBWatcher
-from lib.watchers.seq_data_watcher import SeqDataWatcher, YggdrasilEvent
+from lib.watchers.abstract_watcher import YggdrasilEvent
 
 
 class TestYggdrasilCore(unittest.TestCase):
@@ -59,14 +58,9 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Sample configuration for testing
         self.test_config = {
-            "instrument_watch": [
-                {
-                    "name": "TestInstrument",
-                    "directory": "/test/path",
-                    "marker_files": ["test.txt"],
-                }
-            ],
-            "couchdb_poll_interval": 10,
+            "couchdb": {
+                "poll_interval": 10,
+            },
             "some_other_setting": "value",
         }
 
@@ -209,31 +203,10 @@ class TestYggdrasilCore(unittest.TestCase):
         )
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_fs_watchers(self, mock_init_db):
-        """Test file system watcher setup with instrument configuration."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        initial_watchers_count = len(core.watchers)
-
-        # Act
-        core._setup_fs_watchers()
-
-        # Assert - Check that a watcher was added
-        self.assertEqual(len(core.watchers), initial_watchers_count + 1)
-
-        # Verify the watcher is a SeqDataWatcher
-        added_watcher = core.watchers[-1]
-        self.assertIsInstance(added_watcher, SeqDataWatcher)
-
-        # Verify watcher properties
-        self.assertEqual(
-            added_watcher.name, "SeqDataWatcher-MiSeq"
-        )  # From hardcoded config
-        self.assertEqual(added_watcher.event_type, EventType.FLOWCELL_READY)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_setup_cdb_watchers(self, mock_init_db):
         """Test CouchDB watcher setup."""
+        from lib.watchers.couchdb_watcher import CouchDBWatcher
+
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
         core.pdm = Mock()  # Mock the ProjectDBManager
@@ -256,9 +229,8 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertEqual(added_watcher.poll_interval, 10)  # From test config
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_fs_watchers")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_watchers(self, mock_init_db, mock_setup_fs, mock_setup_plan):
+    def test_setup_watchers(self, mock_init_db, mock_setup_plan):
         """Test main setup_watchers method."""
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
@@ -267,7 +239,6 @@ class TestYggdrasilCore(unittest.TestCase):
         core.setup_watchers()
 
         # Assert
-        mock_setup_fs.assert_called_once()
         mock_setup_plan.assert_called_once()
         expected_calls = [call("Setting up watchers..."), call("Watchers setup done.")]
         self.mock_logger.info.assert_has_calls(expected_calls, any_order=True)
@@ -717,22 +688,9 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertIsInstance(core.subscriptions, dict)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_fs_watchers_no_instruments(self, mock_init_db):
-        """Test file system watcher setup with no instruments configured."""
-        # Arrange
-        config_no_instruments = {}
-        core = YggdrasilCore(config_no_instruments, self.mock_logger)
-
-        # Act
-        core._setup_fs_watchers()
-
-        # Assert
-        # Should create one watcher from hardcoded config
-        self.assertEqual(len(core.watchers), 1)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_cdb_watcher_setup_uses_default_poll_interval(self, mock_init_db):
         """Test CouchDB watcher setup uses default poll interval when not in config."""
+
         # Arrange
         config_no_poll = {}
         core = YggdrasilCore(config_no_poll, self.mock_logger)
