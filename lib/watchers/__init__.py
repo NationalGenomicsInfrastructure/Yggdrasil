@@ -3,7 +3,9 @@ Yggdrasil watcher infrastructure.
 
 This package provides:
 - Generic watcher backends for external systems (CouchDB, filesystem, etc.)
-- WatcherManager for backend lifecycle and deduplication
+- WatcherManager for backend lifecycle, deduplication, and fan-out
+- WatchSpec / BoundWatchSpec for realm-defined watcher intent
+- Filter evaluation for JSON Logic predicates
 - Checkpoint storage for resume semantics
 
 Public API:
@@ -14,6 +16,12 @@ Public API:
         CheckpointStore,
         WatcherBackend,
     )
+
+    # WatchSpec (realm-defined watcher intent)
+    from lib.watchers import WatchSpec, BoundWatchSpec
+
+    # Filter evaluation
+    from lib.watchers import FilterResult, evaluate_filter
 
     # Backends
     from lib.watchers import CouchDBBackend
@@ -42,7 +50,9 @@ from lib.watchers.backends.checkpoint_store import (
     InMemoryCheckpointStore,
 )
 from lib.watchers.backends.couchdb import CouchDBBackend
+from lib.watchers.filter_eval import FilterResult, evaluate_filter
 from lib.watchers.manager import WatcherBackendGroup, WatcherManager
+from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 __all__ = [
     # Core abstractions
@@ -50,6 +60,12 @@ __all__ = [
     "Checkpoint",
     "CheckpointStore",
     "WatcherBackend",
+    # WatchSpec
+    "WatchSpec",
+    "BoundWatchSpec",
+    # Filter evaluation
+    "FilterResult",
+    "evaluate_filter",
     # Backends
     "CouchDBBackend",
     # Checkpoint stores
