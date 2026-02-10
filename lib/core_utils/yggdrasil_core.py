@@ -7,24 +7,20 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from lib.core_utils.event_types import EventType
 from lib.core_utils.plan_eligibility import is_plan_eligible
 from lib.core_utils.singleton_decorator import singleton
 from lib.couchdb.plan_db_manager import PlanDBManager
 from lib.couchdb.project_db_manager import ProjectDBManager
 from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
-
-# from lib.handlers.flowcell_handler import FlowcellHandler
 from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.plan_watcher import PlanWatcher
+from lib.watchers.watchspec import BoundWatchSpec
 from yggdrasil.core.engine import Engine
-
-# NOTE: Import EventType via `yggdrasil.*` namespace (not `lib.*`), to match external handlers (enum identity issue)
-from yggdrasil.core_utils.event_types import EventType  # type: ignore
+from yggdrasil.core.realm import RealmDescriptor, discover_realms
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
-
-# from lib.core_utils.event_types import EventType
 
 
 def _generate_run_once_owner() -> str:
@@ -64,8 +60,19 @@ class YggdrasilCore:
         # Handlers per event
         self.subscriptions: dict[EventType, list[BaseHandler]] = {}
 
-        # Collection of realms
-        self._realm_registry: dict[str, type] = {}  # realm_id -> handler class
+        # Realm registry: realm_id -> RealmDescriptor
+        self._realm_registry: dict[str, RealmDescriptor] = {}
+
+        # Legacy realm class registry: realm_id -> handler class
+        # Used only by _derive_realm_id() for legacy handler dedup.
+        # Kept separate from _realm_registry (which stores RealmDescriptors).
+        self._legacy_realm_class_registry: dict[str, type] = {}
+
+        # Handler identity registry: (realm_id, handler_id) -> handler instance
+        self._handler_identity_registry: dict[tuple[str, str], BaseHandler] = {}
+
+        # WatcherManager (Phase 2; set by setup_realms)
+        self.watcher_manager: Any = None
 
         # Ops consumer service (for writing plan_status to CouchDB)
         self.ops_consumer = OpsConsumerService(interval_sec=2.0)
@@ -164,8 +171,8 @@ class YggdrasilCore:
             # surface it back to the handler for consistency
             setattr(handler, "realm_id", realm_id)
 
-        # Enforce uniqueness across classes
-        prev = self._realm_registry.get(realm_id)
+        # Enforce uniqueness across classes (legacy path only)
+        prev = self._legacy_realm_class_registry.get(realm_id)
         if prev and prev is not handler.__class__:
             raise RuntimeError(
                 f"Duplicate realm_id '{realm_id}' claimed by "
@@ -173,7 +180,7 @@ class YggdrasilCore:
                 f"{handler.__class__.__module__}.{handler.__class__.__qualname__}. "
                 f"Set a unique `realm_id` on your handler."
             )
-        self._realm_registry[realm_id] = handler.__class__
+        self._legacy_realm_class_registry[realm_id] = handler.__class__
 
     def _make_planning_ctx(
         self, handler, scope: dict[str, Any], *, doc: dict[str, Any], reason: str
@@ -193,6 +200,384 @@ class YggdrasilCore:
             reason=reason,
             # ops_db=ops_db,
         )
+
+    # -------------------------------------------------------------------------
+    # Phase 2: Realm Discovery & Registration
+    # -------------------------------------------------------------------------
+
+    def setup_realms(self) -> None:
+        """
+        Discover and register all realms, handlers, and watchspecs.
+
+        This replaces setup_handlers() for the new realm-based architecture.
+        Called early in startup, before setup_watchers().
+
+        Flow:
+            1. Discover realms via ygg.realm entry points
+            2. Register legacy ygg.handler entry points (backward compat)
+            3. Register internal test realm (dev mode)
+            4. Validate realm_id uniqueness
+            5. Instantiate and register handlers from each realm
+            6. Collect and validate watchspecs
+            7. Wire watchspecs into WatcherManager
+        """
+        self._logger.info("Discovering realms...")
+
+        # 1. Discover realms via ygg.realm entry points
+        descriptors = discover_realms(logger=self._logger)
+
+        # 2. Legacy ygg.handler support (backward compat)
+        legacy_descriptors = self._discover_legacy_handlers()
+        descriptors.extend(legacy_descriptors)
+
+        # 3. Test realm (dev mode)
+        test_descriptor = self._build_test_realm_descriptor()
+        if test_descriptor:
+            descriptors.append(test_descriptor)
+
+        if not descriptors:
+            self._logger.warning("No realms discovered.")
+            return
+
+        # 4. Validate realm_id uniqueness
+        self._validate_realm_id_uniqueness(descriptors)
+
+        # 5. Register handlers from each realm
+        all_bound_specs: list[BoundWatchSpec] = []
+
+        for descriptor in descriptors:
+            self._realm_registry[descriptor.realm_id] = descriptor
+            self._register_realm_handlers(descriptor)
+
+            # 6. Collect watchspecs
+            bound_specs = self._collect_realm_watchspecs(descriptor)
+            all_bound_specs.extend(bound_specs)
+
+        # 7. Validate watchspec bindings
+        if all_bound_specs:
+            self._validate_watchspec_bindings(all_bound_specs)
+            self._setup_watcher_manager(all_bound_specs)
+
+        # Summary
+        self._log_realm_summary()
+
+    def _discover_legacy_handlers(self) -> list[RealmDescriptor]:
+        """
+        Discover handlers via legacy ygg.handler entry points.
+
+        Wraps each legacy handler into a RealmDescriptor for uniform
+        processing.  Logs deprecation notice.
+
+        Returns:
+            List of RealmDescriptor (one per legacy handler)
+        """
+        eps_list = list(importlib.metadata.entry_points(group="ygg.handler"))
+
+        # Deduplicate
+        seen: set[tuple[str, str]] = set()
+        unique_eps = []
+        for ep in eps_list:
+            key = (ep.name, ep.value)
+            if key not in seen:
+                seen.add(key)
+                unique_eps.append(ep)
+
+        if not unique_eps:
+            return []
+
+        self._logger.info(
+            "Found %d legacy 'ygg.handler' entry point(s) "
+            "(migrate to 'ygg.realm' entry points)",
+            len(unique_eps),
+        )
+
+        descriptors: list[RealmDescriptor] = []
+
+        for ep in unique_eps:
+            try:
+                handler_cls = ep.load()
+            except Exception as e:
+                self._logger.exception(
+                    "✘  Legacy handler '%s' load failed: %s", ep.name, e
+                )
+                continue
+
+            event_type_raw = getattr(handler_cls, "event_type", None)
+            event_type = self._as_event_type(event_type_raw)
+            if not event_type:
+                self._logger.error(
+                    "✘  Legacy handler '%s' skipped: invalid event_type '%r'",
+                    ep.name,
+                    event_type_raw,
+                )
+                continue
+
+            # Derive realm_id for legacy handler
+            realm_id = getattr(handler_cls, "realm_id", None)
+            if not realm_id:
+                realm_id = (
+                    (
+                        getattr(getattr(ep, "dist", None), "name", None)
+                        or handler_cls.__module__.split(".")[0]
+                    )
+                    .replace("-", "_")
+                    .lower()
+                )
+
+            # Ensure handler_id exists (legacy handlers may not have it)
+            if not getattr(handler_cls, "handler_id", None):
+                handler_cls.handler_id = ep.name  # type: ignore[attr-defined]
+                self._logger.debug(
+                    "Assigned handler_id='%s' to legacy handler %s",
+                    ep.name,
+                    handler_cls.__qualname__,
+                )
+
+            desc = RealmDescriptor(
+                realm_id=realm_id,
+                handler_classes=[handler_cls],
+                watchspecs=[],  # Legacy handlers don't provide watchspecs
+            )
+            descriptors.append(desc)
+            self._logger.info(
+                "✓  Wrapped legacy handler '%s' as realm '%s'",
+                ep.name,
+                realm_id,
+            )
+
+        return descriptors
+
+    def _build_test_realm_descriptor(self) -> RealmDescriptor | None:
+        """
+        Build a RealmDescriptor for the internal test realm (dev mode only).
+
+        Returns:
+            RealmDescriptor or None if not in dev mode.
+        """
+        from lib.realms.test_realm import is_test_realm_enabled
+
+        if not is_test_realm_enabled():
+            self._logger.debug("Test realm disabled (not in dev mode)")
+            return None
+
+        from lib.realms.test_realm.handler import TestRealmHandler
+
+        return RealmDescriptor(
+            realm_id="test_realm",
+            handler_classes=[TestRealmHandler],
+            watchspecs=[],  # Test realm watcher is registered separately
+        )
+
+    def _validate_realm_id_uniqueness(self, descriptors: list[RealmDescriptor]) -> None:
+        """
+        Validate that all realm_ids are unique.  Fatal on collision.
+        """
+        seen: dict[str, int] = {}  # realm_id -> index
+
+        for idx, desc in enumerate(descriptors):
+            if desc.realm_id in seen:
+                raise RuntimeError(
+                    f"Duplicate realm_id '{desc.realm_id}'. "
+                    f"Already registered. Each realm must have a unique realm_id."
+                )
+            seen[desc.realm_id] = idx
+
+    def _register_realm_handlers(self, descriptor: RealmDescriptor) -> None:
+        """
+        Instantiate and register all handlers from a realm descriptor.
+
+        Handler provisioning (v1):
+            - Instantiate with no args: ``handler = handler_cls()``
+            - Set ``handler.realm_id`` from descriptor
+            - Validate handler_id presence
+            - Register with subscription system
+        """
+        realm_id = descriptor.realm_id
+
+        for handler_cls in descriptor.handler_classes:
+            # Validate handler_id
+            handler_id = getattr(handler_cls, "handler_id", None)
+            if not handler_id:
+                raise RuntimeError(
+                    f"Handler class {handler_cls.__module__}.{handler_cls.__qualname__} "
+                    f"from realm '{realm_id}' missing required 'handler_id' class attribute."
+                )
+
+            # Check (realm_id, handler_id) uniqueness
+            composite_key = (realm_id, handler_id)
+            if composite_key in self._handler_identity_registry:
+                existing = self._handler_identity_registry[composite_key]
+                raise RuntimeError(
+                    f"Duplicate handler identity ({realm_id}, {handler_id}): "
+                    f"already registered by {existing.class_qualified_name()}, "
+                    f"cannot register {handler_cls.__module__}.{handler_cls.__qualname__}"
+                )
+
+            # Validate event_type
+            event_type_raw = getattr(handler_cls, "event_type", None)
+            event_type = self._as_event_type(event_type_raw)
+            if not event_type:
+                raise RuntimeError(
+                    f"Handler class {handler_cls.__qualname__} from realm '{realm_id}' "
+                    f"has invalid or missing 'event_type' class attribute: {event_type_raw!r}"
+                )
+
+            # Instantiate (v1: no args)
+            try:
+                handler = handler_cls()  # type: ignore[call-arg]
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to instantiate handler {handler_cls.__qualname__} "
+                    f"from realm '{realm_id}': {e}"
+                ) from e
+
+            # Set realm_id on instance
+            handler.realm_id = realm_id
+
+            # Register in identity registry
+            self._handler_identity_registry[composite_key] = handler
+
+            # Register in subscription system
+            subs = self.subscriptions.setdefault(event_type, [])
+            subs.append(handler)
+
+            self._logger.debug(
+                "Registered handler '%s' (id=%s) for '%s' from realm '%s'",
+                handler.class_qualified_name(),
+                handler_id,
+                event_type.name,
+                realm_id,
+            )
+
+        self._logger.info(
+            "✓  Realm '%s': %d handler(s) registered",
+            realm_id,
+            len(descriptor.handler_classes),
+        )
+
+    def _collect_realm_watchspecs(
+        self, descriptor: RealmDescriptor
+    ) -> list[BoundWatchSpec]:
+        """Collect and bind watchspecs from a realm descriptor."""
+        specs = descriptor.get_watchspecs()
+
+        bound_specs = []
+        for spec in specs:
+            bound_specs.append(BoundWatchSpec(spec=spec, realm_id=descriptor.realm_id))
+            self._logger.debug(
+                "Collected WatchSpec: realm=%s, backend=%s, connection=%s, event_type=%s",
+                descriptor.realm_id,
+                spec.backend,
+                spec.connection,
+                spec.event_type.name,
+            )
+
+        return bound_specs
+
+    def _validate_watchspec_bindings(self, bound_specs: list[BoundWatchSpec]) -> None:
+        """
+        Validate WatchSpec → handler bindings.
+
+        Rules (all violations are fatal):
+            1. If target_handlers is set: every handler_id must exist
+               in that realm.
+            2. If target_handlers is None: at least one handler in realm
+               must subscribe to spec.event_type (prevents silent no-op).
+        """
+        for bs in bound_specs:
+            realm_id = bs.realm_id
+            spec = bs.spec
+
+            realm_handler_ids = self._get_realm_handler_ids(realm_id)
+            realm_event_types = self._get_realm_event_types(realm_id)
+
+            if spec.target_handlers:
+                # Rule 1: All target_handlers must exist
+                for handler_id in spec.target_handlers:
+                    if handler_id not in realm_handler_ids:
+                        raise RuntimeError(
+                            f"WatchSpec from realm '{realm_id}' references unknown "
+                            f"handler_id '{handler_id}'. "
+                            f"Registered handlers for this realm: {realm_handler_ids}"
+                        )
+            else:
+                # Rule 2: At least one handler subscribes to event_type
+                if spec.event_type not in realm_event_types:
+                    raise RuntimeError(
+                        f"WatchSpec from realm '{realm_id}' has event_type "
+                        f"'{spec.event_type.name}' but no handler in this realm "
+                        f"subscribes to it. This would produce events with no "
+                        f"receivers. Either add target_handlers or add a handler "
+                        f"subscribing to '{spec.event_type.name}'."
+                    )
+
+    def _get_realm_handler_ids(self, realm_id: str) -> list[str]:
+        """Get list of handler_ids registered for a realm."""
+        return [
+            hid for (rid, hid) in self._handler_identity_registry if rid == realm_id
+        ]
+
+    def _get_realm_event_types(self, realm_id: str) -> set[EventType]:
+        """Get set of event_types that handlers in this realm subscribe to."""
+        event_types: set[EventType] = set()
+        for (rid, _), handler in self._handler_identity_registry.items():
+            if rid == realm_id:
+                event_types.add(handler.event_type)
+        return event_types
+
+    def _setup_watcher_manager(self, bound_specs: list[BoundWatchSpec]) -> None:
+        """
+        Initialize WatcherManager with validated WatchSpecs.
+
+        Config resolution:
+            WatcherManager loads main.json["external_systems"] when
+            config=None. We pass on_event so fan-out delivers events
+            to handle_event().
+        """
+        from lib.watchers.manager import WatcherManager
+
+        self._logger.info("Setting up WatcherManager...")
+
+        self.watcher_manager = WatcherManager(
+            config=None,  # WatcherManager self-loads from main.json
+            on_event=self.handle_event,
+            logger=self._logger,
+        )
+
+        for bound_spec in bound_specs:
+            self.watcher_manager.add_watchspec(bound_spec)
+
+        self._logger.info(
+            "WatcherManager configured with %d WatchSpec(s)",
+            len(bound_specs),
+        )
+
+    def _log_realm_summary(self) -> None:
+        """Log summary of registered realms and handlers."""
+        if not self._realm_registry:
+            self._logger.warning("No realms registered.")
+            return
+
+        for realm_id, desc in self._realm_registry.items():
+            handler_ids = self._get_realm_handler_ids(realm_id)
+            spec_count = len(desc.get_watchspecs())
+            self._logger.info(
+                "Realm '%s': %d handler(s) [%s], %d WatchSpec(s)",
+                realm_id,
+                len(handler_ids),
+                ", ".join(handler_ids),
+                spec_count,
+            )
+
+        # Subscription summary
+        summary = ", ".join(
+            f"{et.name}({len(handlers)})" for et, handlers in self.subscriptions.items()
+        )
+        self._logger.debug("Handler Registrations: %s", summary)
+
+    # -------------------------------------------------------------------------
+    # Legacy watcher/handler registration (kept for backward compat)
+    # -------------------------------------------------------------------------
 
     def register_watcher(self, watcher) -> None:
         """
@@ -610,6 +995,8 @@ class YggdrasilCore:
         """
         Start all watchers in parallel. Typically called once at system startup.
         This will run indefinitely until watchers exit or self.stop() is called.
+
+        Phase 2: Starts WatcherManager (new) alongside legacy watchers.
         """
         if self._running:
             self._logger.warning("YggdrasilCore is already running.")
@@ -618,12 +1005,16 @@ class YggdrasilCore:
         self._running = True
 
         self._logger.info("Starting operations consumer service...")
-        # Start the ops consumer service
         self.ops_consumer.start()
+
+        # Start WatcherManager (Phase 2+)
+        if self.watcher_manager:
+            self._logger.info("Starting WatcherManager...")
+            await self.watcher_manager.start()
 
         self._logger.info("Starting all watchers...")
 
-        # Start watchers as async tasks
+        # Start legacy watchers as async tasks
         tasks = [asyncio.create_task(w.start()) for w in self.watchers]
         self._logger.info(f"Running {len(tasks)} watchers in parallel.")
 
@@ -643,10 +1034,15 @@ class YggdrasilCore:
         self._logger.info("Stopping all watchers...")
         self._running = False
 
-        # Each watcher has its own stop() method
+        # Stop legacy watchers
         stop_tasks = [asyncio.create_task(w.stop()) for w in self.watchers]
         await asyncio.gather(*stop_tasks)
         self._logger.info("All watchers stopped.")
+
+        # Stop WatcherManager (Phase 2+)
+        if self.watcher_manager:
+            await self.watcher_manager.stop()
+            self._logger.info("WatcherManager stopped.")
 
         # Stop the ops consumer service
         try:
@@ -1330,18 +1726,26 @@ class YggdrasilCore:
         """
         Watchers call this to deliver events.
 
-        New Flow:
-        1. Handler generates a PlanDraft (doesn't execute)
-        2. Core persists the draft to database
-        3. Core checks approval status (if approvals_required)
-        4. Core executes plan via Engine (if approved/auto_run)
+        Routing logic (Phase 2):
+            1. If payload contains 'realm_id', filter to that realm's handlers
+            2. If payload contains 'target_handlers', filter to those handler_ids
+            3. Otherwise, broadcast to all handlers subscribed to event_type
 
-        NOTE! Broadcasts to ALL subscribers for a particular EventType.
+        After filtering, each handler generates a PlanDraft (async), which
+        is persisted to the database.  PlanWatcher handles execution.
         """
         self._logger.info(
             "Received event '%s' from '%s'", event.event_type, event.source
         )
-        handlers = self.subscriptions.get(event.event_type) or []
+
+        payload = dict(event.payload) if isinstance(event.payload, dict) else {}
+
+        # Extract routing hints (pop so they don't leak into handler payload)
+        route_realm_id: str | None = payload.pop("realm_id", None)
+        route_target_handlers: list[str] | None = payload.pop("target_handlers", None)
+
+        # Get all handlers for this event type
+        handlers = list(self.subscriptions.get(event.event_type) or [])
 
         if not handlers:
             self._logger.warning(
@@ -1349,9 +1753,36 @@ class YggdrasilCore:
             )
             return
 
+        # Filter by realm_id if specified
+        if route_realm_id:
+            handlers = [
+                h for h in handlers if getattr(h, "realm_id", None) == route_realm_id
+            ]
+            if not handlers:
+                self._logger.warning(
+                    "No handlers found for realm '%s' and event_type '%s'",
+                    route_realm_id,
+                    event.event_type,
+                )
+                return
+
+        # Filter by target_handlers if specified
+        if route_target_handlers:
+            handlers = [
+                h
+                for h in handlers
+                if getattr(h, "handler_id", None) in route_target_handlers
+            ]
+            if not handlers:
+                self._logger.warning(
+                    "No handlers found matching target_handlers=%s",
+                    route_target_handlers,
+                )
+                return
+
+        # Dispatch to filtered handlers
         for handler in handlers:
             try:
-                payload = dict(event.payload) if isinstance(event.payload, dict) else {}
                 scope = payload.get("scope")
                 doc = payload.get("doc", {})
 
@@ -1371,23 +1802,30 @@ class YggdrasilCore:
                         continue
 
                 reason = (
-                    payload.get("reason") or f"{event.event_type} from {event.source}"
+                    payload.get("reason")
+                    or f"{event.event_type.name} from {event.source}"
                 )
-                payload["planning_ctx"] = self._make_planning_ctx(
+                handler_payload = dict(payload)
+                handler_payload["planning_ctx"] = self._make_planning_ctx(
                     handler, scope, doc=doc, reason=reason
                 )
 
                 # Schedule async plan generation (PlanWatcher handles execution)
                 self._logger.debug(
                     "Scheduling plan generation for %s via %s",
-                    event.event_type,
+                    event.event_type.name,
                     handler.class_qualified_name(),
                 )
-                asyncio.create_task(self._generate_and_persist_plan(handler, payload))
+                asyncio.create_task(
+                    self._generate_and_persist_plan(handler, handler_payload)
+                )
 
             except Exception as exc:
                 self._logger.error(
-                    f"Error handling '{event.event_type}' with handler '{handler.class_qualified_name()}': {exc}",
+                    "Error handling '%s' with handler '%s': %s",
+                    event.event_type.name,
+                    handler.class_qualified_name(),
+                    exc,
                     exc_info=True,
                 )
 
