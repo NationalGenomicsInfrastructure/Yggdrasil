@@ -845,7 +845,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.assertEqual(mock_handler.realm_id, "explicit_realm")
-        self.assertIn("explicit_realm", core._realm_registry)
+        self.assertIn("explicit_realm", core._legacy_realm_class_registry)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_derive_realm_id_from_entry_point(self, mock_init_db):
@@ -866,7 +866,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.assertEqual(mock_handler.realm_id, "test_realm_package")
-        self.assertIn("test_realm_package", core._realm_registry)
+        self.assertIn("test_realm_package", core._legacy_realm_class_registry)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_derive_realm_id_from_module_name(self, mock_init_db):
@@ -883,7 +883,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.assertEqual(mock_handler.realm_id, "my_realm")
-        self.assertIn("my_realm", core._realm_registry)
+        self.assertIn("my_realm", core._legacy_realm_class_registry)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_derive_realm_id_duplicate_raises_error(self, mock_init_db):
