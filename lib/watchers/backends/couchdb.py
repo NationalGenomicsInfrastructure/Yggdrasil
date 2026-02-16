@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
@@ -24,7 +24,20 @@ from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBa
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
+
+
+def _is_connection_reset_error(error: Exception) -> bool:
+    """Return True if error indicates a broken/reset connection state."""
+    text = str(error).lower()
+    if "connection reset" in text or "connection broken" in text:
+        return True
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, ConnectionResetError):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class CouchDBBackend(WatcherBackend):
@@ -36,15 +49,18 @@ class CouchDBBackend(WatcherBackend):
 
     Config schema (after resolution by WatcherManager):
         {
-            "url": str,              # CouchDB server URL
+            "url": str,              # CouchDB server URL (normalized with scheme)
             "db": str,               # Database name
-            "user": str | None,      # Resolved username (from env var)
-            "pass_env_name": str | None,  # Env var NAME for password (not resolved)
+            "user_env": str,         # Env var name for username
+            "pass_env": str,         # Env var name for password
+            "backend": str,          # Optional, used for validation only
             "include_docs": bool,    # Include full doc in changes (default True)
             "poll_interval": float,  # Seconds between polls (default 1.0)
             "start_seq": str,        # Starting seq if no checkpoint (default "0")
             "limit": int,            # Max changes per poll (default 100)
         }
+
+    Required keys: db, url, user_env, pass_env
 
     Checkpoint strategy:
         - Checkpoints are saved after each poll batch using last_seq
@@ -53,19 +69,17 @@ class CouchDBBackend(WatcherBackend):
 
     Retry strategy:
         - Transient errors trigger exponential backoff (2^n seconds, max 60)
-        - After max_retries (5), logs error and resets retry count
+        - After max_retries (5), recreates handler/client to avoid stale sessions
         - Backend continues running (doesn't crash on persistent errors)
-        # TODO: Consider alerting/metrics for repeated failures (beyond scope of this implementation)
-        # TODO: Consider more exponential backoff strategies (jitter, etc.) since this is a long-running backend that may encounter various failure modes in production
 
     Example:
         backend = CouchDBBackend(
             backend_key="couchdb:projects_db",
             config={
-                "url": "https://couch.example.org",
+                "url": "https://couch.example.org:5984",
                 "db": "projects",
-                "user": "admin",
-                "pass_env_name": "COUCH_PASS",  # env var name, not password
+                "user_env": "COUCH_USER",
+                "pass_env": "COUCH_PASS",
             },
             checkpoint_store=store,
         )
@@ -82,6 +96,8 @@ class CouchDBBackend(WatcherBackend):
     DEFAULT_START_SEQ = "0"  # CouchDB _changes feed can start from "0" (from start) or "now" to only get new changes
     DEFAULT_INCLUDE_DOCS = True
     DEFAULT_LIMIT = 100  # Max changes to fetch per poll
+    DEFAULT_FEED = "normal"
+    DEFAULT_LONGPOLL_TIMEOUT_MS = 5000
     MAX_RETRIES = 5
     MAX_BACKOFF = 60  # Max backoff time in seconds (1 minute)
 
@@ -104,7 +120,7 @@ class CouchDBBackend(WatcherBackend):
             logger: Optional logger instance
 
         Raises:
-            KeyError: If required config keys (url, db) are missing
+            KeyError: If required config keys (url, db, user_env, pass_env) are missing
         """
         super().__init__(
             backend_key=backend_key,
@@ -114,48 +130,58 @@ class CouchDBBackend(WatcherBackend):
             logger=logger or logging.getLogger(f"{__name__}.CouchDBBackend"),
         )
 
-        # Validate required config
-        if "db" not in config:
+        # Validate required config keys (must be present AND non-empty)
+        required_keys = ["db", "url", "user_env", "pass_env"]
+        missing = [k for k in required_keys if k not in config]
+        if missing:
             raise KeyError(
-                f"Missing required config key 'db' for backend {backend_key}"
+                f"Missing required config keys {missing} for backend {backend_key}"
+            )
+        empty = [k for k in required_keys if not config.get(k)]
+        if empty:
+            raise ValueError(
+                f"Empty values for required config keys {empty} for backend {backend_key}"
             )
 
         # Extract config with defaults
         self._db_name = config["db"]
+        self._url = config["url"]
+        self._user_env = config["user_env"]
+        self._pass_env = config["pass_env"]
+
         self._include_docs = config.get("include_docs", self.DEFAULT_INCLUDE_DOCS)
         self._poll_interval = config.get("poll_interval", self.DEFAULT_POLL_INTERVAL)
         self._start_seq = config.get("start_seq", self.DEFAULT_START_SEQ)
         self._limit = config.get("limit", self.DEFAULT_LIMIT)
-
-        # Credentials from resolved config (may be None for legacy mode)
-        # Note: pass_env_name is the env var NAME, not the resolved password
-        self._url = config.get("url")
-        self._user = config.get("user")
-        self._pass_env_name = config.get("pass_env_name")
+        self._feed = str(config.get("feed", self.DEFAULT_FEED)).lower()
+        self._longpoll_timeout_ms = int(
+            config.get("longpoll_timeout_ms", self.DEFAULT_LONGPOLL_TIMEOUT_MS)
+        )
 
         # Handler initialized lazily in _produce_events
         self._handler: CouchDBHandler | None = None
 
     def _create_handler(self) -> CouchDBHandler:
         """
-        Create CouchDB handler using the shared connection infrastructure.
+        Create CouchDB handler using the stateless client factory.
 
-        If url/user/pass_env_name are provided in config (from endpoint resolution),
-        the handler will use CouchDBConnectionManager.get_server() to obtain a
-        cached client for that endpoint. Otherwise, falls back to the default client.
+        Each handler gets its own CloudantV1 client instance.
+        No shared clients, no connection pooling.
 
         Returns:
             Configured CouchDBHandler instance for the target database.
 
         Raises:
             ConnectionError: If database doesn't exist or connection fails
-            RuntimeError: If pass_env_name is specified but env var is missing
+            RuntimeError: If required env var is missing
+            ValueError: If URL is missing scheme
         """
-        return CouchDBHandler(
+        handler_ctor = cast(Any, CouchDBHandler)
+        return handler_ctor(
             db_name=self._db_name,
             url=self._url,
-            user=self._user,
-            pass_env_name=self._pass_env_name,
+            user_env=self._user_env,
+            pass_env=self._pass_env,
         )
 
     async def _produce_events(self) -> None:
@@ -175,9 +201,10 @@ class CouchDBBackend(WatcherBackend):
         Uses the shared CouchDBHandler infrastructure for connection management.
         """
         self._logger.info(
-            "Starting CouchDB producer for %s (db=%s, interval=%.1fs)",
+            "Starting CouchDB producer for %s (db=%s, feed=%s, interval=%.1fs)",
             self.backend_key,
             self._db_name,
+            self._feed,
             self._poll_interval,
         )
 
@@ -204,13 +231,13 @@ class CouchDBBackend(WatcherBackend):
         if checkpoint and checkpoint.value is not None:
             since: str | int = checkpoint.value
             self._logger.info(
-                "Resuming from checkpoint: %s (updated %s)",
+                "Resuming from checkpoint ='%s' (updated %s)",
                 since,
                 checkpoint.updated_at,
             )
         else:
             since = self._start_seq
-            self._logger.info("No checkpoint found, starting from: %s", since)
+            self._logger.info("No checkpoint found, starting from ='%s'", since)
 
         retry_count = 0
 
@@ -218,17 +245,20 @@ class CouchDBBackend(WatcherBackend):
             while self._running:
                 try:
                     # Poll for changes using the handler's post_changes method
+                    handler = cast(Any, self._handler)
                     result: dict[str, Any] = await asyncio.to_thread(
-                        self._handler.post_changes,
+                        handler.post_changes,
                         since=since,
                         include_docs=self._include_docs,
                         limit=self._limit,
+                        feed=self._feed,
+                        timeout_ms=self._longpoll_timeout_ms,
                     )
                     changes: list[dict[str, Any]] = result.get("results", [])
 
                     if changes:
                         self._logger.debug(
-                            "Received %d changes from %s (since=%s)",
+                            "Received %d changes from '%s' (since='%s')",
                             len(changes),
                             self._db_name,
                             since,
@@ -242,24 +272,46 @@ class CouchDBBackend(WatcherBackend):
                         event = self._change_to_event(change)
                         await self._event_queue.put(event)
 
-                    # Save checkpoint AFTER batch using last_seq
-                    # last_seq is always present in _changes response
+                    # Save checkpoint only when sequence advances.
                     last_seq = result.get("last_seq")
-                    if last_seq is not None:
-                        since = last_seq
-                        self.save_checkpoint(since)
+                    if last_seq:
+                        if str(last_seq) != str(since):
+                            since = last_seq
+                            self.save_checkpoint(since)
 
                     # Reset retry count on success
                     retry_count = 0
 
-                    # Wait before next poll
-                    await asyncio.sleep(self._poll_interval)
+                    # Wait before next poll only for non-longpoll feeds.
+                    # longpoll blocks server-side until change/timeout.
+                    if self._feed != "longpoll":
+                        await asyncio.sleep(self._poll_interval)
 
                 except asyncio.CancelledError:
                     self._logger.debug("Producer cancelled for %s", self.backend_key)
                     raise  # Re-raise to exit the while loop and hit finally
 
                 except Exception as e:
+                    is_reset = _is_connection_reset_error(e)
+
+                    if is_reset:
+                        self._logger.warning(
+                            "Detected connection reset for %s; recreating handler immediately",
+                            self.backend_key,
+                        )
+                        try:
+                            self._handler = self._create_handler()
+                            self._logger.info(
+                                "Successfully recreated CouchDB handler for %s after reset",
+                                self.backend_key,
+                            )
+                        except Exception as recreate_err:
+                            self._logger.error(
+                                "Immediate handler recreate failed for %s: %s",
+                                self.backend_key,
+                                recreate_err,
+                            )
+
                     retry_count += 1
                     self._logger.warning(
                         "Error polling changes for %s (attempt %d/%d): %s",
@@ -271,11 +323,25 @@ class CouchDBBackend(WatcherBackend):
 
                     if retry_count >= self.MAX_RETRIES:
                         self._logger.error(
-                            "Max retries (%d) reached for %s; resetting and continuing",
+                            "Max retries (%d) reached for %s; recreating client and continuing",
                             self.MAX_RETRIES,
                             self.backend_key,
                             exc_info=True,
                         )
+                        # Recreate handler to get fresh client/session
+                        # This avoids stale connection pool issues
+                        try:
+                            self._handler = self._create_handler()
+                            self._logger.info(
+                                "Successfully recreated CouchDB handler for %s",
+                                self.backend_key,
+                            )
+                        except Exception as recreate_err:
+                            self._logger.error(
+                                "Failed to recreate handler for %s: %s",
+                                self.backend_key,
+                                recreate_err,
+                            )
                         retry_count = 0
 
                     # Exponential backoff

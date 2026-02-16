@@ -6,16 +6,10 @@ grouping/deduplication, and config resolution.
 """
 
 import asyncio
-import os
 import unittest
 from typing import Any
-from unittest.mock import patch
 
-from lib.watchers.backends.base import (
-    CheckpointStore,
-    RawWatchEvent,
-    WatcherBackend,
-)
+from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
 from lib.watchers.manager import WatcherBackendGroup, WatcherManager
 
@@ -107,7 +101,7 @@ class TestWatcherManagerGrouping(unittest.TestCase):
 
         self.config = {
             "endpoints": {
-                "couch_primary": {
+                "couchdb": {
                     "backend": "couchdb",
                     "url": "https://couch.example.org",
                     "auth": {"user_env": "COUCH_USER", "pass_env": "COUCH_PASS"},
@@ -115,11 +109,11 @@ class TestWatcherManagerGrouping(unittest.TestCase):
             },
             "connections": {
                 "projects_db": {
-                    "endpoint": "couch_primary",
+                    "endpoint": "couchdb",
                     "resource": {"db": "projects"},
                 },
                 "yggdrasil_db": {
-                    "endpoint": "couch_primary",
+                    "endpoint": "couchdb",
                     "resource": {"db": "yggdrasil"},
                 },
             },
@@ -179,7 +173,7 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
 
         self.config = {
             "endpoints": {
-                "couch_primary": {
+                "couchdb": {
                     "backend": "couchdb",
                     "url": "https://couch.example.org",
                     "auth": {"user_env": "COUCH_USER", "pass_env": "COUCH_PASS"},
@@ -187,47 +181,82 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
             },
             "connections": {
                 "projects_db": {
-                    "endpoint": "couch_primary",
+                    "endpoint": "couchdb",
                     "resource": {"db": "projects"},
+                    "watch": {
+                        "poll_interval": 3,
+                        "include_docs": True,
+                        "limit": 100,
+                        "start_seq": "now",
+                    },
                 },
+            },
+            "defaults": {
+                "start_seq": "0",
+                "poll_interval": 5,
+                "include_docs": False,
             },
         }
         self.store = InMemoryCheckpointStore()
 
     def test_resolve_connection_config_merges_correctly(self):
         """Test _resolve_connection_config merges endpoint + resource."""
-        with patch.dict(
-            os.environ, {"COUCH_USER": "testuser", "COUCH_PASS": "testpass"}
-        ):
-            manager = WatcherManager(
-                config=self.config,
-                checkpoint_store=self.store,
-            )
-            resolved = manager._resolve_connection_config("projects_db")
+        # No need to patch env vars - resolution passes env var NAMES, not values
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+        )
+        resolved = manager._resolve_connection_config("projects_db")
 
-            self.assertEqual(resolved["backend"], "couchdb")
-            self.assertEqual(resolved["url"], "https://couch.example.org")
-            self.assertEqual(resolved["db"], "projects")
-            self.assertEqual(resolved["user"], "testuser")
-            # pass_env_name is the env var NAME, not the resolved password
-            # (CouchDBConnectionManager handles resolution for rotation detection)
-            self.assertEqual(resolved["pass_env_name"], "COUCH_PASS")
+        self.assertEqual(resolved["backend"], "couchdb")
+        self.assertEqual(resolved["url"], "https://couch.example.org")
+        self.assertEqual(resolved["db"], "projects")
+        self.assertEqual(resolved["poll_interval"], 3)
+        self.assertTrue(resolved["include_docs"])
+        self.assertEqual(resolved["limit"], 100)
+        self.assertEqual(resolved["start_seq"], "now")
+        # user_env and pass_env are env var NAMES (not resolved values)
+        # Backend/factory resolves env vars at client creation time
+        self.assertEqual(resolved["user_env"], "COUCH_USER")
+        self.assertEqual(resolved["pass_env"], "COUCH_PASS")
 
-    def test_resolve_connection_config_raises_on_missing_env_var(self):
-        """Test _resolve_connection_config raises on missing env var."""
-        # Ensure env vars are not set
-        env = os.environ.copy()
-        env.pop("COUCH_USER", None)
-        env.pop("COUCH_PASS", None)
+    def test_resolve_connection_config_watch_overrides_defaults(self):
+        """Test per-connection watch settings take precedence over defaults."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+        )
 
-        with patch.dict(os.environ, {}, clear=True):
-            manager = WatcherManager(
-                config=self.config,
-                checkpoint_store=self.store,
-            )
-            with self.assertRaises(RuntimeError) as ctx:
-                manager._resolve_connection_config("projects_db")
-            self.assertIn("COUCH_USER", str(ctx.exception))
+        resolved = manager._resolve_connection_config("projects_db")
+        self.assertEqual(resolved["start_seq"], "now")
+        self.assertEqual(resolved["poll_interval"], 3)
+        self.assertTrue(resolved["include_docs"])
+
+    def test_resolve_connection_config_raises_on_missing_url(self):
+        """Test _resolve_connection_config raises KeyError on missing url."""
+        # Endpoint missing required 'url' key
+        bad_config = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    # 'url' is missing
+                    "auth": {"user_env": "COUCH_USER", "pass_env": "COUCH_PASS"},
+                }
+            },
+            "connections": {
+                "projects_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "projects"},
+                },
+            },
+        }
+        manager = WatcherManager(
+            config=bad_config,
+            checkpoint_store=self.store,
+        )
+        with self.assertRaises(KeyError) as ctx:
+            manager._resolve_connection_config("projects_db")
+        self.assertIn("url", str(ctx.exception))
 
     def test_resolve_connection_config_raises_on_missing_connection(self):
         """Test _resolve_connection_config raises on missing connection."""
@@ -271,7 +300,7 @@ class TestWatcherManagerBackendTypeValidation(unittest.TestCase):
         # Config with mismatched backend type
         config = {
             "endpoints": {
-                "couch_primary": {
+                "couchdb": {
                     "backend": "postgres",  # Different from group's backend_type
                     "url": "postgres://...",
                     "auth": {},
@@ -279,7 +308,7 @@ class TestWatcherManagerBackendTypeValidation(unittest.TestCase):
             },
             "connections": {
                 "test_conn": {
-                    "endpoint": "couch_primary",
+                    "endpoint": "couchdb",
                     "resource": {"db": "test"},
                 },
             },

@@ -16,7 +16,7 @@ from lib.watchers.backends.base import Checkpoint, CheckpointStore
 if TYPE_CHECKING:
     from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
 class CouchDBCheckpointStore(CheckpointStore):
@@ -54,7 +54,9 @@ class CouchDBCheckpointStore(CheckpointStore):
                         If None, creates a new instance (uses singleton internally).
         """
         self._dbm: YggdrasilDBManager | None = db_manager
-        self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._logger = logger or logging.getLogger(
+            f"{__name__}.{self.__class__.__name__}"
+        )
 
     @property
     def dbm(self) -> YggdrasilDBManager:
@@ -85,7 +87,7 @@ class CouchDBCheckpointStore(CheckpointStore):
         try:
             doc = self.dbm.fetch_document_by_id(doc_id)
             if doc is None:
-                self._logger.debug("No checkpoint found for %s", backend_key)
+                self._logger.debug("No checkpoint found for '%s'", backend_key)
                 return None
 
             checkpoint = Checkpoint(
@@ -94,7 +96,7 @@ class CouchDBCheckpointStore(CheckpointStore):
                 updated_at=doc.get("updated_at"),
             )
             self._logger.debug(
-                "Loaded checkpoint for %s: value=%s, updated=%s",
+                "Loaded checkpoint for '%s': value='%s', updated=%s",
                 backend_key,
                 checkpoint.value,
                 checkpoint.updated_at,
@@ -134,6 +136,12 @@ class CouchDBCheckpointStore(CheckpointStore):
         try:
             # Check if document exists to get _rev for update
             existing = self.dbm.fetch_document_by_id(doc_id)
+            if existing and existing.get("value") == checkpoint.value:
+                self._logger.debug(
+                    "Checkpoint unchanged for '%s'; skipping save",
+                    checkpoint.backend_key,
+                )
+                return
             if existing and "_rev" in existing:
                 doc["_rev"] = existing["_rev"]
 
@@ -146,14 +154,14 @@ class CouchDBCheckpointStore(CheckpointStore):
             ).get_result()
 
             self._logger.debug(
-                "Saved checkpoint for %s: value=%s",
+                "Saved checkpoint for '%s': value='%s'",
                 checkpoint.backend_key,
                 checkpoint.value,
             )
 
         except Exception as e:
             self._logger.error(
-                "Error saving checkpoint for %s: %s",
+                "Error saving checkpoint for '%s': %s",
                 checkpoint.backend_key,
                 e,
                 exc_info=True,
@@ -177,14 +185,16 @@ class InMemoryCheckpointStore(CheckpointStore):
         """Load checkpoint from memory."""
         cp = self._checkpoints.get(backend_key)
         if cp:
-            self._logger.debug("Loaded checkpoint for %s: %s", backend_key, cp.value)
+            self._logger.debug(
+                "Loaded checkpoint for '%s': '%s'", backend_key, cp.value
+            )
         return cp
 
     def save(self, checkpoint: Checkpoint) -> None:
         """Save checkpoint to memory."""
         self._checkpoints[checkpoint.backend_key] = checkpoint
         self._logger.debug(
-            "Saved checkpoint for %s: %s",
+            "Saved checkpoint for '%s': value='%s'",
             checkpoint.backend_key,
             checkpoint.value,
         )

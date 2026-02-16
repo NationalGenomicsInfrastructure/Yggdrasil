@@ -21,7 +21,12 @@ class TestCouchDBBackendInit(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.store = InMemoryCheckpointStore()
-        self.base_config = {"url": "https://couch.example.org", "db": "projects"}
+        self.base_config = {
+            "url": "https://couch.example.org",
+            "db": "projects",
+            "user_env": "TEST_COUCH_USER",
+            "pass_env": "TEST_COUCH_PASS",
+        }
 
     def test_backend_key_format(self):
         """Test backend_key is stored correctly."""
@@ -34,7 +39,11 @@ class TestCouchDBBackendInit(unittest.TestCase):
 
     def test_required_config_db(self):
         """Test that 'db' is required in config."""
-        config = {"url": "https://couch.example.org"}  # Missing 'db'
+        config = {
+            "url": "https://couch.example.org",
+            "user_env": "TEST_COUCH_USER",
+            "pass_env": "TEST_COUCH_PASS",
+        }  # Missing 'db'
         with self.assertRaises(KeyError) as ctx:
             CouchDBBackend(
                 backend_key="couchdb:test",
@@ -42,6 +51,36 @@ class TestCouchDBBackendInit(unittest.TestCase):
                 checkpoint_store=self.store,
             )
         self.assertIn("db", str(ctx.exception))
+
+    def test_required_config_user_env(self):
+        """Test that 'user_env' is required in config."""
+        config = {
+            "url": "https://couch.example.org",
+            "db": "test_db",
+            "pass_env": "TEST_COUCH_PASS",
+        }  # Missing 'user_env'
+        with self.assertRaises(KeyError) as ctx:
+            CouchDBBackend(
+                backend_key="couchdb:test",
+                config=config,
+                checkpoint_store=self.store,
+            )
+        self.assertIn("user_env", str(ctx.exception))
+
+    def test_required_config_pass_env(self):
+        """Test that 'pass_env' is required in config."""
+        config = {
+            "url": "https://couch.example.org",
+            "db": "test_db",
+            "user_env": "TEST_COUCH_USER",
+        }  # Missing 'pass_env'
+        with self.assertRaises(KeyError) as ctx:
+            CouchDBBackend(
+                backend_key="couchdb:test",
+                config=config,
+                checkpoint_store=self.store,
+            )
+        self.assertIn("pass_env", str(ctx.exception))
 
     def test_default_config_values(self):
         """Test default config values are applied."""
@@ -55,12 +94,16 @@ class TestCouchDBBackendInit(unittest.TestCase):
         self.assertEqual(backend._poll_interval, 1.0)
         self.assertEqual(backend._start_seq, "0")  # DEFAULT_START_SEQ
         self.assertEqual(backend._limit, 100)
+        self.assertEqual(backend._feed, "normal")
+        self.assertEqual(backend._longpoll_timeout_ms, 5000)
 
     def test_custom_config_values(self):
         """Test custom config values are respected."""
         config = {
             "url": "https://couch.example.org",
             "db": "projects",
+            "user_env": "TEST_COUCH_USER",
+            "pass_env": "TEST_COUCH_PASS",
             "include_docs": False,
             "poll_interval": 10.0,
             "start_seq": "100-abc",
@@ -83,7 +126,12 @@ class TestCouchDBBackendPolling(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.store = InMemoryCheckpointStore()
-        self.config = {"url": "https://couch.example.org", "db": "testdb"}
+        self.config = {
+            "url": "https://couch.example.org",
+            "db": "testdb",
+            "user_env": "TEST_COUCH_USER",
+            "pass_env": "TEST_COUCH_PASS",
+        }
 
     @patch.object(CouchDBBackend, "_create_handler")
     def test_poll_yields_raw_watch_events(self, mock_create_handler):
@@ -165,6 +213,8 @@ class TestCouchDBBackendPolling(unittest.TestCase):
             # Verify post_changes was called with saved checkpoint
             call_args = mock_handler.post_changes.call_args
             self.assertEqual(call_args.kwargs.get("since"), "saved-seq-123")
+            self.assertEqual(call_args.kwargs.get("feed"), "normal")
+            self.assertEqual(call_args.kwargs.get("timeout_ms"), 5000)
 
         asyncio.run(run_test())
 
@@ -206,6 +256,44 @@ class TestCouchDBBackendPolling(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    @patch.object(CouchDBBackend, "_create_handler")
+    @patch.object(CouchDBBackend, "save_checkpoint")
+    def test_does_not_save_checkpoint_when_last_seq_unchanged(
+        self, mock_save_checkpoint, mock_create_handler
+    ):
+        """Test that checkpoint is not persisted when last_seq has not advanced."""
+        mock_handler = MagicMock()
+        mock_create_handler.return_value = mock_handler
+
+        # Pre-save checkpoint so backend starts from this seq.
+        cp = Checkpoint(
+            backend_key="couchdb:testdb",
+            value="saved-seq-123",
+            updated_at="2024-01-15T12:00:00Z",
+        )
+        self.store.save(cp)
+
+        # No new changes and same last_seq should not trigger a checkpoint write.
+        mock_handler.post_changes.return_value = {
+            "results": [],
+            "last_seq": "saved-seq-123",
+        }
+
+        async def run_test():
+            backend = CouchDBBackend(
+                backend_key="couchdb:testdb",
+                config=self.config,
+                checkpoint_store=self.store,
+            )
+
+            await backend.start()
+            await asyncio.sleep(0.05)
+            await backend.stop()
+
+            mock_save_checkpoint.assert_not_called()
+
+        asyncio.run(run_test())
+
 
 class TestCouchDBBackendRetry(unittest.TestCase):
     """Tests for CouchDBBackend retry behavior."""
@@ -213,7 +301,12 @@ class TestCouchDBBackendRetry(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.store = InMemoryCheckpointStore()
-        self.config = {"url": "https://couch.example.org", "db": "testdb"}
+        self.config = {
+            "url": "https://couch.example.org",
+            "db": "testdb",
+            "user_env": "TEST_COUCH_USER",
+            "pass_env": "TEST_COUCH_PASS",
+        }
 
     @patch.object(CouchDBBackend, "_create_handler")
     @patch("lib.watchers.backends.couchdb.asyncio.sleep", new_callable=AsyncMock)
@@ -271,6 +364,48 @@ class TestCouchDBBackendRetry(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    @patch.object(CouchDBBackend, "_create_handler")
+    @patch("lib.watchers.backends.couchdb.asyncio.sleep", new_callable=AsyncMock)
+    def test_recreates_handler_immediately_on_connection_reset(
+        self, mock_sleep, mock_create_handler
+    ):
+        """Test immediate handler recreation on connection reset errors."""
+        first_handler = MagicMock()
+        second_handler = MagicMock()
+        mock_create_handler.side_effect = [first_handler, second_handler]
+
+        first_handler.post_changes.side_effect = ConnectionResetError(
+            "Connection reset by peer"
+        )
+        second_handler.post_changes.return_value = {
+            "results": [{"id": "doc-recovered", "seq": "1-abc"}],
+            "last_seq": "1-abc",
+        }
+
+        async def run_test():
+            backend = CouchDBBackend(
+                backend_key="couchdb:testdb",
+                config=self.config,
+                checkpoint_store=self.store,
+            )
+
+            await backend.start()
+
+            events = []
+            try:
+                async with asyncio.timeout(2.0):
+                    async for event in backend.events():
+                        events.append(event)
+                        break
+            finally:
+                await backend.stop()
+
+            self.assertGreaterEqual(mock_create_handler.call_count, 2)
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].id, "doc-recovered")
+
+        asyncio.run(run_test())
+
 
 class TestCouchDBBackendGracefulStop(unittest.TestCase):
     """Tests for CouchDBBackend graceful shutdown."""
@@ -278,7 +413,12 @@ class TestCouchDBBackendGracefulStop(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.store = InMemoryCheckpointStore()
-        self.config = {"url": "https://couch.example.org", "db": "testdb"}
+        self.config = {
+            "url": "https://couch.example.org",
+            "db": "testdb",
+            "user_env": "TEST_COUCH_USER",
+            "pass_env": "TEST_COUCH_PASS",
+        }
 
     @patch.object(CouchDBBackend, "_create_handler")
     def test_stop_during_polling(self, mock_create_handler):

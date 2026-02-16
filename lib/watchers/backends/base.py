@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
 @dataclass(frozen=True)
@@ -341,4 +341,6 @@ class WatcherBackend(ABC):
             updated_at=datetime.now(UTC).isoformat(),
         )
         self.checkpoint_store.save(cp)
-        self._logger.debug("Saved checkpoint for %s: %s", self.backend_key, value)
+        self._logger.debug(
+            "Saved checkpoint for '%s': value='%s'", self.backend_key, value
+        )

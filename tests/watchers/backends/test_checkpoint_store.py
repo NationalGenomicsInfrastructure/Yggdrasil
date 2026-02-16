@@ -211,6 +211,27 @@ class TestCouchDBCheckpointStore(unittest.TestCase):
         self.assertEqual(doc["_rev"], "1-oldrev")
         self.assertEqual(doc["value"], "new_value")
 
+    def test_save_skips_unchanged_value(self):
+        """Test save() skips write when checkpoint value is unchanged."""
+        store = CouchDBCheckpointStore(db_manager=self.mock_dbm)
+
+        self.mock_dbm.fetch_document_by_id.return_value = {
+            "_id": "watcher_checkpoint:couchdb:projects",
+            "_rev": "3-same",
+            "backend_key": "couchdb:projects",
+            "value": "same_value",
+            "updated_at": "2024-01-15T10:00:00Z",
+        }
+
+        cp = Checkpoint(
+            backend_key="couchdb:projects",
+            value="same_value",
+            updated_at="2024-01-15T14:00:00Z",
+        )
+        store.save(cp)
+
+        self.mock_dbm.server.put_document.assert_not_called()
+
     def test_save_with_integer_value(self):
         """Test save() handles integer checkpoint values."""
         store = CouchDBCheckpointStore(db_manager=self.mock_dbm)
