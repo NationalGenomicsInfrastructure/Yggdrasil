@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Dict, Union
 
 from lib.core_utils.logging_utils import custom_logger
 
@@ -7,9 +6,9 @@ logging = custom_logger(__name__.split(".")[-1])
 
 
 def generate_slurm_script(
-    args_dict: Dict[str, str],
-    template_fpath: Union[str, Path],
-    output_fpath: Union[str, Path],
+    args_dict: dict[str, str],
+    template_fpath: str | Path,
+    output_fpath: str | Path,
 ) -> bool:
     """Generate a Slurm batch script by filling in placeholders in a template.
 

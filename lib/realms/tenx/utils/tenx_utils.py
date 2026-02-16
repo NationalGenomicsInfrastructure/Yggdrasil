@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.logging_utils import custom_logger
@@ -11,7 +11,7 @@ class TenXUtils:
     """Utility class for TenX processing."""
 
     @staticmethod
-    def load_decision_table(file_name: str) -> List[Dict[str, Any]]:
+    def load_decision_table(file_name: str) -> list[dict[str, Any]]:
         """
         Load the decision table JSON file.
 
@@ -43,8 +43,8 @@ class TenXUtils:
 
     @staticmethod
     def get_pipeline_info(
-        library_prep_method: str, features: List[str]
-    ) -> Optional[Dict[str, Any]]:
+        library_prep_method: str, features: list[str]
+    ) -> dict[str, Any] | None:
         """Get pipeline information based on library prep method and features.
 
         Args:

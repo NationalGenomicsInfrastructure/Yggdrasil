@@ -1,5 +1,6 @@
 import csv
-from typing import Any, Dict, List, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
 
 from lib.base.abstract_sample import AbstractSample
 from lib.core_utils.logging_utils import custom_logger
@@ -19,8 +20,8 @@ class TenXRunSample(AbstractSample):
     def __init__(
         self,
         sample_id: str,
-        lab_samples: List[Any],
-        project_info: Dict[str, Any],
+        lab_samples: list[Any],
+        project_info: dict[str, Any],
         config: Mapping[str, Any],
         yggdrasil_db_manager: Any,
         hpc_manager: Any,
@@ -37,26 +38,26 @@ class TenXRunSample(AbstractSample):
             **kwargs (Any): Additional keyword arguments.
         """
         self.run_sample_id: str = sample_id
-        self.lab_samples: List[Any] = lab_samples
-        self.project_info: Dict[str, Any] = project_info or {}
+        self.lab_samples: list[Any] = lab_samples
+        self.project_info: dict[str, Any] = project_info or {}
         # TODO: ensure project_id is always available
         self.project_id = self.project_info.get("project_id", "")
         self.config: Mapping[str, Any] = config or {}
         self.ydm: Any = yggdrasil_db_manager
         self.sjob_manager: Any = hpc_manager
 
-        self.job_id: Optional[str] = None
+        self.job_id: str | None = None
 
         # self.decision_table = TenXUtils.load_decision_table("10x_decision_table.json")
-        self.feature_to_library_type: Dict[str, Any] = self.config.get(
+        self.feature_to_library_type: dict[str, Any] = self.config.get(
             "feature_to_library_type", {}
         )
         # self._status: str = "initialized"
 
-        self.features: List[str] = self._collect_features()
-        self.pipeline_info: Optional[Dict[str, Any]] = self._get_pipeline_info() or {}
+        self.features: list[str] = self._collect_features()
+        self.pipeline_info: dict[str, Any] | None = self._get_pipeline_info() or {}
         self.auto_submit: bool = self.pipeline_info.get("submit", False)
-        self.reference_genomes: Dict[str, str] = (
+        self.reference_genomes: dict[str, str] = (
             self.collect_reference_genomes()
         ) or {}
 
@@ -94,14 +95,14 @@ class TenXRunSample(AbstractSample):
         # Update the status in the database
         self.ydm.update_sample_status(self.project_id, self.id, value)
 
-    def collect_reference_genomes(self) -> Optional[Dict[str, str]]:
+    def collect_reference_genomes(self) -> dict[str, str] | None:
         """Collect reference genomes from lab samples and ensure consistency.
 
         Returns:
             Optional[Dict[str, str]]: A dictionary mapping reference keys to genome paths,
                 or None if an error occurs.
         """
-        ref_genomes: Dict[str, str] = {}
+        ref_genomes: dict[str, str] = {}
         feature_to_ref_key = (
             self.config.get("feature_to_ref_key", {}) if self.config else {}
         )
@@ -138,7 +139,7 @@ class TenXRunSample(AbstractSample):
                 return None
         return ref_genomes
 
-    def _get_pipeline_info(self) -> Optional[Dict[str, Any]]:
+    def _get_pipeline_info(self) -> dict[str, Any] | None:
         """Get the pipeline information for the sample.
 
         Returns:
@@ -148,7 +149,7 @@ class TenXRunSample(AbstractSample):
         library_prep_method = self.project_info.get("library_prep_method", "")
         return TenXUtils.get_pipeline_info(library_prep_method, self.features)
 
-    def _collect_features(self) -> List[str]:
+    def _collect_features(self) -> list[str]:
         """Collect features from lab samples.
 
         Returns:
@@ -279,7 +280,7 @@ class TenXRunSample(AbstractSample):
         logging.debug(f"[{self.id}] Pipeline executable: {pipeline_exec}")
 
         # Mapping of argument names to their values
-        arg_values: Dict[str, Any] = {
+        arg_values: dict[str, Any] = {
             "--id": self.id,
             "--csv": str(self.file_handler.get_multi_csv_path()),
             "--transcriptome": self.reference_genomes["gex"],
@@ -322,7 +323,7 @@ class TenXRunSample(AbstractSample):
         command = " \\\n    ".join(command_parts)
         return command
 
-    def collect_libraries_data(self) -> List[Dict[str, str]]:
+    def collect_libraries_data(self) -> list[dict[str, str]]:
         """Generate the data for the libraries."""
         libraries_data = []
         for lab_sample in self.lab_samples:

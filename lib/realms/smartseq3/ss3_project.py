@@ -1,6 +1,5 @@
 import asyncio
 from pathlib import Path
-from typing import List
 
 from lib.base.abstract_project import AbstractProject
 from lib.core_utils.config_loader import ConfigLoader
@@ -208,7 +207,7 @@ class SmartSeq3(AbstractProject):
     #     )
     #     self.finalize_project()
 
-    def extract_samples(self) -> List[SS3Sample]:
+    def extract_samples(self) -> list[SS3Sample]:
         """
         Extracts samples from the document and creates SS3Sample instances.
 
@@ -243,7 +242,7 @@ class SmartSeq3(AbstractProject):
 
         return samples
 
-    def select_samples_for_processing(self) -> List[SS3Sample]:
+    def select_samples_for_processing(self) -> list[SS3Sample]:
         """
         Return only the samples that should be processed right now:
         e.g. skip aborted or unsequenced.

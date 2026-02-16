@@ -1,5 +1,3 @@
-from typing import Optional
-
 from lib.base.abstract_sample import AbstractSample
 from lib.core_utils.logging_utils import custom_logger
 from lib.module_utils.report_transfer import transfer_report
@@ -57,7 +55,7 @@ class SS3Sample(AbstractSample):
         self.ydm = yggdrasil_db_manager
         self.sjob_manager = hpc_manager
 
-        self.job_id: Optional[str] = None
+        self.job_id: str | None = None
 
         # Initialize barcode
         self.barcode = self.get_barcode()

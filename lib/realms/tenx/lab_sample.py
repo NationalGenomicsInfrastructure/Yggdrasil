@@ -1,6 +1,7 @@
 import glob
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
@@ -17,8 +18,8 @@ class TenXLabSample:
         self,
         lab_sample_id: str,
         feature: str,
-        sample_data: Dict[str, Any],
-        project_info: Dict[str, Any],
+        sample_data: dict[str, Any],
+        project_info: dict[str, Any],
     ) -> None:
         """
         Initialize a LabSample instance.
@@ -31,25 +32,25 @@ class TenXLabSample:
         """
         self.lab_sample_id: str = lab_sample_id
         self.feature: str = feature
-        self.sample_data: Dict[str, Any] = sample_data
-        self.project_info: Dict[str, Any] = project_info
+        self.sample_data: dict[str, Any] = sample_data
+        self.project_info: dict[str, Any] = project_info
 
         self.organism: str = self.project_info.get("organism", "")
         self.lims_id: str = sample_data.get("sample_id", "")
-        self.flowcell_ids: List[str] = self._get_all_flowcells()
-        self.fastq_dirs: Optional[Dict[str, List[str]]] = self.locate_fastq_dirs()
-        self.reference_genome: Optional[str] = self.get_reference_genome()
+        self.flowcell_ids: list[str] = self._get_all_flowcells()
+        self.fastq_dirs: dict[str, list[str]] | None = self.locate_fastq_dirs()
+        self.reference_genome: str | None = self.get_reference_genome()
 
         # logging.debug(f"Reference genome for sample {self.lab_sample_id}: {self.reference_genome}")
 
-    def _get_all_flowcells(self) -> List[str]:
+    def _get_all_flowcells(self) -> list[str]:
         """
         Collect all flowcell IDs associated with the sample.
 
         Returns:
             List[str]: A list of flowcell IDs for the sample.
         """
-        flowcell_ids: List[str] = []
+        flowcell_ids: list[str] = []
         try:
             library_prep = self.sample_data.get("library_prep", {})
             # if 'library_prep' in self.sample_data:
@@ -69,14 +70,14 @@ class TenXLabSample:
             # return None
             return []
 
-    def locate_fastq_dirs(self) -> Optional[Dict[str, List[str]]]:
+    def locate_fastq_dirs(self) -> dict[str, list[str]] | None:
         """Locate the parent directories of the FASTQ files for each flowcell.
 
         Returns:
             Optional[Dict[str, List[str]]]: A dictionary mapping flowcell IDs to their
                 respective parent directories.
         """
-        fastq_dirs: Dict[str, List[str]] = {}
+        fastq_dirs: dict[str, list[str]] = {}
         for flowcell_id in self.flowcell_ids:
             pattern = Path(
                 self.config["seq_root_dir"],
@@ -102,7 +103,7 @@ class TenXLabSample:
 
         return fastq_dirs
 
-    def get_reference_genome(self) -> Optional[str]:
+    def get_reference_genome(self) -> str | None:
         """Get the reference genome path for the sample based on the feature and organism.
 
         Returns:

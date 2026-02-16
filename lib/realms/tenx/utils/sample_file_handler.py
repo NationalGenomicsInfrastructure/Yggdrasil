@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 
@@ -39,15 +39,15 @@ class SampleFileHandler:
         self.project_name: str = sample.project_info.get("project_name", "")
         self.sample_ref: str = sample.project_info.get("ref_genome", "")
         self.organism: str = sample.project_info.get("organism", "")
-        self.config: Dict[str, Any] = sample.config
-        self.pipeline_info: Dict[str, Any] = sample.pipeline_info
+        self.config: dict[str, Any] = sample.config
+        self.pipeline_info: dict[str, Any] = sample.pipeline_info
 
         # Define sample folder structure
         self.project_dir: Path = sample.project_info.get("project_dir", "")
         self.sample_dir: Path = self.project_dir / self.sample_id
         self.fastq_files_dir: Path = self.project_dir / "fastq_files"
 
-        self.fastq_files: Dict[str, Any] = {}
+        self.fastq_files: dict[str, Any] = {}
 
         # Define the name the report should have when transferred to ngi-interal
         self.dest_report_name: str = f"{self.sample_id}_10x_report.html"
@@ -66,7 +66,7 @@ class SampleFileHandler:
         self.slurm_error_path: Path = self.project_dir / f"{self.sample_id}.err"
 
         # Report file path / Will be set after parsing the output file
-        self._report_path: Optional[Path] = None
+        self._report_path: Path | None = None
 
     @property
     def report_path(self):
