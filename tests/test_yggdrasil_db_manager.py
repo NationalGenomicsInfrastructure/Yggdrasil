@@ -21,7 +21,6 @@ sys.modules["ibmcloudant.cloudant_v1"] = MagicMock()
 
 # Make the ApiException available in the module
 import lib.couchdb.yggdrasil_db_manager
-from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager, auto_load_and_save
 
 lib.couchdb.yggdrasil_db_manager.ApiException = MockApiException
@@ -34,13 +33,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
     """
 
     def setUp(self):
-        """Set up test fixtures and clear singleton instances for test isolation."""
-        # Clear singleton instances to ensure test isolation
-        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
-
-        if CouchDBConnectionManager in SingletonMeta._instances:
-            del SingletonMeta._instances[CouchDBConnectionManager]
-
+        """Set up test fixtures."""
         # Mock project data
         self.mock_project_data = {
             "project_id": "P12345",
@@ -77,24 +70,27 @@ class TestYggdrasilDBManager(unittest.TestCase):
             "timestamp": "2024-01-02",
         }
 
-    def tearDown(self):
-        """Clean up singleton instances after each test."""
-        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
-
-        if CouchDBConnectionManager in SingletonMeta._instances:
-            del SingletonMeta._instances[CouchDBConnectionManager]
-
+    @patch("lib.couchdb.yggdrasil_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    def test_init_success(self, mock_handler_init):
+    def test_init_success(self, mock_handler_init, mock_get_config):
         """Test successful initialization of YggdrasilDBManager."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_config.return_value = {
+            "url": "http://localhost:5984",
+            "auth": {"user_env": "COUCH_USER", "pass_env": "COUCH_PASS"},
+        }
 
         # Act
         YggdrasilDBManager()
 
         # Assert
-        mock_handler_init.assert_called_once_with("yggdrasil")
+        mock_handler_init.assert_called_once_with(
+            "yggdrasil",
+            url="http://localhost:5984",
+            user_env="COUCH_USER",
+            pass_env="COUCH_PASS",
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDocument")
@@ -741,21 +737,6 @@ class TestAutoLoadAndSaveDecorator(unittest.TestCase):
 
 class TestEdgeCasesAndIntegration(unittest.TestCase):
     """Test edge cases and integration scenarios for YggdrasilDBManager."""
-
-    def setUp(self):
-        """Set up test fixtures for edge case testing."""
-        # Clear singleton instances to ensure test isolation
-        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
-
-        if CouchDBConnectionManager in SingletonMeta._instances:
-            del SingletonMeta._instances[CouchDBConnectionManager]
-
-    def tearDown(self):
-        """Clean up singleton instances after each test."""
-        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
-
-        if CouchDBConnectionManager in SingletonMeta._instances:
-            del SingletonMeta._instances[CouchDBConnectionManager]
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     def test_decorated_method_with_return_value(self, mock_handler_init):

@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 
@@ -22,7 +22,7 @@ class YggdrasilDocument:
     """
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "YggdrasilDocument":
+    def from_dict(cls, data: dict[str, Any]) -> "YggdrasilDocument":
         """Creates a YggdrasilDocument instance from a dictionary.
 
         Args:
@@ -84,12 +84,12 @@ class YggdrasilDocument:
         self.end_date: str = ""
 
         # Samples & Delivery
-        self.samples: List[Dict[str, Any]] = []
-        self.delivery_info: Dict[str, Any] = {"delivery_results": []}
-        self.ngi_report: List[Dict[str, Any]] = []
-        self.user_info: Dict[str, Dict[str, Optional[str]]] = {}
+        self.samples: list[dict[str, Any]] = []
+        self.delivery_info: dict[str, Any] = {"delivery_results": []}
+        self.ngi_report: list[dict[str, Any]] = []
+        self.user_info: dict[str, dict[str, str | None]] = {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Converts the YggdrasilDocument to a dictionary.
 
         Returns:
@@ -114,7 +114,7 @@ class YggdrasilDocument:
     # USER INFO
     # ---------------------------
 
-    def set_user_info(self, updated_info: Dict[str, Dict[str, Optional[str]]]) -> None:
+    def set_user_info(self, updated_info: dict[str, dict[str, str | None]]) -> None:
         """
         Updates self.user_info with the nested dictionary provided.
 
@@ -145,12 +145,12 @@ class YggdrasilDocument:
     def add_sample(
         self,
         sample_id: str,
-        slurm_job_id: Optional[str] = None,
+        slurm_job_id: str | None = None,
         # lib_prep_option: str,
         status: str = "pending",
-        flowcell_ids_processed_for: Optional[List[str]] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
+        flowcell_ids_processed_for: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
     ) -> None:
         """Adds or updates a sample to the document.
 
@@ -199,7 +199,7 @@ class YggdrasilDocument:
 
         # self.check_project_completion() # NOTE: Should this be here?
 
-    def get_sample(self, sample_id: str) -> Optional[Dict[str, Any]]:
+    def get_sample(self, sample_id: str) -> dict[str, Any] | None:
         """Retrieves a specific sample from the samples list by its ID.
 
         Args:
@@ -269,7 +269,7 @@ class YggdrasilDocument:
             return
         sample["delivered"] = True
 
-    def get_sample_status(self, sample_id: str) -> Optional[str]:
+    def get_sample_status(self, sample_id: str) -> str | None:
         sample = self.get_sample(sample_id)
         if sample:
             return sample.get("status")
@@ -323,7 +323,7 @@ class YggdrasilDocument:
 
     def sync_project_metadata(
         self,
-        user_info: Dict[str, Dict[str, Optional[str]]],
+        user_info: dict[str, dict[str, str | None]],
         is_sensitive: bool,
     ) -> None:
         """
@@ -411,7 +411,7 @@ class YggdrasilDocument:
         # self.end_date = ""
         self.update_project_status("partially_completed")
 
-    def get_project_status(self) -> Optional[str]:
+    def get_project_status(self) -> str | None:
         """Retrieves the status of a project.
 
         Returns:
@@ -423,7 +423,7 @@ class YggdrasilDocument:
     # NGI REPORT MANAGEMENT
     # ------------------------------------------------------------------------
 
-    def add_ngi_report_entry(self, report_data: Dict[str, Any]) -> bool:
+    def add_ngi_report_entry(self, report_data: dict[str, Any]) -> bool:
         """
         Append a new record to `ngi_report`.
         Example `report_data`:
@@ -455,7 +455,7 @@ class YggdrasilDocument:
     # DELIVERY INFO / DELIVERY EVENTS
     # ------------------------------------------------------------------------
 
-    def add_delivery_entry(self, delivery_data: Dict[str, Any]) -> None:
+    def add_delivery_entry(self, delivery_data: dict[str, Any]) -> None:
         """
         Add a new entry to `delivery_info.delivery_results`.
         Example `delivery_data`:

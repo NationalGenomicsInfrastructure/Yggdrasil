@@ -31,23 +31,30 @@ class TestPlanDBManager(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures with mocked DB connection."""
-        # Patch the CouchDBConnectionManager to avoid real DB connections
-        self.connection_patcher = patch(
-            "lib.couchdb.couchdb_connection.CouchDBConnectionManager"
+        # Mock config endpoint
+        self.mock_config = {
+            "url": "https://mock-couchdb.example.com:5984",
+            "auth": {
+                "user_env": "MOCK_COUCH_USER",
+                "pass_env": "MOCK_COUCH_PASS",
+            },
+        }
+        self.config_patcher = patch(
+            "lib.couchdb.plan_db_manager._get_couchdb_endpoint_config",
+            return_value=self.mock_config,
         )
-        self.mock_connection_class = self.connection_patcher.start()
+        self.config_patcher.start()
 
-        # Create mock connection manager instance
-        self.mock_connection = MagicMock()
-        self.mock_server = MagicMock()  # Explicit mock for server
-        self.mock_connection.server = self.mock_server
-        self.mock_connection.ensure_db.return_value = "yggdrasil_plans"
-        self.mock_connection_class.return_value = self.mock_connection
+        # Mock CouchDBClientFactory.create_client to return mock client
+        self.mock_server = MagicMock()
+        self.client_factory_patcher = patch(
+            "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client",
+            return_value=self.mock_server,
+        )
+        self.client_factory_patcher.start()
 
-        # Create manager instance (will use mocked connection)
+        # Create manager instance (will use mocked client factory)
         self.manager = PlanDBManager()
-        # Explicitly assign mock server to satisfy Pylance type checking
-        self.manager.server = self.mock_server  # type: ignore[assignment]
 
         # Create sample plan for testing
         self.sample_plan = Plan(
@@ -66,7 +73,8 @@ class TestPlanDBManager(unittest.TestCase):
 
     def tearDown(self):
         """Clean up patches."""
-        self.connection_patcher.stop()
+        self.config_patcher.stop()
+        self.client_factory_patcher.stop()
 
     # ==========================================
     # save_plan Tests

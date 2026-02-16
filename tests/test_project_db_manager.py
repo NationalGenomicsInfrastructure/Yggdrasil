@@ -2,7 +2,6 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.couchdb.project_db_manager import ProjectDBManager
 
 
@@ -22,12 +21,15 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
     """
 
     def setUp(self):
-        """Set up test fixtures and clear singleton instances for test isolation."""
-        # Clear singleton instances to ensure test isolation
-        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
-
-        if CouchDBConnectionManager in SingletonMeta._instances:
-            del SingletonMeta._instances[CouchDBConnectionManager]
+        """Set up test fixtures."""
+        # Mock endpoint config
+        self.mock_endpoint_config = {
+            "url": "http://localhost:5984",
+            "auth": {
+                "user_env": "COUCHDB_USER",
+                "pass_env": "COUCHDB_PASS",
+            },
+        }
 
         # Mock module registry data
         self.mock_module_registry = {
@@ -73,18 +75,19 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         self.mock_document_response = MagicMock()
 
     def tearDown(self):
-        """Clean up singleton instances after each test."""
-        from lib.couchdb.couchdb_connection import CouchDBConnectionManager
+        """Clean up after each test."""
+        pass
 
-        if CouchDBConnectionManager in SingletonMeta._instances:
-            del SingletonMeta._instances[CouchDBConnectionManager]
-
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    def test_init_success(self, mock_handler_init, mock_config_loader):
+    def test_init_success(
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
+    ):
         """Test successful initialization of ProjectDBManager."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -93,16 +96,25 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         manager = ProjectDBManager()
 
         # Assert
-        mock_handler_init.assert_called_once_with("projects")
+        mock_handler_init.assert_called_once_with(
+            "projects",
+            url="http://localhost:5984",
+            user_env="COUCHDB_USER",
+            pass_env="COUCHDB_PASS",
+        )
         mock_config_instance.load_config.assert_called_once_with("module_registry.json")
         self.assertEqual(manager.module_registry, self.mock_module_registry)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    def test_init_config_loading_error(self, mock_handler_init, mock_config_loader):
+    def test_init_config_loading_error(
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
+    ):
         """Test initialization when module registry loading fails."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.side_effect = Exception("Config error")
         mock_config_loader.return_value = mock_config_instance
@@ -111,14 +123,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Exception):
             ProjectDBManager()
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_fetch_changes_exact_match(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test fetch_changes with exact module registry match."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -143,14 +157,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(doc, self.mock_doc_with_10x)
         self.assertEqual(module_loc, "lib.realms.tenx.tenx_project.TenXProject")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_fetch_changes_prefix_match(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test fetch_changes with prefix matching when exact match fails."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -175,12 +191,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(doc, self.mock_doc_with_prefix_match)
         self.assertEqual(module_loc, "lib.realms.mars.mars_project.MarsProject")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    def test_fetch_changes_no_match_logic(self, mock_handler_init, mock_config_loader):
+    def test_fetch_changes_no_match_logic(
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
+    ):
         """Test the logic used in fetch_changes when no module registry match is found."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -204,14 +224,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(found_prefix_match)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     def test_fetch_changes_missing_details_logic(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test the exception handling when document is missing details/method."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -225,16 +247,23 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         # Test that trying to access details would raise KeyError
         # (this simulates what happens in fetch_changes)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
     @patch("lib.couchdb.project_db_manager.Ygg.save_last_processed_seq")
     async def test_get_changes_success(
-        self, mock_save_seq, mock_get_seq, mock_handler_init, mock_config_loader
+        self,
+        mock_save_seq,
+        mock_get_seq,
+        mock_handler_init,
+        mock_config_loader,
+        mock_get_endpoint,
     ):
         """Test get_changes successfully fetches and yields documents."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -287,15 +316,17 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         mock_save_seq.assert_any_call("1")
         mock_save_seq.assert_any_call("2")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
     async def test_get_changes_with_provided_seq(
-        self, mock_get_seq, mock_handler_init, mock_config_loader
+        self, mock_get_seq, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test get_changes when last_processed_seq is provided."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -331,6 +362,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
             db="projects", feed="continuous", since="custom_seq", include_docs=False
         )
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
@@ -343,10 +375,12 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         mock_get_seq,
         mock_handler_init,
         mock_config_loader,
+        mock_get_endpoint,
     ):
         """Test get_changes when fetch_document_by_id returns None."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -386,6 +420,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         mock_logging.warning.assert_called_with("Document with ID missing_doc is None.")
         mock_save_seq.assert_called_once_with("1")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
@@ -398,10 +433,12 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         mock_get_seq,
         mock_handler_init,
         mock_config_loader,
+        mock_get_endpoint,
     ):
         """Test get_changes when sequence is None."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -440,16 +477,23 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         )
         mock_save_seq.assert_not_called()
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
     @patch("lib.couchdb.project_db_manager.logging")
     async def test_get_changes_fetch_document_exception(
-        self, mock_logging, mock_get_seq, mock_handler_init, mock_config_loader
+        self,
+        mock_logging,
+        mock_get_seq,
+        mock_handler_init,
+        mock_config_loader,
+        mock_get_endpoint,
     ):
         """Test get_changes when fetch_document_by_id raises exceptions."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -494,14 +538,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         )
         mock_logging.debug.assert_called_with(f"Data causing the error: {mock_change}")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_get_changes_skip_empty_lines(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test get_changes skips empty lines in changes stream."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -535,14 +581,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0], self.mock_doc_with_10x)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_get_changes_skip_invalid_json(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test get_changes handles invalid JSON lines gracefully."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -579,14 +627,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         # Should not get any results due to JSON error
         self.assertEqual(len(results), 0)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_get_changes_skip_incomplete_changes(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test get_changes skips changes without id or seq."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -624,9 +674,12 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         manager.fetch_document_by_id.assert_called_once_with("doc2")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
-    def test_fetch_document_by_id_success(self, mock_handler_init, mock_config_loader):
+    def test_fetch_document_by_id_success(
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
+    ):
         """Test successful document retrieval by ID (inherited from CouchDBHandler).
 
         Note: Detailed error handling tests for fetch_document_by_id are in
@@ -635,6 +688,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         """
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -658,14 +712,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, self.mock_doc_with_10x)
         mock_server.get_document.assert_called_once_with(db="projects", doc_id="doc1")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_fetch_changes_multiple_documents(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test fetch_changes with multiple documents of different types."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -706,14 +762,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
         # Check prefix match
         self.assertEqual(results[2][1], "lib.realms.mars.mars_project.MarsProject")
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     async def test_fetch_changes_empty_module_registry(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test fetch_changes with empty module registry."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = {}  # Empty registry
         mock_config_loader.return_value = mock_config_instance
@@ -738,14 +796,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(found_prefix_match)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     def test_fetch_changes_module_registry_logic(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test the module registry lookup logic used in fetch_changes."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
@@ -792,14 +852,16 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(found_prefix_match)
 
+    @patch("lib.couchdb.project_db_manager._get_couchdb_endpoint_config")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     def test_fetch_changes_exception_handling_logic(
-        self, mock_handler_init, mock_config_loader
+        self, mock_handler_init, mock_config_loader, mock_get_endpoint
     ):
         """Test the exception handling logic used in fetch_changes."""
         # Arrange
         mock_handler_init.return_value = None
+        mock_get_endpoint.return_value = self.mock_endpoint_config
         mock_config_instance = MagicMock()
         mock_config_instance.load_config.return_value = self.mock_module_registry
         mock_config_loader.return_value = mock_config_instance
