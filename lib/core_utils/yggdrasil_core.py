@@ -142,8 +142,8 @@ class YggdrasilCore:
         - ydm: YggdrasilDBManager for 'yggdrasil' database
         - plan_dbm: PlanDBManager for 'yggdrasil_plans' database
 
-        All managers share the singleton CouchDBConnectionManager, so this
-        is safe and efficient for both daemon and CLI modes.
+        Each manager reads CouchDB connection config from main.json and
+        creates its own CloudantV1 client via CouchDBClientFactory.
         """
         self._logger.info("Initializing DB managers...")
 
@@ -224,16 +224,12 @@ class YggdrasilCore:
         self._logger.info("Discovering realms...")
 
         # 1. Discover realms via ygg.realm entry points
+        #    (Includes test_realm when registered as entry point)
         descriptors = discover_realms(logger=self._logger)
 
         # 2. Legacy ygg.handler support (backward compat)
         legacy_descriptors = self._discover_legacy_handlers()
         descriptors.extend(legacy_descriptors)
-
-        # 3. Test realm (dev mode)
-        test_descriptor = self._build_test_realm_descriptor()
-        if test_descriptor:
-            descriptors.append(test_descriptor)
 
         if not descriptors:
             self._logger.warning("No realms discovered.")
@@ -346,27 +342,6 @@ class YggdrasilCore:
             )
 
         return descriptors
-
-    def _build_test_realm_descriptor(self) -> RealmDescriptor | None:
-        """
-        Build a RealmDescriptor for the internal test realm (dev mode only).
-
-        Returns:
-            RealmDescriptor or None if not in dev mode.
-        """
-        from lib.realms.test_realm import is_test_realm_enabled
-
-        if not is_test_realm_enabled():
-            self._logger.debug("Test realm disabled (not in dev mode)")
-            return None
-
-        from lib.realms.test_realm.handler import TestRealmHandler
-
-        return RealmDescriptor(
-            realm_id="test_realm",
-            handler_classes=[TestRealmHandler],
-            watchspecs=[],  # Test realm watcher is registered separately
-        )
 
     def _validate_realm_id_uniqueness(self, descriptors: list[RealmDescriptor]) -> None:
         """
@@ -630,196 +605,16 @@ class YggdrasilCore:
             return None
         return None
 
-    def auto_register_external_handlers(self) -> None:
-        """Discover external handlers via entry_points group 'ygg.handler'."""
-        count: int = 0
-        eps_list = list(importlib.metadata.entry_points(group="ygg.handler"))
-
-        # Deduplicate entry points (workaround for importlib.metadata returning duplicates)
-        seen = set()
-        unique_eps = []
-        for ep in eps_list:
-            key = (ep.name, ep.value)
-            if key not in seen:
-                seen.add(key)
-                unique_eps.append(ep)
-
-        self._logger.debug(
-            "Found %d entry point(s) in 'ygg.handler' group (%d unique)",
-            len(eps_list),
-            len(unique_eps),
-        )
-
-        for idx, ep in enumerate(unique_eps, 1):
-            self._logger.debug(
-                "Processing (unique) entry point %d/%d: '%s' (%s)",
-                idx,
-                len(unique_eps),
-                ep.name,
-                ep.value,
-            )
-            try:
-                handler_cls = ep.load()
-            except Exception as e:
-                self._logger.exception("✘  '%s' load failed: %s", ep.name, e)
-                continue
-
-            event_type_raw = getattr(handler_cls, "event_type", None)
-            event_type = self._as_event_type(event_type_raw)
-            if not event_type:
-                self._logger.error(
-                    "✘  '%s' skipped: invalid event_type '%r'", ep.name, event_type_raw
-                )
-                continue
-
-            try:
-                handler = handler_cls()  # type: ignore[call-arg]
-                # derive & enforce realm_id uniqueness
-                self._derive_realm_id(handler, ep)
-                self.register_handler(event_type, handler)
-                self._logger.info(
-                    "✓  registered external handler '%s' for event type '%s'",
-                    ep.name,
-                    event_type.name,
-                )
-                count += 1
-            except Exception as e:
-                self._logger.exception("✘  '%s' instantiation failed: %s", ep.name, e)
-
-        if count == 0:
-            self._logger.warning(
-                "No external handlers discovered in group 'ygg.handler'."
-            )
-        else:
-            self._logger.info("Total external handlers registered: %d", count)
-
-    def setup_handlers(self) -> None:
-        """
-        Instantiate and register all event handlers.
-        """
-        self._logger.info("Setting up event handlers...")
-        # 1. Auto-register external handlers from entry points
-        self.auto_register_external_handlers()
-
-        # 2. Register built-in handlers
-        # from lib.handlers.bp_analysis_handler import BestPracticeAnalysisHandler
-
-        # Best‑practice analysis for new/changed ProjectDB docs
-        # project_handler = BestPracticeAnalysisHandler()
-        # self.register_handler(EventType.PROJECT_CHANGE, project_handler)
-        # # Demultiplexing / downstream pipeline for newly-ready flowcells
-        # flowcell_handler = FlowcellHandler()
-        # self.register_handler(EventType.FLOWCELL_READY, flowcell_handler)
-        # NOTE: When we have a CLI‑triggered event type, e.g. 'manual_run', register it here too
-        # cli_handler = CLIHandler()
-        # self.register_handler(EventType.<whatever>, cli_handler)
-
-        # 3. Register test realm handler (dev mode only)
-        self._register_test_realm_handler()
-
-        # Pretty summary: EVENT_TYPE(count, ...)
-        if not getattr(self, "subscriptions", None):
-            self._logger.warning("No handler subscriptions found.")
-            return
-
-        summary = ", ".join(
-            f"{event_type.name}({len(self.subscriptions.get(event_type, []))})"
-            for event_type in self.subscriptions.keys()
-        )
-        self._logger.debug("Handler Registrations: %s", summary)
-
-    def _register_test_realm_handler(self) -> None:
-        """
-        Register the test realm handler if running in dev mode.
-
-        The test realm provides controllable test scenarios for validating
-        the execution pipeline. Only available with --dev flag.
-        """
-        from lib.realms.test_realm import get_handler, is_test_realm_enabled
-
-        if not is_test_realm_enabled():
-            self._logger.debug("Test realm disabled (not in dev mode)")
-            return
-
-        handler = get_handler()
-        if handler is None:
-            self._logger.warning("Test realm enabled but handler creation failed")
-            return
-
-        self._derive_realm_id(handler)
-        self.register_handler(EventType.TEST_SCENARIO_CHANGE, handler)
-        self._logger.info(
-            "✓  registered internal handler 'test_realm' for event type '%s' (dev mode)",
-            EventType.TEST_SCENARIO_CHANGE.name,
-        )
-
     def setup_watchers(self):
         """
-        Calls specialized methods to set up watchers of different types
-        without cluttering the main method.
+        Set up core infrastructure watchers.
+
+        Note: Domain-specific CouchDB/FS watchers are now configured via
+        WatchSpecs in setup_realms() and handled by WatcherManager.
         """
         self._logger.info("Setting up watchers...")
         self._setup_plan_watcher()
-        # self._setup_cdb_watchers()
-        self._setup_test_realm_watcher()
-        # NOTE: FS/CouchDB watchers will be set up via WatchSpecs in Phase 2.
         self._logger.info("Watchers setup done.")
-
-    def _setup_test_realm_watcher(self) -> None:
-        """
-        Set up the test realm watcher if running in dev mode.
-
-        The test realm watcher monitors the yggdrasil database for
-        documents with type="ygg_test_scenario".
-        """
-        from lib.realms.test_realm import get_watcher, is_test_realm_enabled
-
-        if not is_test_realm_enabled():
-            self._logger.debug("Test realm watcher disabled (not in dev mode)")
-            return
-
-        watcher = get_watcher(on_event=self.handle_event, logger=self._logger)
-        if watcher is None:
-            self._logger.warning("Test realm enabled but watcher creation failed")
-            return
-
-        self.register_watcher(watcher)
-        self._logger.info("✓  registered ScenarioDocWatcher for test realm (dev mode)")
-
-    def _setup_cdb_watchers(self):
-        """
-        Builds CouchDB watchers if config["couchdb"] is present.
-        """
-
-        from lib.watchers.couchdb_watcher import CouchDBWatcher
-
-        self._logger.info("Setting up CouchDB watchers...")
-
-        poll_interval = self.config.get("couchdb", {}).get("poll_interval", 5)
-
-        # Project DB
-        cdb_pdm_watcher = CouchDBWatcher(
-            on_event=self.handle_event,
-            event_type=EventType.PROJECT_CHANGE,
-            name="ProjectDBWatcher",
-            changes_fetcher=self.pdm.fetch_changes,
-            poll_interval=poll_interval,
-            logger=self._logger,
-        )
-        self.register_watcher(cdb_pdm_watcher)
-        self._logger.debug("Registered CouchDBWatcher for ProjectDB.")
-
-        # TODO
-        # Yggdrasil DB
-        # cdb_ydm_watcher = CouchDBWatcher(
-        #     on_event=self.handle_event,
-        #     name="YggdrasilDBWatcher",
-        #     changes_fetcher=self.ydm.fetch_changes,
-        #     poll_interval=poll_interval,
-        #     logger=self._logger
-        # )
-        # self.register_watcher(cdb_ydm_watcher)
-        # self._logger.debug("Registered CouchDBWatcher for YggdrasilDB.")
 
     def _setup_plan_watcher(self) -> None:
         """
@@ -1099,89 +894,6 @@ class YggdrasilCore:
     #     FileSpoolConsumer(
     #         spool, OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))
     #     ).consume()
-
-    def run_once(self, doc_id: str):
-        """
-        Fetch one project doc and synchronously invoke the associated
-        PROJECT_CHANGE handlers.
-        Then do a single pass over the event spool to flush to ops.
-        """
-        import os
-        from pathlib import Path
-
-        from lib.ops.consumer import FileSpoolConsumer
-        from lib.ops.sinks.couch import OpsWriter
-
-        self._logger.info("run_once: fetching project %s", doc_id)
-        doc = self.pdm.fetch_document_by_id(doc_id)
-        if not doc:
-            self._logger.error("No project with ID %s", doc_id)
-            return
-
-        handlers = self.subscriptions.get(EventType.PROJECT_CHANGE) or []
-        if not handlers:
-            self._logger.error(
-                "No handlers registered for %s", EventType.PROJECT_CHANGE.name
-            )
-            return
-
-        # Build the minimal, consistent payload the handlers expect
-        reason: str = f"run_once:{doc.get('project_id') or doc_id}"
-        payload: dict[str, Any] = {
-            "doc": doc,
-            "reason": reason,
-        }
-
-        self._logger.info(
-            "Invoking %d 'PROJECT_CHANGE' handler(s) (run_now)", len(handlers)
-        )
-        for handler in handlers:
-            try:
-                # Must have a scope: prefer realm-provided derive_scope
-                if hasattr(handler, "derive_scope") and callable(handler.derive_scope):
-                    scope = handler.derive_scope(doc)  # {'kind':..., 'id':...}
-                else:
-                    self._logger.error(
-                        "Handler %s lacks derive_scope; refusing to assume 'project'. Skipping.",
-                        handler.class_qualified_name(),
-                    )
-                    continue
-
-                ctx = self._make_planning_ctx(handler, scope, doc=doc, reason=reason)
-                payload["planning_ctx"] = ctx
-
-                # NEW: Use new handler interface
-                self._logger.info(
-                    "Generating plan draft via %s", handler.class_qualified_name()
-                )
-                draft = handler.run_now(payload)  # returns PlanDraft
-
-                # Persist the plan
-                realm_id = getattr(handler, "realm_id", "unknown_realm")
-                plan_doc_id = self._persist_plan_draft(draft, realm_id)
-                self._logger.info("Persisted plan '%s' to database", plan_doc_id)
-
-                # Execute via Engine (CLI mode skips approval checks)
-                self._logger.info("Executing plan '%s' via Engine", plan_doc_id)
-                self.engine.run(draft.plan)
-                self._logger.info("✓ Plan '%s' execution completed", plan_doc_id)
-
-            except Exception as e:
-                self._logger.exception(
-                    "Handler %s raised during run_once: %s",
-                    handler.class_qualified_name(),
-                    e,
-                )
-
-        # Single consume pass: spool must match the emitter used in the handler
-        spool_root = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
-        self._logger.info("Consuming event spool once at %s", spool_root)
-        FileSpoolConsumer(
-            spool_root,
-            OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops")),
-        ).consume()
-
-        self._logger.info("run_once: done.")
 
     # --------------------------------------------------------------------------
     # CLI Mode Methods (--plan-only, --run-once)
@@ -1806,6 +1518,9 @@ class YggdrasilCore:
                     or f"{event.event_type.name} from {event.source}"
                 )
                 handler_payload = dict(payload)
+                handler_payload["scope"] = scope
+                handler_payload["reason"] = reason
+                handler_payload["doc"] = doc
                 handler_payload["planning_ctx"] = self._make_planning_ctx(
                     handler, scope, doc=doc, reason=reason
                 )

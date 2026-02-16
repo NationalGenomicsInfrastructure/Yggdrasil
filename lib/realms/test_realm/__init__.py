@@ -5,11 +5,12 @@ This realm provides controllable test scenarios for validating Yggdrasil's
 execution pipeline without external dependencies.
 
 IMPORTANT: This realm is only available when running in dev mode (--dev flag).
-In production mode, the handler and watcher will not be registered.
+In production mode, get_realm_descriptor() returns None, so the realm is not
+discovered at all (no handlers, no watchspecs).
 
 Components:
-    - TestRealmHandler: Processes TEST_SCENARIO_CHANGE events
-    - ScenarioDocWatcher: Monitors yggdrasil DB for scenario documents
+    - TestRealmHandler: Processes COUCHDB_DOC_CHANGED events for scenario docs
+    - WatchSpec: Monitors yggdrasil DB for scenario documents (filter_expr based)
     - Templates: Pre-defined test plans (happy_path, fail_fast, etc.)
     - Steps: Controllable test steps (echo, sleep, fail, write_file, random_fail)
 
@@ -22,7 +23,7 @@ Usage:
             "template": "happy_path",
             "auto_run": true
         }
-    3. The watcher detects the document and triggers the handler
+    3. WatcherManager detects the document change via CouchDBBackend
     4. Handler generates a plan from the template
     5. Engine executes the plan
 
@@ -45,7 +46,16 @@ Scenario Document Schema:
     }
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from lib.core_utils.event_types import EventType
 from lib.core_utils.ygg_session import YggSession
+
+if TYPE_CHECKING:
+    from lib.watchers.watchspec import WatchSpec
+    from yggdrasil.core.realm import RealmDescriptor
 
 
 def is_test_realm_enabled() -> bool:
@@ -57,43 +67,97 @@ def is_test_realm_enabled() -> bool:
     return YggSession.is_dev()
 
 
-def get_handler():
+def _build_scope(raw_event: Any) -> dict[str, str]:
     """
-    Get TestRealmHandler if dev mode is enabled.
+    Extract scope from test scenario document.
+
+    Args:
+        raw_event: RawWatchEvent from CouchDBBackend
 
     Returns:
-        TestRealmHandler instance or None if not in dev mode
+        Scope dict with kind='test_scenario' and id from document
+    """
+    doc = getattr(raw_event, "doc", None) or {}
+    scenario_id = str(
+        doc.get("scenario_id") or doc.get("_id") or getattr(raw_event, "id", "unknown")
+    )
+    return {"kind": "test_scenario", "id": scenario_id}
+
+
+def _build_payload(raw_event: Any) -> dict[str, Any]:
+    """
+    Build payload for test scenario event.
+
+    Args:
+        raw_event: RawWatchEvent from CouchDBBackend
+
+    Returns:
+        Payload dict containing doc and reason
+    """
+    doc = getattr(raw_event, "doc", None) or {}
+    doc_id = doc.get("_id") or getattr(raw_event, "id", "unknown")
+    return {
+        "doc": doc,
+        "reason": f"scenario_change:{doc_id}",
+    }
+
+
+def _get_watchspecs() -> list[WatchSpec]:
+    """
+    WatchSpec provider for test realm.
+
+    Note: Called unconditionally; dev-mode gating is at get_realm_descriptor().
+
+    Returns:
+        List of WatchSpecs for test scenario monitoring.
+    """
+    from lib.watchers.watchspec import WatchSpec
+
+    return [
+        WatchSpec(
+            backend="couchdb",
+            connection="yggdrasil_testdocs",  # Connection name from config
+            event_type=EventType.COUCHDB_DOC_CHANGED,
+            filter_expr={
+                "and": [
+                    {"==": [{"var": "doc.type"}, "ygg_test_scenario"]},
+                    {"==": [{"var": "deleted"}, False]},
+                ]
+            },
+            build_scope=_build_scope,
+            build_payload=_build_payload,
+            target_handlers=["test_scenario_handler"],
+        ),
+    ]
+
+
+def get_realm_descriptor() -> RealmDescriptor | None:
+    """
+    Entry point for ygg.realm discovery.
+
+    Returns:
+        RealmDescriptor if dev mode enabled, None otherwise.
+        Returning None skips this realm entirely during discovery.
+
+    Gating strategy:
+        - Return None when not in dev mode (realm not discovered)
+        - This is cleaner than registering handlers that never receive events
     """
     if not is_test_realm_enabled():
         return None
 
     from lib.realms.test_realm.handler import TestRealmHandler
+    from yggdrasil.core.realm import RealmDescriptor
 
-    return TestRealmHandler()
-
-
-def get_watcher(on_event, logger=None):
-    """
-    Get ScenarioDocWatcher if dev mode is enabled.
-
-    Args:
-        on_event: Callback for YggdrasilEvent
-        logger: Optional logger instance
-
-    Returns:
-        ScenarioDocWatcher instance or None if not in dev mode
-    """
-    if not is_test_realm_enabled():
-        return None
-
-    from lib.realms.test_realm.watcher import ScenarioDocWatcher
-
-    return ScenarioDocWatcher(on_event=on_event, logger=logger)
+    return RealmDescriptor(
+        realm_id="test_realm",
+        handler_classes=[TestRealmHandler],  # CLASS, not instance
+        watchspecs=_get_watchspecs,  # Callable for deferred loading
+    )
 
 
-# Expose key components for direct import (only if in dev mode)
+# Expose key components for direct import
 __all__ = [
     "is_test_realm_enabled",
-    "get_handler",
-    "get_watcher",
+    "get_realm_descriptor",
 ]

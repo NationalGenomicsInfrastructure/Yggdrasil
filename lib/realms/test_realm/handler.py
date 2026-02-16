@@ -1,11 +1,10 @@
 """
 Test realm handler for processing test scenario documents.
 
-TestRealmHandler responds to TEST_SCENARIO_CHANGE events, generating
-execution plans from scenario documents stored in the yggdrasil database.
+TestRealmHandler responds to COUCHDB_DOC_CHANGED events for scenario documents,
+generating execution plans from scenario documents stored in the yggdrasil database.
 """
 
-import asyncio
 from typing import Any, ClassVar, cast
 
 from lib.core_utils.event_types import EventType
@@ -35,10 +34,13 @@ class TestRealmHandler(BaseHandler):
                 "step_id": {"param": "value"}
             }
         }
+
+    Note: Uses generic COUCHDB_DOC_CHANGED event type. Document filtering
+    is handled by the WatchSpec's filter_expr in the realm descriptor.
     """
 
-    event_type: ClassVar[EventType] = EventType.TEST_SCENARIO_CHANGE
-    handler_id: ClassVar[str] = "scenario_handler"
+    event_type: ClassVar[EventType] = EventType.COUCHDB_DOC_CHANGED
+    handler_id: ClassVar[str] = "test_scenario_handler"
 
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         """
@@ -48,11 +50,11 @@ class TestRealmHandler(BaseHandler):
             doc: Scenario document from yggdrasil DB
 
         Returns:
-            Scope dict with kind='scenario' and id from document
+            Scope dict with kind='test_scenario' and id from document
         """
         # Use _id or fall back to a generated ID
         doc_id = doc.get("_id", doc.get("scenario_id", "unknown"))
-        return {"kind": "scenario", "id": doc_id}
+        return {"kind": "test_scenario", "id": doc_id}
 
     def _parse_custom_steps(self, steps_config: list[dict[str, Any]]) -> list:
         """
@@ -122,10 +124,21 @@ class TestRealmHandler(BaseHandler):
 
         Returns:
             PlanDraft with plan, auto_run flag, and notes
+
+        Raises:
+            ValueError: If document type is not 'ygg_test_scenario'
         """
 
         doc = payload.get("doc", {})
         ctx: PlanningContext = payload["planning_ctx"]
+
+        # Guard: Verify document type (defense-in-depth; WatchSpec filters too)
+        doc_type = doc.get("type")
+        if doc_type != "ygg_test_scenario":
+            raise ValueError(
+                f"Expected doc.type='ygg_test_scenario', got '{doc_type}'. "
+                f"Document _id: {doc.get('_id')}"
+            )
 
         # Determine if using template or custom steps
         template_name = doc.get("template")
@@ -191,23 +204,3 @@ class TestRealmHandler(BaseHandler):
             notes=notes,
             preview=preview,
         )
-
-    def __call__(self, payload: dict[str, Any]) -> None:
-        """
-        Schedule async plan generation.
-
-        Called by YggdrasilCore when a TEST_SCENARIO_CHANGE event is received.
-        """
-        asyncio.create_task(self.generate_plan_draft(payload))
-
-    def run_now(self, payload: dict[str, Any]) -> PlanDraft:
-        """
-        Blocking entrypoint for CLI mode.
-
-        Args:
-            payload: Event payload with doc and planning_ctx
-
-        Returns:
-            PlanDraft for immediate execution
-        """
-        return asyncio.run(self.generate_plan_draft(payload))

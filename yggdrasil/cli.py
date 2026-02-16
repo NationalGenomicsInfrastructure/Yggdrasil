@@ -46,7 +46,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create plan only (for Genstat approval):
+  # Create plan only (for external approval):
   yggdrasil run-doc <doc_id> --plan-only
 
   # Create and execute plan (auto_run=True by default, but blocking if approval is needed):
@@ -133,10 +133,10 @@ Examples:
 
     logging.debug("Yggdrasil: Starting up...")
 
-    # 4) Prepare core (load config, init core, register handlers)
+    # 4) Prepare core (load config, init core, discover realms)
     config = ConfigLoader().load_config("main.json")
     core = YggdrasilCore(config)
-    core.setup_handlers()
+    core.setup_realms()
 
     if args.mode == "daemon":
         if getattr(args, "manual_submit", False):

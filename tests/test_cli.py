@@ -89,7 +89,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             main()
 
             # Verify daemon mode was processed correctly
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
             mock_asyncio_run.assert_called_once_with(mock_core.start())
 
@@ -130,7 +130,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             main()
 
             # Verify run-doc mode was processed correctly (defaults to plan-only)
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_core.create_plan_from_doc.assert_called_once_with(
                 doc_id="test_doc_id",
                 force_overwrite=False,
@@ -302,7 +302,7 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             # Verify core initialization and setup
             mock_core_class.assert_called_once_with(self.mock_config)
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
 
     def test_session_initialization_order(self):
         """Test that YggSession is initialized before core setup."""
@@ -344,7 +344,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             main()
 
             # Verify complete daemon setup flow
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
             mock_asyncio_run.assert_called_once_with(mock_core.start())
 
@@ -394,7 +394,7 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             # Verify complete run-doc flow (plan-only mode)
             mock_session.init_manual_submit.assert_called_once_with(False)
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_core.create_plan_from_doc.assert_called_once_with(
                 doc_id="test_document_id",
                 force_overwrite=False,
@@ -580,7 +580,7 @@ class TestYggdrasilCLI(unittest.TestCase):
                 "main.json"
             )
             mock_core_class.assert_called_once_with(self.mock_config)
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_session.init_manual_submit.assert_called_once_with(True)
             mock_core.create_plan_from_doc.assert_called_once_with(
                 doc_id="integration_test_doc",
@@ -748,7 +748,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             main()
 
             # Verify daemon mode works normally (defensive check doesn't trigger)
-            mock_core.setup_handlers.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
 
     def test_main_module_execution(self):
