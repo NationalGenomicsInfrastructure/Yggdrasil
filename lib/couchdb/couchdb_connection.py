@@ -272,3 +272,37 @@ class CouchDBHandler:
         raise TypeError(
             f"post_changes returned non-dict result: {type(result).__name__}"
         )
+
+    def fetch_changes_batch(
+        self,
+        *,
+        since: str | None = None,
+        include_docs: bool = True,
+        limit: int = 100,
+        feed: str = "normal",
+        timeout_ms: int | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Fetch one _changes batch and return ``(results, last_seq)``.
+
+        This is intentionally a single-request helper. It performs no polling,
+        retries, sleeping, or checkpointing.
+        """
+        result = self.post_changes(
+            since=since,
+            include_docs=include_docs,
+            limit=limit,
+            feed=feed,
+            timeout_ms=timeout_ms,
+        )
+
+        raw_results = result.get("results", []) if isinstance(result, dict) else []
+        if isinstance(raw_results, list):
+            results: list[dict[str, Any]] = [
+                item for item in raw_results if isinstance(item, dict)
+            ]
+        else:
+            results = []
+
+        last_seq = result.get("last_seq") if isinstance(result, dict) else None
+        last_seq_str = str(last_seq) if last_seq is not None else None
+        return results, last_seq_str

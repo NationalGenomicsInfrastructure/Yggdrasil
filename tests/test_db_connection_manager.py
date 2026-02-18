@@ -277,6 +277,80 @@ class TestCouchDBHandler(unittest.TestCase):
             limit=100,
         )
 
+    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    def test_post_changes_passes_feed_and_timeout(self, mock_create_client):
+        """Test that feed and timeout parameters are passed through."""
+        mock_client = MagicMock()
+        mock_create_client.return_value = mock_client
+        mock_client.post_changes.return_value.get_result.return_value = {
+            "results": [],
+            "last_seq": "10",
+        }
+
+        handler = CouchDBHandler(
+            db_name="test_db",
+            url="http://localhost:5984",
+            user_env="TEST_USER",
+            pass_env="TEST_PASS",
+        )
+
+        handler.post_changes(
+            since="10",
+            include_docs=False,
+            limit=25,
+            feed="longpoll",
+            timeout_ms=1500,
+        )
+
+        mock_client.post_changes.assert_called_with(
+            db="test_db",
+            since="10",
+            include_docs=False,
+            limit=25,
+            feed="longpoll",
+            timeout=1500,
+        )
+
+    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    def test_fetch_changes_batch_filters_results(self, mock_create_client):
+        """Test that fetch_changes_batch returns results list and last_seq."""
+        mock_client = MagicMock()
+        mock_create_client.return_value = mock_client
+
+        handler = CouchDBHandler(
+            db_name="test_db",
+            url="http://localhost:5984",
+            user_env="TEST_USER",
+            pass_env="TEST_PASS",
+        )
+
+        with patch.object(handler, "post_changes") as mock_post_changes:
+            mock_post_changes.return_value = {
+                "results": [
+                    {"id": "doc1", "seq": "1-abc"},
+                    "not-a-dict",
+                ],
+                "last_seq": 123,
+            }
+
+            results, last_seq = handler.fetch_changes_batch(
+                since="0",
+                include_docs=False,
+                limit=5,
+                feed="normal",
+                timeout_ms=2000,
+            )
+
+            self.assertEqual(results, [{"id": "doc1", "seq": "1-abc"}])
+            self.assertEqual(last_seq, "123")
+            mock_post_changes.assert_called_once_with(
+                since="0",
+                include_docs=False,
+                limit=5,
+                feed="normal",
+                timeout_ms=2000,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
