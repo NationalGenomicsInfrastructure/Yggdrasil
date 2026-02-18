@@ -9,13 +9,15 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from requests import Response
 
 from lib.core_utils.event_types import EventType
-from lib.couchdb.watcher_checkpoint_store import WatcherCheckpointStore
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from lib.watchers.abstract_watcher import AbstractWatcher
+from lib.watchers.backends.base import Checkpoint
+from lib.watchers.backends.checkpoint_store import CouchDBCheckpointStore
 
 
 class ScenarioDocWatcher(AbstractWatcher):
@@ -29,6 +31,7 @@ class ScenarioDocWatcher(AbstractWatcher):
     """
 
     SCENARIO_DOC_TYPE = "ygg_test_scenario"
+    CHECKPOINT_KEY = "watcher:ScenarioDocWatcher"
 
     def __init__(
         self,
@@ -53,10 +56,8 @@ class ScenarioDocWatcher(AbstractWatcher):
         self.poll_interval = poll_interval
         # Use the real yggdrasil DB manager so we can persist checkpoints
         self._db_handler = YggdrasilDBManager()
-        self.checkpoint_store = WatcherCheckpointStore(
-            watcher_name="ScenarioDocWatcher",
-            db_handler=self._db_handler,
-            logger=self._logger,
+        self.checkpoint_store = CouchDBCheckpointStore(
+            db_manager=self._db_handler,
         )
         self._last_seq: str | None = None
 
@@ -75,12 +76,18 @@ class ScenarioDocWatcher(AbstractWatcher):
         self._logger.info("Starting ScenarioDocWatcher...")
 
         # Load checkpoint (dev-only watcher, but persist to mirror real realms)
-        checkpoint = self.checkpoint_store.get_checkpoint()
-        if checkpoint:
+        checkpoint = self.checkpoint_store.load(self.CHECKPOINT_KEY)
+        checkpoint_value = (
+            str(checkpoint.value)
+            if checkpoint is not None and checkpoint.value is not None
+            else None
+        )
+        if checkpoint_value:
             self._logger.info(
-                "ScenarioDocWatcher resuming from checkpoint seq='%s'", checkpoint
+                "ScenarioDocWatcher resuming from checkpoint seq='%s'",
+                checkpoint_value,
             )
-            self._last_seq = checkpoint
+            self._last_seq = checkpoint_value
         else:
             # Start from 'now' to avoid replaying historical scenarios
             self._logger.info("ScenarioDocWatcher no checkpoint; starting from 'now'")
@@ -170,7 +177,13 @@ class ScenarioDocWatcher(AbstractWatcher):
             if last_seq:
                 self._last_seq = last_seq  # Always track in memory for next poll
                 if processed_any:
-                    self.checkpoint_store.save_checkpoint_with_retry(last_seq)
+                    self.checkpoint_store.save(
+                        Checkpoint(
+                            backend_key=self.CHECKPOINT_KEY,
+                            value=str(last_seq),
+                            updated_at=datetime.now(UTC).isoformat(),
+                        )
+                    )
 
         except Exception as e:
             self._logger.error("Error polling changes: %s", e, exc_info=True)
@@ -235,7 +248,13 @@ class ScenarioDocWatcher(AbstractWatcher):
                 if "seq" in change:
                     self._last_seq = change["seq"]
                     if self._last_seq is not None:
-                        self.checkpoint_store.save_checkpoint_with_retry(self._last_seq)
+                        self.checkpoint_store.save(
+                            Checkpoint(
+                                backend_key=self.CHECKPOINT_KEY,
+                                value=str(self._last_seq),
+                                updated_at=datetime.now(UTC).isoformat(),
+                            )
+                        )
 
         except Exception as e:
             self._logger.error("Error in streaming changes: %s", e, exc_info=True)
