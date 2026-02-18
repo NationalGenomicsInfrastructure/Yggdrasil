@@ -29,6 +29,7 @@ class TestChangesFetcher(unittest.TestCase):
         self.mock_db_handler = Mock()
         self.mock_db_handler.db_name = "test_db"
         self.mock_db_handler.server = Mock()
+        self.mock_db_handler.fetch_changes_batch = Mock()
 
     def test_checkpoint_doc_id(self):
         """Test canonical checkpoint doc ID construction."""
@@ -64,9 +65,7 @@ class TestChangesFetcher(unittest.TestCase):
             {"id": "doc2", "seq": "2-def", "doc": {"_id": "doc2"}},
         ]
 
-        mock_result = Mock()
-        mock_result.get_result.return_value = {"results": mock_results}
-        self.mock_db_handler.server.post_changes.return_value = mock_result
+        self.mock_db_handler.fetch_changes_batch.return_value = (mock_results, "2-def")
 
         fetcher = ChangesFetcher(self.mock_db_handler)
 
@@ -87,8 +86,8 @@ class TestChangesFetcher(unittest.TestCase):
             self.assertEqual(changes[1]["id"], "doc2")
 
             # Verify API was called correctly
-            self.mock_db_handler.server.post_changes.assert_called_once()
-            call_kwargs = self.mock_db_handler.server.post_changes.call_args[1]
+            self.mock_db_handler.fetch_changes_batch.assert_called_once()
+            call_kwargs = self.mock_db_handler.fetch_changes_batch.call_args[1]
             self.assertEqual(call_kwargs["feed"], "normal")
             self.assertEqual(call_kwargs["since"], "0")
             self.assertTrue(call_kwargs["include_docs"])
@@ -98,9 +97,7 @@ class TestChangesFetcher(unittest.TestCase):
     @patch("asyncio.sleep")
     def test_fetch_changes_empty(self, mock_sleep):
         """Test _changes fetch with no changes."""
-        mock_result = Mock()
-        mock_result.get_result.return_value = {"results": []}
-        self.mock_db_handler.server.post_changes.return_value = mock_result
+        self.mock_db_handler.fetch_changes_batch.return_value = ([], "100")
 
         fetcher = ChangesFetcher(self.mock_db_handler)
 
@@ -126,9 +123,7 @@ class TestChangesFetcher(unittest.TestCase):
             {"id": "doc2", "seq": "3-ghi", "doc": {}},
             {"id": "doc3"},
         ]
-        mock_result = Mock()
-        mock_result.get_result.return_value = {"results": mock_results}
-        self.mock_db_handler.server.post_changes.return_value = mock_result
+        self.mock_db_handler.fetch_changes_batch.return_value = (mock_results, "3-ghi")
 
         fetcher = ChangesFetcher(self.mock_db_handler)
 
@@ -155,9 +150,7 @@ class TestChangesFetcher(unittest.TestCase):
             {"seq": "2-def"},
             {"id": "doc2", "seq": "3-ghi"},
         ]
-        mock_result = Mock()
-        mock_result.get_result.return_value = {"results": mock_results}
-        self.mock_db_handler.server.post_changes.return_value = mock_result
+        self.mock_db_handler.fetch_changes_batch.return_value = (mock_results, "3-ghi")
 
         fetcher = ChangesFetcher(self.mock_db_handler)
 
@@ -178,7 +171,7 @@ class TestChangesFetcher(unittest.TestCase):
     @patch("asyncio.sleep")
     def test_fetch_changes_api_exception(self, mock_sleep):
         """Test that API exceptions are re-raised."""
-        self.mock_db_handler.server.post_changes.side_effect = MockApiException(
+        self.mock_db_handler.fetch_changes_batch.side_effect = MockApiException(
             500, "Server error"
         )
 
@@ -204,9 +197,7 @@ class TestChangesFetcher(unittest.TestCase):
             {"id": "doc2", "seq": "2-def"},
         ]
 
-        mock_result1 = Mock()
-        mock_result1.get_result.return_value = {"results": mock_results}
-        self.mock_db_handler.server.post_changes.return_value = mock_result1
+        self.mock_db_handler.fetch_changes_batch.return_value = (mock_results, "2-def")
 
         fetcher = ChangesFetcher(self.mock_db_handler)
 
@@ -234,15 +225,10 @@ class TestChangesFetcher(unittest.TestCase):
     def test_stream_continuous_transient_error_retry(self, mock_sleep):
         """Test retry logic on transient 500 error."""
         # Second call succeeds
-        mock_result_success = Mock()
-        mock_result_success.get_result.return_value = {
-            "results": [{"id": "doc1", "seq": "1-abc"}]
-        }
-
-        # Alternate between fail and success (post_changes raises ApiException)
-        self.mock_db_handler.server.post_changes.side_effect = [
+        # Alternate between fail and success
+        self.mock_db_handler.fetch_changes_batch.side_effect = [
             MockApiException(500, "Server error"),
-            mock_result_success,
+            ([{"id": "doc1", "seq": "1-abc"}], "1-abc"),
         ]
 
         fetcher = ChangesFetcher(self.mock_db_handler, max_retries=3)
@@ -264,8 +250,8 @@ class TestChangesFetcher(unittest.TestCase):
             loop.run_until_complete(asyncio.wait_for(collect(), timeout=2.0))
             # Should get 1 change after retry succeeds
             self.assertEqual(len(changes), 1)
-            # Should have called post_changes twice (fail + retry)
-            self.assertEqual(self.mock_db_handler.server.post_changes.call_count, 2)
+            # Should have called fetch_changes_batch twice (fail + retry)
+            self.assertEqual(self.mock_db_handler.fetch_changes_batch.call_count, 2)
         finally:
             loop.close()
 
@@ -273,7 +259,7 @@ class TestChangesFetcher(unittest.TestCase):
     @patch("asyncio.sleep")
     def test_stream_continuous_max_retries_exceeded(self, mock_sleep):
         """Test that stream stops after max retries exceeded."""
-        self.mock_db_handler.server.post_changes.side_effect = MockApiException(
+        self.mock_db_handler.fetch_changes_batch.side_effect = MockApiException(
             500, "Server error"
         )
 
@@ -297,7 +283,7 @@ class TestChangesFetcher(unittest.TestCase):
     @patch("asyncio.sleep")
     def test_stream_continuous_404_error_not_retried(self, mock_sleep):
         """Test that 404 (DB not found) is not retried."""
-        self.mock_db_handler.server.post_changes.side_effect = MockApiException(
+        self.mock_db_handler.fetch_changes_batch.side_effect = MockApiException(
             404, "Not found"
         )
 
@@ -317,7 +303,7 @@ class TestChangesFetcher(unittest.TestCase):
 
             self.assertEqual(ctx.exception.code, 404)
             # Should only be called once (no retries)
-            self.assertEqual(self.mock_db_handler.server.post_changes.call_count, 1)
+            self.assertEqual(self.mock_db_handler.fetch_changes_batch.call_count, 1)
         finally:
             loop.close()
 

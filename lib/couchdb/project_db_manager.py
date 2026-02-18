@@ -8,20 +8,9 @@ from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
+from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 
 logging = custom_logger(__name__.split(".")[-1])
-
-# Default environment variable names for credentials
-DEFAULT_USER_ENV = "YGG_COUCH_USER"
-DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
-
-
-def _get_couchdb_endpoint_config() -> dict[str, Any]:
-    """Load CouchDB endpoint config from main.json."""
-    full_config = ConfigLoader().load_config("main.json")
-    external_systems = full_config.get("external_systems", {})
-    endpoints = external_systems.get("endpoints", {})
-    return endpoints.get("couchdb", {})
 
 
 class ProjectDBManager(CouchDBHandler):
@@ -37,32 +26,24 @@ class ProjectDBManager(CouchDBHandler):
     def __init__(
         self,
         *,
+        endpoint: str = DEFAULT_ENDPOINT,
         url: str | None = None,
         user_env: str | None = None,
         pass_env: str | None = None,
     ) -> None:
-        # Load config for defaults if not provided
-        if url is None or user_env is None or pass_env is None:
-            ep = _get_couchdb_endpoint_config()
-            auth = ep.get("auth", {})
-            if url is None:
-                raw_url = ep.get("url")
-                if not raw_url:
-                    raise RuntimeError(
-                        "CouchDB URL not configured. Set external_systems.endpoints.couchdb.url "
-                        "in main.json or pass url= explicitly."
-                    )
-                url = Ygg.normalize_url(raw_url)
-            if user_env is None:
-                user_env = auth.get("user_env", DEFAULT_USER_ENV)
-            if pass_env is None:
-                pass_env = auth.get("pass_env", DEFAULT_PASS_ENV)
+        params = resolve_couchdb_params(
+            endpoint=endpoint,
+            url=url,
+            user_env=user_env,
+            pass_env=pass_env,
+        )
 
-        assert url is not None
-        assert user_env is not None
-        assert pass_env is not None
-
-        super().__init__("projects", url=url, user_env=user_env, pass_env=pass_env)
+        super().__init__(
+            "projects",
+            url=params.url,
+            user_env=params.user_env,
+            pass_env=params.pass_env,
+        )
         self.module_registry = ConfigLoader().load_config("module_registry.json")
 
     async def fetch_changes(self) -> AsyncGenerator[tuple[dict[str, Any], str], None]:
@@ -153,4 +134,6 @@ class ProjectDBManager(CouchDBHandler):
                     logging.warning(f"Document with ID {change['id']} is None.")
             except Exception as e:
                 logging.warning(f"Error processing change: {e}")
+                logging.debug(f"Data causing the error: {change}")
+                logging.debug(f"Data causing the error: {change}")
                 logging.debug(f"Data causing the error: {change}")

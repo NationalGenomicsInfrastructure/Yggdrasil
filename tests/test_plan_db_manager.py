@@ -39,9 +39,14 @@ class TestPlanDBManager(unittest.TestCase):
                 "pass_env": "MOCK_COUCH_PASS",
             },
         }
+        self.mock_couchdb_params = Mock(
+            url=self.mock_config["url"],
+            user_env=self.mock_config["auth"]["user_env"],
+            pass_env=self.mock_config["auth"]["pass_env"],
+        )
         self.config_patcher = patch(
-            "lib.couchdb.plan_db_manager._get_couchdb_endpoint_config",
-            return_value=self.mock_config,
+            "lib.couchdb.plan_db_manager.resolve_couchdb_params",
+            return_value=self.mock_couchdb_params,
         )
         self.config_patcher.start()
 

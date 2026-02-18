@@ -70,16 +70,16 @@ class TestYggdrasilDBManager(unittest.TestCase):
             "timestamp": "2024-01-02",
         }
 
-    @patch("lib.couchdb.yggdrasil_db_manager._get_couchdb_endpoint_config")
+    @patch("lib.couchdb.yggdrasil_db_manager.resolve_couchdb_params")
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     def test_init_success(self, mock_handler_init, mock_get_config):
         """Test successful initialization of YggdrasilDBManager."""
         # Arrange
         mock_handler_init.return_value = None
-        mock_get_config.return_value = {
-            "url": "http://localhost:5984",
-            "auth": {"user_env": "COUCH_USER", "pass_env": "COUCH_PASS"},
-        }
+        mock_params = MagicMock(
+            url="http://localhost:5984", user_env="COUCH_USER", pass_env="COUCH_PASS"
+        )
+        mock_get_config.return_value = mock_params
 
         # Act
         YggdrasilDBManager()
@@ -816,4 +816,5 @@ class TestEdgeCasesAndIntegration(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()
