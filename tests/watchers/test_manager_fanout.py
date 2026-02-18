@@ -7,6 +7,7 @@ Tests add_watchspec(), _consume_backend(), and _fan_out() methods.
 import asyncio
 import logging
 import unittest
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
@@ -32,14 +33,11 @@ class MockBackend(WatcherBackend):
         super().__init__(**kwargs)
         self._events_to_emit = events_to_emit or []
 
-    async def _produce_events(self) -> None:
-        try:
-            for event in self._events_to_emit:
-                if not self._running:
-                    break
-                await self._event_queue.put(event)
-        finally:
-            await self._event_queue.put(None)
+    async def stream(self) -> AsyncIterator[RawWatchEvent]:
+        for event in self._events_to_emit:
+            if not self._running:
+                break
+            yield event
 
     async def start(self) -> None:
         await super().start()

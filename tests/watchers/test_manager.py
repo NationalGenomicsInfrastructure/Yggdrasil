@@ -7,6 +7,7 @@ grouping/deduplication, and config resolution.
 
 import asyncio
 import unittest
+from collections.abc import AsyncIterator
 from typing import Any
 
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
@@ -30,15 +31,12 @@ class MockWatcherBackend(WatcherBackend):
         self._stopped = False
         self._events_to_emit: list[RawWatchEvent] = []
 
-    async def _produce_events(self) -> None:
-        """Produce mock events."""
-        try:
-            for event in self._events_to_emit:
-                if not self._running:
-                    break
-                await self._event_queue.put(event)
-        finally:
-            await self._event_queue.put(None)
+    async def stream(self) -> AsyncIterator[RawWatchEvent]:
+        """Yield mock events."""
+        for event in self._events_to_emit:
+            if not self._running:
+                break
+            yield event
 
     async def start(self) -> None:
         await super().start()
@@ -438,8 +436,9 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
         """Test start() continues if one backend fails."""
 
         class FailingBackend(WatcherBackend):
-            async def _produce_events(self) -> None:
-                await self._event_queue.put(None)
+            async def stream(self) -> AsyncIterator[RawWatchEvent]:
+                if False:
+                    yield RawWatchEvent(id="never")
 
             async def start(self) -> None:
                 raise RuntimeError("Startup failed")
@@ -545,4 +544,5 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()
