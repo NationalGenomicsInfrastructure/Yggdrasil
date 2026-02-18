@@ -8,6 +8,7 @@ and WatcherBackend.
 import asyncio
 import logging
 import unittest
+from collections.abc import AsyncIterator
 from dataclasses import FrozenInstanceError
 from typing import Any
 
@@ -151,18 +152,14 @@ class ConcreteWatcherBackend(WatcherBackend):
         self._events_to_produce = events_to_produce or []
         self._produce_called = False
 
-    async def _produce_events(self) -> None:
-        """Produce test events."""
+    async def stream(self) -> AsyncIterator[RawWatchEvent]:
+        """Yield test events."""
         self._produce_called = True
-        try:
-            for event in self._events_to_produce:
-                if not self._running:
-                    break
-                await self._event_queue.put(event)
-                await asyncio.sleep(0.01)  # Simulate work
-        finally:
-            # Producer puts sentinel on normal exit
-            await self._event_queue.put(None)
+        for event in self._events_to_produce:
+            if not self._running:
+                break
+            yield event
+            await asyncio.sleep(0.01)  # Simulate work
 
 
 class TestWatcherBackend(unittest.TestCase):

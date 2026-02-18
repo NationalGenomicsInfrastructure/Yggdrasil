@@ -8,8 +8,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ibm_cloud_sdk_core.api_exception import ApiException
-
+from lib.couchdb.changes_fetcher import ApiException
 from lib.watchers.backends.base import Checkpoint
 from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
 from lib.watchers.backends.couchdb import CouchDBBackend
@@ -140,19 +139,27 @@ class TestCouchDBBackendPolling(unittest.TestCase):
         mock_handler = MagicMock()
         mock_create_handler.return_value = mock_handler
 
-        # Mock _changes response (handler.post_changes returns dict directly)
-        changes_response = {
-            "results": [
-                {
-                    "id": "doc1",
-                    "seq": "1-abc",
-                    "doc": {"_id": "doc1", "type": "project"},
-                },
-                {"id": "doc2", "seq": "2-def", "deleted": True, "doc": None},
-            ],
-            "last_seq": "2-def",
-        }
-        mock_handler.post_changes.return_value = changes_response
+        responses = [
+            (
+                [
+                    {
+                        "id": "doc1",
+                        "seq": "1-abc",
+                        "doc": {"_id": "doc1", "type": "project"},
+                    },
+                    {"id": "doc2", "seq": "2-def", "deleted": True, "doc": None},
+                ],
+                "2-def",
+            ),
+            ([], "2-def"),
+        ]
+
+        def _batch(**kwargs):
+            if responses:
+                return responses.pop(0)
+            return ([], "2-def")
+
+        mock_handler.fetch_changes_batch.side_effect = _batch
 
         async def run_test():
             backend = CouchDBBackend(
@@ -196,8 +203,7 @@ class TestCouchDBBackendPolling(unittest.TestCase):
         self.store.save(cp)
 
         # Mock empty response (no new changes)
-        changes_response = {"results": [], "last_seq": "saved-seq-123"}
-        mock_handler.post_changes.return_value = changes_response
+        mock_handler.fetch_changes_batch.return_value = ([], "saved-seq-123")
 
         async def run_test():
             backend = CouchDBBackend(
@@ -210,11 +216,10 @@ class TestCouchDBBackendPolling(unittest.TestCase):
             await asyncio.sleep(0.1)
             await backend.stop()
 
-            # Verify post_changes was called with saved checkpoint
-            call_args = mock_handler.post_changes.call_args
+            # Verify batch fetch was called with saved checkpoint
+            call_args = mock_handler.fetch_changes_batch.call_args
             self.assertEqual(call_args.kwargs.get("since"), "saved-seq-123")
             self.assertEqual(call_args.kwargs.get("feed"), "normal")
-            self.assertEqual(call_args.kwargs.get("timeout_ms"), 5000)
 
         asyncio.run(run_test())
 
@@ -224,14 +229,10 @@ class TestCouchDBBackendPolling(unittest.TestCase):
         mock_handler = MagicMock()
         mock_create_handler.return_value = mock_handler
 
-        # Mock changes with last_seq
-        changes_response = {
-            "results": [
-                {"id": "doc1", "seq": "100-abc", "doc": {"_id": "doc1"}},
-            ],
-            "last_seq": "100-abc",
-        }
-        mock_handler.post_changes.return_value = changes_response
+        mock_handler.fetch_changes_batch.return_value = (
+            [{"id": "doc1", "seq": "100-abc", "doc": {"_id": "doc1"}}],
+            "100-abc",
+        )
 
         async def run_test():
             backend = CouchDBBackend(
@@ -274,10 +275,7 @@ class TestCouchDBBackendPolling(unittest.TestCase):
         self.store.save(cp)
 
         # No new changes and same last_seq should not trigger a checkpoint write.
-        mock_handler.post_changes.return_value = {
-            "results": [],
-            "last_seq": "saved-seq-123",
-        }
+        mock_handler.fetch_changes_batch.return_value = ([], "saved-seq-123")
 
         async def run_test():
             backend = CouchDBBackend(
@@ -309,32 +307,26 @@ class TestCouchDBBackendRetry(unittest.TestCase):
         }
 
     @patch.object(CouchDBBackend, "_create_handler")
-    @patch("lib.watchers.backends.couchdb.asyncio.sleep", new_callable=AsyncMock)
+    @patch("lib.couchdb.changes_fetcher.asyncio.sleep", new_callable=AsyncMock)
     def test_retries_on_connection_error(self, mock_sleep, mock_create_handler):
         """Test that backend retries on connection errors."""
         mock_handler = MagicMock()
+        mock_handler.db_name = "testdb"  # Required by ChangesFetcher logging
         mock_create_handler.return_value = mock_handler
 
-        # Mock: fail twice, then succeed
-        call_count = 0
+        # Use a call counter stored in a list to avoid threading issues with nonlocal
+        call_tracker = {"count": 0}
 
-        def mock_post_changes(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            current_count = call_count
-            if current_count <= 2:
+        def mock_fetch_changes_batch(**kwargs):
+            call_tracker["count"] += 1
+            if call_tracker["count"] <= 2:
                 raise ApiException(code=503, message="Service Unavailable")
-            else:
-                # Return success on 3rd+ call
-                return {
-                    "results": [{"id": "doc1", "seq": "1-abc"}],
-                    "last_seq": "1-abc",
-                }
+            # Return success on 3rd+ call
+            return ([{"id": "doc1", "seq": "1-abc"}], "1-abc")
 
-        mock_handler.post_changes.side_effect = mock_post_changes
+        mock_handler.fetch_changes_batch.side_effect = mock_fetch_changes_batch
 
         async def run_test():
-            nonlocal call_count
             backend = CouchDBBackend(
                 backend_key="couchdb:testdb",
                 config=self.config,
@@ -355,32 +347,34 @@ class TestCouchDBBackendRetry(unittest.TestCase):
             finally:
                 await backend.stop()
 
-            # Verify: 2 failures + at least 1 success = >= 3 calls
-            # (May be 4 if producer made another poll before stop)
-            self.assertGreaterEqual(call_count, 3)
             # We got an event, proving recovery worked
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0].id, "doc1")
+            # Verify: 2 failures + at least 1 success = >= 3 calls
+            # (stored after thread execution)
+            self.assertGreaterEqual(call_tracker["count"], 3)
 
         asyncio.run(run_test())
 
     @patch.object(CouchDBBackend, "_create_handler")
-    @patch("lib.watchers.backends.couchdb.asyncio.sleep", new_callable=AsyncMock)
-    def test_recreates_handler_immediately_on_connection_reset(
+    @patch("lib.couchdb.changes_fetcher.asyncio.sleep", new_callable=AsyncMock)
+    def test_does_not_recreate_handler_on_transient_errors(
         self, mock_sleep, mock_create_handler
     ):
-        """Test immediate handler recreation on connection reset errors."""
-        first_handler = MagicMock()
-        second_handler = MagicMock()
-        mock_create_handler.side_effect = [first_handler, second_handler]
+        """Retry policy is delegated to ChangesFetcher; backend handler is created once."""
+        handler = MagicMock()
+        handler.db_name = "testdb"  # Required by ChangesFetcher logging
+        mock_create_handler.return_value = handler
 
-        first_handler.post_changes.side_effect = ConnectionResetError(
-            "Connection reset by peer"
-        )
-        second_handler.post_changes.return_value = {
-            "results": [{"id": "doc-recovered", "seq": "1-abc"}],
-            "last_seq": "1-abc",
-        }
+        call_tracker = {"count": 0}
+
+        def _fetch_changes_batch(**kwargs):
+            call_tracker["count"] += 1
+            if call_tracker["count"] <= 2:
+                raise ApiException(code=503, message="Service Unavailable")
+            return ([{"id": "doc-recovered", "seq": "1-abc"}], "1-abc")
+
+        handler.fetch_changes_batch.side_effect = _fetch_changes_batch
 
         async def run_test():
             backend = CouchDBBackend(
@@ -400,9 +394,11 @@ class TestCouchDBBackendRetry(unittest.TestCase):
             finally:
                 await backend.stop()
 
-            self.assertGreaterEqual(mock_create_handler.call_count, 2)
+            self.assertEqual(mock_create_handler.call_count, 1)
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0].id, "doc-recovered")
+            # Verify retries occurred (3+ calls: 2 failures + success)
+            self.assertGreaterEqual(call_tracker["count"], 3)
 
         asyncio.run(run_test())
 
@@ -427,7 +423,7 @@ class TestCouchDBBackendGracefulStop(unittest.TestCase):
         mock_create_handler.return_value = mock_handler
 
         # Mock response that returns empty results
-        mock_handler.post_changes.return_value = {"results": [], "last_seq": "0"}
+        mock_handler.fetch_changes_batch.return_value = ([], "0")
 
         async def run_test():
             backend = CouchDBBackend(

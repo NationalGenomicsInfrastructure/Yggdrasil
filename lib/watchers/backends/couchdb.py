@@ -7,17 +7,18 @@ RawWatchEvent objects for each change.
 Features:
 - Polls _changes feed with configurable interval
 - Checkpoint-based resume (saves after each poll batch)
-- Exponential backoff retry on transient errors
+- Delegates polling retry/backoff to ChangesFetcher
 - Graceful shutdown on stop()
 - Uses existing CouchDBHandler infrastructure for connection management
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
+from lib.couchdb.changes_fetcher import ChangesFetcher
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 
@@ -25,19 +26,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__.split(".")[-1])
-
-
-def _is_connection_reset_error(error: Exception) -> bool:
-    """Return True if error indicates a broken/reset connection state."""
-    text = str(error).lower()
-    if "connection reset" in text or "connection broken" in text:
-        return True
-    current: BaseException | None = error
-    while current is not None:
-        if isinstance(current, ConnectionResetError):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
 
 
 class CouchDBBackend(WatcherBackend):
@@ -68,9 +56,7 @@ class CouchDBBackend(WatcherBackend):
         - On restart, at most one batch may be replayed (idempotency assumed)
 
     Retry strategy:
-        - Transient errors trigger exponential backoff (2^n seconds, max 60)
-        - After max_retries (5), recreates handler/client to avoid stale sessions
-        - Backend continues running (doesn't crash on persistent errors)
+        - Delegated to ChangesFetcher.stream_changes_continuously()
 
     Example:
         backend = CouchDBBackend(
@@ -98,8 +84,6 @@ class CouchDBBackend(WatcherBackend):
     DEFAULT_LIMIT = 100  # Max changes to fetch per poll
     DEFAULT_FEED = "normal"
     DEFAULT_LONGPOLL_TIMEOUT_MS = 5000
-    MAX_RETRIES = 5
-    MAX_BACKOFF = 60  # Max backoff time in seconds (1 minute)
 
     def __init__(
         self,
@@ -158,8 +142,9 @@ class CouchDBBackend(WatcherBackend):
             config.get("longpoll_timeout_ms", self.DEFAULT_LONGPOLL_TIMEOUT_MS)
         )
 
-        # Handler initialized lazily in _produce_events
+        # Handler and fetcher initialized lazily in stream()
         self._handler: CouchDBHandler | None = None
+        self._fetcher: ChangesFetcher | None = None
 
     def _create_handler(self) -> CouchDBHandler:
         """
@@ -184,185 +169,83 @@ class CouchDBBackend(WatcherBackend):
             pass_env=self._pass_env,
         )
 
-    async def _produce_events(self) -> None:
+    def stream(self) -> AsyncIterator[RawWatchEvent]:
         """
-        Poll CouchDB _changes feed and emit RawWatchEvent objects.
+        Yield CouchDB changes as RawWatchEvent objects.
 
         Checkpoint strategy:
-            - Save checkpoint AFTER each poll batch using last_seq
-            - This is more efficient than per-event checkpointing
-            - At most one batch replayed on restart (idempotency assumed)
+            - Load checkpoint once at startup
+            - Save checkpoint when emitted event seq advances
 
         Error handling:
-            - Transient errors: retry with exponential backoff
-            - After MAX_RETRIES: log and reset (continue running)
-            - CancelledError: exit cleanly
+            - Handled by ChangesFetcher policy layer
 
-        Uses the shared CouchDBHandler infrastructure for connection management.
+        No direct post_changes calls or backend-local polling loops.
         """
-        self._logger.info(
-            "Starting CouchDB producer for %s (db=%s, feed=%s, interval=%.1fs)",
-            self.backend_key,
-            self._db_name,
-            self._feed,
-            self._poll_interval,
-        )
 
-        # Initialize handler using shared infrastructure
-        try:
-            self._handler = self._create_handler()
-        except Exception as e:
-            self._logger.error(
-                "Failed to create CouchDB handler for %s: %s",
-                self.backend_key,
-                e,
-                exc_info=True,
-            )
-            # Use finally block's put_nowait pattern
-            try:
-                self._event_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
-            return
-
-        # Load checkpoint or use start_seq
-        checkpoint = self.load_checkpoint()
-        # Handle None checkpoint value explicitly
-        if checkpoint and checkpoint.value is not None:
-            since: str | int = checkpoint.value
+        async def _gen() -> AsyncIterator[RawWatchEvent]:
             self._logger.info(
-                "Resuming from checkpoint ='%s' (updated %s)",
-                since,
-                checkpoint.updated_at,
+                "Starting CouchDB stream for %s (db=%s, feed=%s, interval=%.1fs)",
+                self.backend_key,
+                self._db_name,
+                self._feed,
+                self._poll_interval,
             )
-        else:
-            since = self._start_seq
-            self._logger.info("No checkpoint found, starting from ='%s'", since)
 
-        retry_count = 0
-
-        try:
-            while self._running:
-                try:
-                    # Poll for changes using the handler's post_changes method
-                    handler = cast(Any, self._handler)
-                    result: dict[str, Any] = await asyncio.to_thread(
-                        handler.post_changes,
-                        since=since,
-                        include_docs=self._include_docs,
-                        limit=self._limit,
-                        feed=self._feed,
-                        timeout_ms=self._longpoll_timeout_ms,
-                    )
-                    changes: list[dict[str, Any]] = result.get("results", [])
-
-                    if changes:
-                        self._logger.debug(
-                            "Received %d changes from '%s' (since='%s')",
-                            len(changes),
-                            self._db_name,
-                            since,
-                        )
-
-                    # Emit events for each change
-                    for change in changes:
-                        if not self._running:
-                            break
-
-                        event = self._change_to_event(change)
-                        await self._event_queue.put(event)
-
-                    # Save checkpoint only when sequence advances.
-                    last_seq = result.get("last_seq")
-                    if last_seq:
-                        if str(last_seq) != str(since):
-                            since = last_seq
-                            self.save_checkpoint(since)
-
-                    # Reset retry count on success
-                    retry_count = 0
-
-                    # Wait before next poll only for non-longpoll feeds.
-                    # longpoll blocks server-side until change/timeout.
-                    if self._feed != "longpoll":
-                        await asyncio.sleep(self._poll_interval)
-
-                except asyncio.CancelledError:
-                    self._logger.debug("Producer cancelled for %s", self.backend_key)
-                    raise  # Re-raise to exit the while loop and hit finally
-
-                except Exception as e:
-                    is_reset = _is_connection_reset_error(e)
-
-                    if is_reset:
-                        self._logger.warning(
-                            "Detected connection reset for %s; recreating handler immediately",
-                            self.backend_key,
-                        )
-                        try:
-                            self._handler = self._create_handler()
-                            self._logger.info(
-                                "Successfully recreated CouchDB handler for %s after reset",
-                                self.backend_key,
-                            )
-                        except Exception as recreate_err:
-                            self._logger.error(
-                                "Immediate handler recreate failed for %s: %s",
-                                self.backend_key,
-                                recreate_err,
-                            )
-
-                    retry_count += 1
-                    self._logger.warning(
-                        "Error polling changes for %s (attempt %d/%d): %s",
-                        self.backend_key,
-                        retry_count,
-                        self.MAX_RETRIES,
-                        e,
-                    )
-
-                    if retry_count >= self.MAX_RETRIES:
-                        self._logger.error(
-                            "Max retries (%d) reached for %s; recreating client and continuing",
-                            self.MAX_RETRIES,
-                            self.backend_key,
-                            exc_info=True,
-                        )
-                        # Recreate handler to get fresh client/session
-                        # This avoids stale connection pool issues
-                        try:
-                            self._handler = self._create_handler()
-                            self._logger.info(
-                                "Successfully recreated CouchDB handler for %s",
-                                self.backend_key,
-                            )
-                        except Exception as recreate_err:
-                            self._logger.error(
-                                "Failed to recreate handler for %s: %s",
-                                self.backend_key,
-                                recreate_err,
-                            )
-                        retry_count = 0
-
-                    # Exponential backoff
-                    backoff = min(2**retry_count, self.MAX_BACKOFF)
-                    await asyncio.sleep(backoff)
-
-        except asyncio.CancelledError:
-            # Normal cancellation from stop()
-            pass
-        finally:
-            # Always put sentinel using non-blocking put_nowait to avoid deadlock
-            self._logger.debug(
-                "Producer exiting for %s, sending sentinel", self.backend_key
-            )
+            # Initialize handler using shared infrastructure
             try:
-                self._event_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                self._logger.warning(
-                    "Queue full during shutdown for %s; consumer should check _running",
+                self._handler = self._create_handler()
+            except Exception as e:
+                self._logger.error(
+                    "Failed to create CouchDB handler for %s: %s",
                     self.backend_key,
+                    e,
+                    exc_info=True,
                 )
+                return
+
+            self._fetcher = ChangesFetcher(
+                db_handler=self._handler,
+                include_docs=self._include_docs,
+                logger=self._logger,
+            )
+
+            # Load checkpoint or use start_seq
+            checkpoint = self.load_checkpoint()
+            # Handle None checkpoint value explicitly
+            if checkpoint and checkpoint.value is not None:
+                current_seq = str(checkpoint.value)
+                self._logger.info(
+                    "Resuming from checkpoint ='%s' (updated %s)",
+                    current_seq,
+                    checkpoint.updated_at,
+                )
+            else:
+                current_seq = str(self._start_seq)
+                self._logger.info(
+                    "No checkpoint found, starting from ='%s'", current_seq
+                )
+
+            fetcher = cast(ChangesFetcher, self._fetcher)
+
+            async for change in fetcher.stream_changes_continuously(
+                since=current_seq,
+                poll_interval_sec=self._poll_interval,
+            ):
+                if not self._running:
+                    break
+
+                event = self._change_to_event(change)
+                yield event
+
+                seq = change.get("seq")
+                if seq is not None:
+                    seq_str = str(seq)
+                    if seq_str != current_seq:
+                        current_seq = seq_str
+                        self.save_checkpoint(current_seq)
+
+        return _gen()
 
     def _change_to_event(self, change: dict[str, Any]) -> RawWatchEvent:
         """

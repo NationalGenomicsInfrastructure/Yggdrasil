@@ -32,8 +32,8 @@ class CouchDBCheckpointStore(CheckpointStore):
             "updated_at": str (ISO timestamp)
         }
 
-    Thread safety: Uses YggdrasilDBManager which handles connection pooling.
-    Multiple backends can safely use the same store instance.
+    Thread safety: Intended for concurrent backend usage via deterministic
+    document IDs and CouchDB revision-based updates.
 
     Example:
         store = CouchDBCheckpointStore()
@@ -51,7 +51,7 @@ class CouchDBCheckpointStore(CheckpointStore):
 
         Args:
             db_manager: Optional YggdrasilDBManager instance.
-                        If None, creates a new instance (uses singleton internally).
+                        If None, creates a new instance.
         """
         self._dbm: YggdrasilDBManager | None = db_manager
         self._logger = logger or logging.getLogger(

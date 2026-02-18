@@ -13,7 +13,7 @@ Design principles:
 - Backends are generic and contain NO domain/realm logic
 - Backends emit RawWatchEvent objects via internal queue
 - Backends manage their own checkpoints for resume semantics
-- Backends handle transient failures with internal retry
+- Backends define stream tempo/policy; base handles lifecycle and queue plumbing
 """
 
 from __future__ import annotations
@@ -158,9 +158,8 @@ class WatcherBackend(ABC):
     - stop(): Cancels producer task, puts sentinel, cleans up
 
     Queue semantics:
-    - Producer (_produce_events) puts RawWatchEvent objects on queue
-    - Producer puts None sentinel when exiting normally
-    - stop() only adds sentinel if producer was cancelled before it could
+    - Base producer task consumes stream() and puts RawWatchEvent objects on queue
+    - Base producer task puts None sentinel when exiting
     - Consumer (events()) yields until None sentinel received
 
     Example usage:
@@ -213,47 +212,55 @@ class WatcherBackend(ABC):
         return self._running
 
     @abstractmethod
-    async def _produce_events(self) -> None:
+    def stream(self) -> AsyncIterator[RawWatchEvent]:
         """
-        Internal producer loop. Subclasses implement this to:
+        Backend event stream.
+
+        Subclasses implement this to:
         - Connect to external system
-        - Poll/stream for changes
-        - Put RawWatchEvent objects onto self._event_queue
-        - Handle retries internally
+        - Poll/stream for changes at their chosen cadence
+        - Yield RawWatchEvent objects
         - Exit when self._running is False
-
-        Sentinel contract:
-        - MUST use a finally block to put sentinel
-        - Use put_nowait(None) with try/except QueueFull to avoid blocking
-        - This ensures clean shutdown even if queue is full
-
-        Example pattern::
-
-            try:
-                while self._running:
-                    # poll and emit events
-                    pass
-            except asyncio.CancelledError:
-                pass  # Normal cancellation
-            finally:
-                try:
-                    self._event_queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass  # Consumer will see _running=False
         """
         ...
+
+    async def _run_producer(self) -> None:
+        """Consume ``stream()`` and push yielded events into internal queue."""
+        try:
+            async for event in self.stream():
+                if not self._running:
+                    break
+                await self._event_queue.put(event)
+        except asyncio.CancelledError:
+            self._logger.debug("Producer cancelled for %s", self.backend_key)
+            raise
+        except Exception as e:
+            self._logger.error(
+                "Unhandled error in producer for %s: %s",
+                self.backend_key,
+                e,
+                exc_info=True,
+            )
+        finally:
+            try:
+                self._event_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                self._logger.warning(
+                    "Queue full during producer shutdown for %s",
+                    self.backend_key,
+                )
 
     async def start(self) -> None:
         """
         Start the backend. Returns quickly after spawning producer task.
 
         Contract:
-        - Spawns _produce_events() as background task
+        - Spawns a background task that consumes stream()
         - Returns immediately (does NOT block)
         - Idempotent: calling start() on running backend is a no-op
 
         May raise on fatal configuration errors (e.g., missing credentials),
-        but connection errors are typically handled by _produce_events() retry.
+        but runtime connection errors are typically handled by stream policy.
         """
         if self._running:
             self._logger.debug("Backend %s already running", self.backend_key)
@@ -263,7 +270,7 @@ class WatcherBackend(ABC):
         try:
             self._running = True
             self._producer_task = asyncio.create_task(
-                self._produce_events(),
+                self._run_producer(),
                 name=f"producer:{self.backend_key}",
             )
         except Exception:
@@ -278,9 +285,6 @@ class WatcherBackend(ABC):
         - Sets _running = False (signals producer to exit)
         - Cancels producer task if still running
         - Does NOT block on queue operations (producer handles sentinel)
-
-        Note: Producer puts sentinel in a finally block using put_nowait.
-        This avoids potential deadlock if the queue is full during shutdown.
         """
         if not self._running:
             self._logger.debug("Backend %s not running", self.backend_key)
