@@ -2,16 +2,22 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from yggdrasil.core_utils.event_types import EventType  # type: ignore
+from lib.core_utils.event_types import EventType
 from yggdrasil.flow.planner.api import PlanDraft
 
 
 class BaseHandler(ABC):
     """
     All handlers must implement:
-      - generate_plan_draft: async method that returns a PlanDraft (new responsibilities)
+      - handler_id: stable identifier within the realm (REQUIRED)
+      - event_type: which EventType this handler subscribes to
+      - generate_plan_draft: async method that returns a PlanDraft
       - derive_scope: extract scope from document
-      - __call__: for async dispatch (under the running event loop)
+
+    Handler provisioning (v1):
+      - Handlers are provided as CLASSES via RealmDescriptor.handler_classes
+      - Core instantiates each with no args: handler = handler_cls()
+      - Factories/DI are deferred to future versions
 
     YggdrasilCore will:
       - Call generate_plan_draft() to get a PlanDraft
@@ -20,13 +26,17 @@ class BaseHandler(ABC):
       - Pass plan to Engine for execution
     """
 
-    # realm authors must set this
+    # Realm authors MUST set these class variables
     event_type: ClassVar[EventType]
+    handler_id: ClassVar[str]  # Stable identifier within realm
+
+    # Set by core during registration (do not set manually)
+    realm_id: str | None = None
 
     # ---------- identity helpers ----------
     @classmethod
     def class_qualified_name(cls) -> str:
-        """e.g. '<realm>.yggdrasil_realm.project_handler.<RealmProjectHandler>'"""
+        """Return fully qualified class name: '<module>.<qualname>'."""
         return f"{cls.__module__}.{cls.__qualname__}"
 
     @classmethod
@@ -55,17 +65,24 @@ class BaseHandler(ABC):
         """
         ...
 
-    @abstractmethod
-    def __call__(self, payload: dict[str, Any]) -> None:
-        """
-        Schedule generate_plan_draft under asyncio.create_task().
-        YggdrasilCore will await the result and handle plan persistence/execution.
-        """
-        ...
-
     def run_now(self, payload: dict[str, Any]) -> PlanDraft:
         """
         Blocking, one-off entrypoint for CLI mode.
-        Simply runs generate_plan_draft() to completion and returns the draft.
+
+        Runs generate_plan_draft() to completion and returns the draft.
+        Must be called from a synchronous context (no running event loop).
+
+        Raises:
+            RuntimeError: If called from within an async context.
         """
-        return asyncio.run(self.generate_plan_draft(payload))
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop - safe to use asyncio.run()
+            return asyncio.run(self.generate_plan_draft(payload))
+
+        # If we get here, there IS a running loop - raise explicit error
+        raise RuntimeError(
+            "run_now() cannot be called from within an async context. "
+            "Use 'await handler.generate_plan_draft(payload)' instead."
+        )

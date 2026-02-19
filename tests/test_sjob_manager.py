@@ -94,7 +94,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         # Mock the subprocess to simulate a timeout
         async def mock_communicate():
             await asyncio.sleep(0.1)
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         # Mock the subprocess to simulate a timeout
         mock_create_subprocess_exec.side_effect = asyncio.TimeoutError
@@ -174,17 +174,17 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
 
     @patch("lib.module_utils.sjob_manager.custom_logger")
     def test_init_with_configs(self, mock_custom_logger):
-        # Mock configs to return custom polling interval
+        # Mock configs to return custom polling interval (nested under yggdrasil)
         with patch(
             "lib.module_utils.sjob_manager.SlurmJobManager.configs",
-            {"job_monitor_poll_interval": 5.0},
+            {"yggdrasil": {"job_monitor_poll_interval": 5.0}},
         ):
             manager = SlurmJobManager()
             self.assertEqual(manager.polling_interval, 5.0)
 
     @patch("lib.module_utils.sjob_manager.custom_logger")
     def test_init_with_default_configs(self, mock_custom_logger):
-        # Mock configs to be empty
+        # Mock configs to be empty (no yggdrasil section → falls back to default)
         with patch("lib.module_utils.sjob_manager.SlurmJobManager.configs", {}):
             manager = SlurmJobManager()
             self.assertEqual(manager.polling_interval, 10.0)

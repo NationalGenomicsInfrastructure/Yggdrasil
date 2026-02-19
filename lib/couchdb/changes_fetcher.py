@@ -3,7 +3,7 @@ Generic CouchDB _changes feed fetcher.
 
 This module provides a reusable, checkpoint-agnostic fetcher for streaming
 document changes from a CouchDB database. It decouples the generic streaming logic
-from checkpoint management (which is handled by WatcherCheckpointStore).
+from checkpoint management (handled by callers).
 
 Key design principle: Fetcher is filtering-agnostic and checkpoint-agnostic.
 Callers apply their own filters and manage checkpoints independently.
@@ -15,6 +15,10 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from ibm_cloud_sdk_core.api_exception import ApiException
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import RequestException
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
+from urllib3.exceptions import ProtocolError
 
 from lib.core_utils.logging_utils import custom_logger
 
@@ -31,6 +35,7 @@ class ChangesFetcher:
         include_docs: Whether to include full documents in _changes response
         retry_delay_sec: Initial delay (in seconds) before retry
         max_retries: Maximum number of retries on transient errors
+        _last_seq: Last seen CouchDB sequence from most recent fetch batch
     """
 
     def __init__(
@@ -55,7 +60,13 @@ class ChangesFetcher:
         self.include_docs = include_docs
         self.retry_delay_sec = retry_delay_sec
         self.max_retries = max_retries
-        self._logger = logger or custom_logger(__name__.split(".")[-1])
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        self._last_seq: str | None = None
+
+    @property
+    def last_seq(self) -> str | None:
+        """Last sequence token observed by ``fetch_changes``."""
+        return self._last_seq
 
     async def fetch_changes(
         self,
@@ -74,36 +85,25 @@ class ChangesFetcher:
             Dict containing change entry: {"id": doc_id, "seq": seq, "doc": doc_dict, ...}
 
         Raises:
-            ApiException: On persistent connection failures (after max_retries exceeded)
+            ApiException: On connection failures (caller handles retry logic)
         """
         if since is None:
             since = "0"
 
-        self._logger.debug(
-            "Fetching changes from db='%s' since='%s'", self.db_handler.db_name, since
+        # Single-pass batch from handler wrapper.
+        # No retry logic here; exceptions propagate to caller (stream_changes_continuously)
+        # for centralized retry/backoff handling.
+        results, last_seq = await asyncio.to_thread(
+            self.db_handler.fetch_changes_batch,
+            since=since,
+            include_docs=self.include_docs,
+            feed="normal",
         )
+        self._last_seq = last_seq
 
-        try:
-            # Use post_changes (not _as_stream) for feed="normal".
-            # feed="normal" returns a single JSON object: {"results":[...], "last_seq":...}
-            # Using _as_stream + iter_lines() would incorrectly parse it as NDJSON.
-            response = self.db_handler.server.post_changes(
-                db=self.db_handler.db_name,
-                feed="normal",  # Single-pass (not continuous)
-                since=since,
-                include_docs=self.include_docs,
-            ).get_result()
-
-            # response is a dict: {"results": [...], "last_seq": "..."}
-            results = response.get("results", []) if response else []
-
-            for change in results:
-                if "id" in change and "seq" in change:
-                    yield change
-
-        except ApiException as e:
-            self._logger.exception("API error fetching changes: %s", e)
-            raise
+        for change in results:
+            if "id" in change and "seq" in change:
+                yield change
 
     async def stream_changes_continuously(
         self,
@@ -143,7 +143,18 @@ class ChangesFetcher:
                     if "seq" in change:
                         current_seq = change["seq"]
                     yield change
-                    retry_count = 0  # Reset retry count on successful yield
+
+                # Advance cursor even when no rows were returned.
+                # CouchDB can advance last_seq on empty batches.
+                if self._last_seq is not None and self._last_seq != current_seq:
+                    current_seq = self._last_seq
+
+                if retry_count > 0:
+                    self._logger.debug(
+                        "Recovered after retries; sleeping %.1fs before next poll",
+                        poll_interval_sec,
+                    )
+                retry_count = 0
 
             except ApiException as e:
                 if e.code == 404:
@@ -175,10 +186,34 @@ class ChangesFetcher:
                     self._logger.exception("Unexpected API error: %s", e)
                     raise
 
+            except (
+                ConnectionResetError,
+                OSError,
+                RequestsConnectionError,
+                RequestException,
+                ProtocolError,
+                Urllib3HTTPError,
+            ) as e:
+                retry_count += 1
+                if retry_count > self.max_retries:
+                    self._logger.error(
+                        "Max retries (%d) exceeded after transient connection errors; aborting continuous stream",
+                        self.max_retries,
+                    )
+                    raise
+                backoff = self.retry_delay_sec * (2 ** (retry_count - 1))
+                self._logger.warning(
+                    "Transient connection error; retry %d/%d after %.1fs: %s",
+                    retry_count,
+                    self.max_retries,
+                    backoff,
+                    e,
+                )
+                await asyncio.sleep(backoff)
+
             except Exception as e:
                 self._logger.exception("Unexpected error in continuous stream: %s", e)
                 raise
 
             # Sleep before next poll
-            self._logger.debug("Sleeping %.1fs before next poll", poll_interval_sec)
             await asyncio.sleep(poll_interval_sec)

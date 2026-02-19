@@ -34,16 +34,18 @@ class TestYggdrasilInit(unittest.TestCase):
             self.fail("lib.core_utils.event_types should be importable")
 
     def test_namespace_package_structure(self):
-        """Test that yggdrasil has namespace package structure."""
+        """Test that yggdrasil has package structure with lazy aliasing."""
         import yggdrasil
 
-        # Verify it has __path__ attribute (namespace package marker)
+        # Verify it has __path__ attribute (regular package)
         self.assertTrue(hasattr(yggdrasil, "__path__"))
         self.assertIsInstance(yggdrasil.__path__, list)
 
-        # __path__ should point to lib directory
-        lib_path = str(Path(__file__).resolve().parent.parent / "lib")
-        self.assertIn(lib_path, yggdrasil.__path__)
+        # __path__ should point to yggdrasil/ directory.
+        # lib/* modules are aliased lazily via _LibAliasFinder,
+        # NOT via __path__ manipulation.
+        ygg_path = str(Path(__file__).resolve().parent.parent / "yggdrasil")
+        self.assertIn(ygg_path, yggdrasil.__path__)
 
     def test_yggdrasil_submodule_access(self):
         """Test that yggdrasil submodules can be accessed."""
@@ -135,24 +137,27 @@ class TestYggdrasilInit(unittest.TestCase):
         """Test that module attributes are set correctly."""
         import yggdrasil
 
-        # Should have __path__ pointing to lib
-        expected_lib_path = str(Path(__file__).resolve().parent.parent / "lib")
-        self.assertEqual(yggdrasil.__path__, [expected_lib_path])
+        # __path__ should point to the yggdrasil/ directory (default).
+        # The lazy _LibAliasFinder handles lib/ aliasing WITHOUT
+        # overriding __path__, so real sub-packages (flow/, core/, …)
+        # are found normally.
+        expected_ygg_path = str(Path(__file__).resolve().parent.parent / "yggdrasil")
+        self.assertEqual(yggdrasil.__path__, [expected_ygg_path])
 
     def test_defensive_sys_path_handling(self):
         """Test that sys.path is handled defensively."""
         import yggdrasil
 
-        # The lib path should be in sys.path
-        lib_path = str(Path(__file__).resolve().parent.parent / "lib")
-        self.assertIn(lib_path, sys.path)
+        # The project root should be in sys.path
+        root_path = str(Path(__file__).resolve().parent.parent)
+        self.assertIn(root_path, sys.path)
 
         # Multiple imports shouldn't add the path multiple times
-        original_count = sys.path.count(lib_path)
+        original_count = sys.path.count(root_path)
         import importlib
 
         importlib.reload(yggdrasil)
-        new_count = sys.path.count(lib_path)
+        new_count = sys.path.count(root_path)
 
         # Should not have added the path again
         self.assertEqual(original_count, new_count)

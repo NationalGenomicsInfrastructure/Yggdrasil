@@ -67,12 +67,6 @@ class TestBaseHandler(unittest.TestCase):
                 self.last_payload = payload
                 return await self.generate_plan_draft_mock(payload)
 
-            def __call__(self, payload: dict[str, Any]) -> None:
-                self.call_called = True
-                self.last_payload = payload
-                # Schedule the async task
-                asyncio.create_task(self.generate_plan_draft(payload))
-
         # Create incomplete handler for testing abstract enforcement
         class IncompleteHandler(BaseHandler):
             event_type: ClassVar[EventType] = EventType.FLOWCELL_READY
@@ -81,23 +75,9 @@ class TestBaseHandler(unittest.TestCase):
                 return {"kind": "flowcell", "id": doc.get("flowcell_id", "test_fc")}
 
             # Missing generate_plan_draft implementation
-            def __call__(self, payload: dict[str, Any]) -> None:
-                pass
-
-        class MissingCallHandler(BaseHandler):
-            event_type: ClassVar[EventType] = EventType.PROJECT_CHANGE
-
-            def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
-                return {"kind": "project", "id": "test"}
-
-            async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
-                return make_dummy_plan_draft()
-
-            # Missing __call__ implementation
 
         self.ConcreteHandler = ConcreteHandler
         self.IncompleteHandler = IncompleteHandler
-        self.MissingCallHandler = MissingCallHandler
 
     # =====================================================
     # ABSTRACT BASE CLASS TESTS
@@ -120,13 +100,6 @@ class TestBaseHandler(unittest.TestCase):
 
         error_message = str(context.exception)
         self.assertIn("generate_plan_draft", error_message)
-
-        # Handler missing __call__ should not be instantiable
-        with self.assertRaises(TypeError) as context:
-            self.MissingCallHandler()  # type: ignore
-
-        error_message = str(context.exception)
-        self.assertIn("__call__", error_message)
 
     def test_concrete_implementation_instantiation(self):
         """Test that concrete implementations can be instantiated."""
@@ -345,22 +318,6 @@ class TestBaseHandler(unittest.TestCase):
         payload_param = sig.parameters["payload"]
         self.assertEqual(str(payload_param.annotation), "dict[str, typing.Any]")
 
-    def test_call_method_signature(self):
-        """Test __call__ method signature and behavior."""
-        handler = self.ConcreteHandler()
-
-        # Should be callable
-        self.assertTrue(callable(handler))
-
-        # Should accept payload parameter
-        import inspect
-
-        sig = inspect.signature(handler.__call__)
-        self.assertIn("payload", sig.parameters)
-
-        # Should not be a coroutine function (sync interface)
-        self.assertFalse(asyncio.iscoroutinefunction(handler.__call__))
-
     # =====================================================
     # RUN_NOW METHOD TESTS
     # =====================================================
@@ -454,26 +411,29 @@ class TestBaseHandler(unittest.TestCase):
 
         self.assertEqual(str(context.exception), "Test exception")
 
+    def test_run_now_raises_error_in_async_context(self):
+        """Test that run_now raises RuntimeError when called from async context."""
+
+        async def test_async_context():
+            handler = self.ConcreteHandler()
+            test_payload = {"test": "async_context"}
+
+            # Calling run_now from within an async context should raise
+            with self.assertRaises(RuntimeError) as context:
+                handler.run_now(test_payload)
+
+            error_message = str(context.exception)
+            self.assertIn(
+                "cannot be called from within an async context", error_message
+            )
+            self.assertIn("generate_plan_draft", error_message)
+
+        # Run the async test
+        asyncio.run(test_async_context())
+
     # =====================================================
     # ASYNC EXECUTION PATTERN TESTS
     # =====================================================
-
-    def test_call_creates_async_task(self):
-        """Test that __call__ properly creates async tasks."""
-        handler = self.ConcreteHandler()
-        test_payload = {"test": "async", "value": 42}
-
-        # Mock asyncio.create_task to verify it's called
-        with patch("asyncio.create_task") as mock_create_task:
-            handler(test_payload)
-
-            # Should have called create_task
-            mock_create_task.assert_called_once()
-
-            # Verify the call was made with a coroutine
-            call_args = mock_create_task.call_args[0]
-            self.assertEqual(len(call_args), 1)  # Should have one argument
-            # We can't easily test the coroutine itself without running it
 
     def test_async_execution_in_event_loop(self):
         """Test proper async execution within an event loop."""
@@ -613,28 +573,6 @@ class TestBaseHandler(unittest.TestCase):
         self.assertIn(handler.event_type, mock_core.handlers)
         self.assertIs(mock_core.handlers[handler.event_type], handler)
 
-    def test_event_dispatch_simulation(self):
-        """Test simulated event dispatch from YggdrasilCore."""
-        handler = self.ConcreteHandler()
-
-        # Simulate YggdrasilCore.handle_event calling the handler
-        mock_event = Mock()
-        mock_event.event_type = EventType.PROJECT_CHANGE
-        mock_event.payload = {"document": {"id": "test_doc"}}
-
-        # Mock asyncio.create_task since we're not in an event loop
-        with patch("asyncio.create_task") as mock_create_task:
-            # Simulate core finding and calling handler
-            if mock_event.event_type == handler.event_type:
-                handler(mock_event.payload)
-
-            # Should have called create_task
-            mock_create_task.assert_called_once()
-
-            # Should have been called with the payload
-            self.assertTrue(handler.call_called)
-            self.assertEqual(handler.last_payload, mock_event.payload)
-
     def test_cli_one_off_execution_pattern(self):
         """Test one-off CLI execution pattern."""
         handler = self.ConcreteHandler()
@@ -706,18 +644,15 @@ class TestBaseHandler(unittest.TestCase):
         import inspect
 
         generate_plan_draft_sig = inspect.signature(handler.generate_plan_draft)
-        call_sig = inspect.signature(handler.__call__)
         run_now_sig = inspect.signature(handler.run_now)
 
-        # All should have payload parameter
+        # Required methods should have payload parameter
         self.assertIn("payload", generate_plan_draft_sig.parameters)
-        self.assertIn("payload", call_sig.parameters)
         self.assertIn("payload", run_now_sig.parameters)
 
         # Return types should be correct
         # generate_plan_draft returns PlanDraft (coroutine that returns PlanDraft)
         self.assertEqual(generate_plan_draft_sig.return_annotation, PlanDraft)
-        self.assertEqual(call_sig.return_annotation, None)
         # run_now also returns PlanDraft (blocking version of generate_plan_draft)
         self.assertEqual(run_now_sig.return_annotation, PlanDraft)
 
@@ -730,20 +665,20 @@ class TestBaseHandler(unittest.TestCase):
 
         # Must implement required methods
         self.assertTrue(hasattr(handler, "generate_plan_draft"))
-        self.assertTrue(hasattr(handler, "__call__"))
         self.assertTrue(hasattr(handler, "run_now"))
+        self.assertTrue(hasattr(handler, "derive_scope"))
 
         # Methods must be callable
         self.assertTrue(callable(handler.generate_plan_draft))
-        self.assertTrue(callable(handler.__call__))
         self.assertTrue(callable(handler.run_now))
+        self.assertTrue(callable(handler.derive_scope))
 
         # generate_plan_draft must be async
         self.assertTrue(asyncio.iscoroutinefunction(handler.generate_plan_draft))
 
-        # __call__ and run_now must be sync
-        self.assertFalse(asyncio.iscoroutinefunction(handler.__call__))
+        # run_now and derive_scope must be sync
         self.assertFalse(asyncio.iscoroutinefunction(handler.run_now))
+        self.assertFalse(asyncio.iscoroutinefunction(handler.derive_scope))
 
 
 if __name__ == "__main__":

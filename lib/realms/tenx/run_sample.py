@@ -1,5 +1,7 @@
 import csv
-from typing import Any, Dict, List, Mapping, Optional
+import logging
+from collections.abc import Mapping
+from typing import Any
 
 from lib.base.abstract_sample import AbstractSample
 from lib.core_utils.logging_utils import custom_logger
@@ -7,8 +9,6 @@ from lib.module_utils.report_transfer import transfer_report
 from lib.module_utils.slurm_utils import generate_slurm_script
 from lib.realms.tenx.utils.sample_file_handler import SampleFileHandler
 from lib.realms.tenx.utils.tenx_utils import TenXUtils
-
-logging = custom_logger(__name__.split(".")[-1])
 
 DEBUG: bool = True  # Set to False in production
 
@@ -19,11 +19,12 @@ class TenXRunSample(AbstractSample):
     def __init__(
         self,
         sample_id: str,
-        lab_samples: List[Any],
-        project_info: Dict[str, Any],
+        lab_samples: list[Any],
+        project_info: dict[str, Any],
         config: Mapping[str, Any],
         yggdrasil_db_manager: Any,
         hpc_manager: Any,
+        logger: logging.Logger | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize a TenXRunSample instance.
@@ -36,27 +37,28 @@ class TenXRunSample(AbstractSample):
             yggdrasil_db_manager (Any): Yggdrasil database manager instance.
             **kwargs (Any): Additional keyword arguments.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.run_sample_id: str = sample_id
-        self.lab_samples: List[Any] = lab_samples
-        self.project_info: Dict[str, Any] = project_info or {}
+        self.lab_samples: list[Any] = lab_samples
+        self.project_info: dict[str, Any] = project_info or {}
         # TODO: ensure project_id is always available
         self.project_id = self.project_info.get("project_id", "")
         self.config: Mapping[str, Any] = config or {}
         self.ydm: Any = yggdrasil_db_manager
         self.sjob_manager: Any = hpc_manager
 
-        self.job_id: Optional[str] = None
+        self.job_id: str | None = None
 
         # self.decision_table = TenXUtils.load_decision_table("10x_decision_table.json")
-        self.feature_to_library_type: Dict[str, Any] = self.config.get(
+        self.feature_to_library_type: dict[str, Any] = self.config.get(
             "feature_to_library_type", {}
         )
         # self._status: str = "initialized"
 
-        self.features: List[str] = self._collect_features()
-        self.pipeline_info: Optional[Dict[str, Any]] = self._get_pipeline_info() or {}
+        self.features: list[str] = self._collect_features()
+        self.pipeline_info: dict[str, Any] | None = self._get_pipeline_info() or {}
         self.auto_submit: bool = self.pipeline_info.get("submit", False)
-        self.reference_genomes: Dict[str, str] = (
+        self.reference_genomes: dict[str, str] = (
             self.collect_reference_genomes()
         ) or {}
 
@@ -94,14 +96,14 @@ class TenXRunSample(AbstractSample):
         # Update the status in the database
         self.ydm.update_sample_status(self.project_id, self.id, value)
 
-    def collect_reference_genomes(self) -> Optional[Dict[str, str]]:
+    def collect_reference_genomes(self) -> dict[str, str] | None:
         """Collect reference genomes from lab samples and ensure consistency.
 
         Returns:
             Optional[Dict[str, str]]: A dictionary mapping reference keys to genome paths,
                 or None if an error occurs.
         """
-        ref_genomes: Dict[str, str] = {}
+        ref_genomes: dict[str, str] = {}
         feature_to_ref_key = (
             self.config.get("feature_to_ref_key", {}) if self.config else {}
         )
@@ -110,7 +112,7 @@ class TenXRunSample(AbstractSample):
             if lab_sample.reference_genome:
                 ref_key = feature_to_ref_key.get(lab_sample.feature)
                 if not ref_key:
-                    logging.error(
+                    self._logger.error(
                         f"Feature '{lab_sample.feature}' is not recognized for reference genome mapping."
                     )
                     continue
@@ -119,10 +121,10 @@ class TenXRunSample(AbstractSample):
                 # Ensure no conflicting reference genomes for the same ref_key
                 existing_ref = ref_genomes.get(ref_key)
                 if existing_ref and existing_ref != lab_sample.reference_genome:
-                    logging.debug(
+                    self._logger.debug(
                         f"Existing reference genome: {existing_ref} != {lab_sample.reference_genome}"
                     )
-                    logging.error(
+                    self._logger.error(
                         f"Conflicting reference genomes found for reference key '{ref_key}' "
                         f"in sample '{self.id}'"
                     )
@@ -131,14 +133,14 @@ class TenXRunSample(AbstractSample):
                 else:
                     ref_genomes[ref_key] = lab_sample.reference_genome
             else:
-                logging.error(
+                self._logger.error(
                     f"Lab sample {lab_sample.lab_sample_id} is missing a reference genome."
                 )
                 self.status = "failed"
                 return None
         return ref_genomes
 
-    def _get_pipeline_info(self) -> Optional[Dict[str, Any]]:
+    def _get_pipeline_info(self) -> dict[str, Any] | None:
         """Get the pipeline information for the sample.
 
         Returns:
@@ -148,7 +150,7 @@ class TenXRunSample(AbstractSample):
         library_prep_method = self.project_info.get("library_prep_method", "")
         return TenXUtils.get_pipeline_info(library_prep_method, self.features)
 
-    def _collect_features(self) -> List[str]:
+    def _collect_features(self) -> list[str]:
         """Collect features from lab samples.
 
         Returns:
@@ -159,7 +161,7 @@ class TenXRunSample(AbstractSample):
 
     async def pre_process(self):
         """Perform pre-processing steps before starting the processing."""
-        logging.info(f"[{self.id}] Pre-processing...")
+        self._logger.info(f"[{self.id}] Pre-processing...")
 
         # Step 1: Verify that all subsamples have FASTQ files
         # TODO: Also check any other requirements
@@ -169,7 +171,7 @@ class TenXRunSample(AbstractSample):
             if not lab_sample.fastq_dirs
         ]
         if missing_fq_labsamples:
-            logging.error(
+            self._logger.error(
                 f"[{self.id}] Missing FASTQ files for lab-samples: "
                 f"{missing_fq_labsamples}. Skipping..."
             )
@@ -178,11 +180,13 @@ class TenXRunSample(AbstractSample):
 
         # Step 2: Determine the pipeline and additional files required
         if not self.pipeline_info:
-            logging.error(f"[{self.id}] No pipeline information found. Skipping...")
+            self._logger.error(
+                f"[{self.id}] No pipeline information found. Skipping..."
+            )
             self.status = "pre_processing_failed"
             return
 
-        logging.info(f"[{self.id}] Generating required files...")
+        self._logger.info(f"[{self.id}] Generating required files...")
 
         # Step 3: Generate required files based on configuration
         # TODO: Register generated files in the file handler
@@ -211,48 +215,50 @@ class TenXRunSample(AbstractSample):
         if not generate_slurm_script(
             slurm_metadata, slurm_template_path, self.file_handler.slurm_script_path
         ):
-            logging.error(f"[{self.id}] Failed to generate SLURM script.")
+            self._logger.error(f"[{self.id}] Failed to generate SLURM script.")
             self.status = "pre_processing_failed"
             return
 
         # If all pre-processing steps succeeded
         self.status = "pre_processed"
-        logging.info(f"[{self.id}] Pre-processing completed successfully.")
+        self._logger.info(f"[{self.id}] Pre-processing completed successfully.")
 
     async def process(self):
         """Process the sample."""
-        logging.info("\n")
-        logging.info(f"[{self.id}] Processing...")
+        self._logger.info("\n")
+        self._logger.info(f"[{self.id}] Processing...")
 
         if self.pipeline_info is None:
-            logging.error(f"[{self.id}] Pipeline information is missing. Skipping...")
+            self._logger.error(
+                f"[{self.id}] Pipeline information is missing. Skipping..."
+            )
             self.status = "processing_failed"
             return
 
         # Check if SLURM script should be submitted
         if not self.pipeline_info.get("submit", False):
-            logging.info(
+            self._logger.info(
                 f"[{self.id}] According to decision table, we should not submit. "
                 f"Handle manually!"
             )
             self.status = "requires_manual_submission"
             return
 
-        logging.debug(f"[{self.id}] Slurm script created. Submitting job...")
+        self._logger.debug(f"[{self.id}] Slurm script created. Submitting job...")
         self.status = "processing"
         self.job_id = await self.sjob_manager.submit_job(
             self.file_handler.slurm_script_path
         )
 
         if self.job_id:
-            logging.debug(f"[{self.id}] Job submitted with ID: {self.job_id}")
+            self._logger.debug(f"[{self.id}] Job submitted with ID: {self.job_id}")
             # Wait for the job to complete and monitor its status
             await self.sjob_manager.monitor_job(self.job_id, self)
-            logging.debug(f"[{self.id}] Job {self.job_id} monitoring complete.")
+            self._logger.debug(f"[{self.id}] Job {self.job_id} monitoring complete.")
 
             # NOTE: The sample's status will be updated by SlurmJobManager's check_status method
         else:
-            logging.error(f"[{self.id}] Failed to submit job.")
+            self._logger.error(f"[{self.id}] Failed to submit job.")
             self.status = "processing_failed"
             return
 
@@ -275,11 +281,11 @@ class TenXRunSample(AbstractSample):
 
         command_parts = [f"{pipeline_exec} {pipeline}"]
 
-        logging.debug(f"[{self.id}] Pipeline: {pipeline}")
-        logging.debug(f"[{self.id}] Pipeline executable: {pipeline_exec}")
+        self._logger.debug(f"[{self.id}] Pipeline: {pipeline}")
+        self._logger.debug(f"[{self.id}] Pipeline executable: {pipeline_exec}")
 
         # Mapping of argument names to their values
-        arg_values: Dict[str, Any] = {
+        arg_values: dict[str, Any] = {
             "--id": self.id,
             "--csv": str(self.file_handler.get_multi_csv_path()),
             "--transcriptome": self.reference_genomes["gex"],
@@ -310,7 +316,9 @@ class TenXRunSample(AbstractSample):
             if value:
                 command_parts.append(f"{arg}={value}")
             else:
-                logging.error(f"[{self.id}] Missing value for required argument {arg}")
+                self._logger.error(
+                    f"[{self.id}] Missing value for required argument {arg}"
+                )
 
         # Include additional arguments
         command_parts.extend(additional_args)
@@ -322,13 +330,13 @@ class TenXRunSample(AbstractSample):
         command = " \\\n    ".join(command_parts)
         return command
 
-    def collect_libraries_data(self) -> List[Dict[str, str]]:
+    def collect_libraries_data(self) -> list[dict[str, str]]:
         """Generate the data for the libraries."""
         libraries_data = []
         for lab_sample in self.lab_samples:
             feature_type = self.feature_to_library_type.get(lab_sample.feature)
             if not feature_type:
-                logging.error(
+                self._logger.error(
                     f"[{self.id}] Feature type not found for feature "
                     f"'{lab_sample.feature}' in sample '{lab_sample.sample_id}'"
                 )
@@ -347,7 +355,7 @@ class TenXRunSample(AbstractSample):
 
     def generate_libraries_csv(self) -> None:
         """Generate the libraries CSV file required for processing."""
-        logging.info(f"[{self.id}] Generating library CSV")
+        self._logger.info(f"[{self.id}] Generating library CSV")
         library_csv_path = self.file_handler.get_libraries_csv_path()
 
         # Ensure the directory exists
@@ -363,17 +371,17 @@ class TenXRunSample(AbstractSample):
             for lib in libraries_data:
                 writer.writerow(lib)
 
-        logging.info(f"[{self.id}] Libraries CSV generated at {library_csv_path}")
+        self._logger.info(f"[{self.id}] Libraries CSV generated at {library_csv_path}")
 
     def generate_feature_reference_csv(self) -> None:
         """Generate the feature reference CSV file required for processing."""
-        logging.info(f"[{self.id}] Generating feature reference CSV")
+        self._logger.info(f"[{self.id}] Generating feature reference CSV")
         # feature_ref_csv_path = self.file_handler.get_feature_reference_csv_path()
         pass
 
     def generate_multi_sample_csv(self) -> None:
         """Generate the multi-sample CSV file required for processing."""
-        logging.info(f"[{self.id}] Generating multi-sample CSV")
+        self._logger.info(f"[{self.id}] Generating multi-sample CSV")
         multi_csv_path = self.file_handler.get_multi_csv_path()
 
         # Ensure the directory exists
@@ -394,7 +402,7 @@ class TenXRunSample(AbstractSample):
                     ref_path = self.reference_genomes.get(ref_key, "")
                     multi_file.write(f"reference,{ref_path}\n")
                 else:
-                    logging.warning(
+                    self._logger.warning(
                         f"No reference genome found for section '{section}'"
                     )
                 # Add additional arguments
@@ -411,23 +419,23 @@ class TenXRunSample(AbstractSample):
                     f"{lib['sample']},{lib['fastqs']},{lib['library_type']}\n"
                 )
 
-        logging.info(f"[{self.id}] Multi-sample CSV generated at {multi_csv_path}")
+        self._logger.info(f"[{self.id}] Multi-sample CSV generated at {multi_csv_path}")
 
     def post_process(self) -> None:
         """Perform post-processing steps after job completion."""
-        logging.info("\n")
-        logging.info(f"[{self.id}] Post-processing...")
+        self._logger.info("\n")
+        self._logger.info(f"[{self.id}] Post-processing...")
         self.status = "post_processing"
 
         # Check if the run was successful
         if not self.file_handler.check_run_success():
-            logging.error(f"[{self.id}] CellRanger run was not successful.")
+            self._logger.error(f"[{self.id}] CellRanger run was not successful.")
             self.status = "post_processing_failed"
             return
 
         # Extract the report path
         if not self.file_handler.extract_report_path():
-            logging.error(f"[{self.id}] Failed to extract report path.")
+            self._logger.error(f"[{self.id}] Failed to extract report path.")
             self.status = "post_processing_failed"
             return
 
@@ -438,15 +446,15 @@ class TenXRunSample(AbstractSample):
             sample_id=self.id,
             destination_filename=self.file_handler.dest_report_name,
         ):
-            logging.info(f"[{self.id}] Report transferred successfully.")
+            self._logger.info(f"[{self.id}] Report transferred successfully.")
         else:
-            logging.error(f"[{self.id}] Failed to transfer report.")
+            self._logger.error(f"[{self.id}] Failed to transfer report.")
             self.status = "post_processing_failed"
             return
 
         # If all post-processing steps succeeded
         self.status = "completed"
-        logging.info(f"[{self.id}] Post-processing completed successfully.")
+        self._logger.info(f"[{self.id}] Post-processing completed successfully.")
 
     ####################################################################################################
     ######################## New methods for the templating transition #################################
@@ -456,20 +464,20 @@ class TenXRunSample(AbstractSample):
         """
         Submits a Slurm job for this sample, stores the job_id in the DB.
         """
-        logging.info(f"[{self.id}] Submitting HPC job...")
+        self._logger.info(f"[{self.id}] Submitting HPC job...")
         self.job_id = await self.sjob_manager.submit_job(
             self.file_handler.slurm_script_path
         )
 
         if self.job_id:
-            logging.debug(f"[{self.id}] Job submitted with ID: {self.job_id}")
+            self._logger.debug(f"[{self.id}] Job submitted with ID: {self.job_id}")
             # Store in DB
             self.ydm.update_sample_slurm_job_id(self.project_id, self.id, self.job_id)
-            logging.info(f"[{self.id}] Job ID [{self.job_id}] stored in DB.")
+            self._logger.info(f"[{self.id}] Job ID [{self.job_id}] stored in DB.")
             self.status = "auto-submitted"
 
             # Possibly set status, e.g. self.status = "processing"
         else:
-            logging.error(f"[{self.id}] Failed to submit job.")
+            self._logger.error(f"[{self.id}] Failed to submit job.")
             self.job_id = None
             self.status = "job_submission_failed"

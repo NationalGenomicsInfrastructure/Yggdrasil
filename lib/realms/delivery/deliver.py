@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import logging
 import subprocess
 from pathlib import Path
 
@@ -10,12 +11,15 @@ from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.yggdrasil_document import YggdrasilDocument
 from lib.module_utils.report_transfer import transfer_report
 
-logging = custom_logger(__name__.split(".")[-1])
-
 
 # TODO: Potentially inherit from the AbstractProject class if it makes sense, and rename the base class to not be bound to projects.
 class DeliveryManager:
-    def __init__(self, doc: YggdrasilDocument, ydm):
+    def __init__(
+        self,
+        doc: YggdrasilDocument,
+        ydm,
+        logger: logging.Logger | None = None,
+    ):
         """
         Initialize the DeliveryManager with the given project document and YggdrasilDB manager.
 
@@ -35,6 +39,7 @@ class DeliveryManager:
 
         The `ydm` manager is used to update the doc as needed.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.doc = doc
         self.ydm = ydm
         self.proceed = True
@@ -53,13 +58,13 @@ class DeliveryManager:
         - Executes those actions (e.g. generate NGI report, wait for signing, stage with TACA, deliver).
         """
         if not self.proceed:
-            logging.info(
+            self._logger.info(
                 f"[{self.project_id}] DeliveryManager: Document not ready or missing fields. Aborting."
             )
             return
 
         if not self.doc.delivery_info:
-            logging.info(
+            self._logger.info(
                 f"[{self.project_id}] DeliveryManager: No delivery_info found. Aborting."
             )
             return
@@ -85,13 +90,13 @@ class DeliveryManager:
         # NOTE: Design the rules to return a structure indicating what to do next.
 
         if not decision:  # or "actions" not in decision:
-            logging.warning(
+            self._logger.warning(
                 f"[{self.project_id}] No actions returned from decision rules. Nothing to do."
             )
             return
 
         if not isinstance(decision, list):
-            logging.warning(
+            self._logger.warning(
                 f"[{self.project_id}] Decision is not a list of actions. Received: {decision}"
             )
             return
@@ -111,7 +116,7 @@ class DeliveryManager:
             if action == "generate_ngi_report":
                 await self.perform_ngi_report_generation_and_upload()
             elif action == "wait_for_signing":
-                logging.info(
+                self._logger.info(
                     f"[{self.project_id}] DeliveryManager: Waiting for NGI report signing."
                 )
                 # TODO: Could check if it's been X days since report generation and remind the responsible person
@@ -128,9 +133,11 @@ class DeliveryManager:
             #         )
 
             elif action == "finish":
-                logging.info(f"[{self.project_id}] DeliveryRealm: Execution Completed.")
+                self._logger.info(
+                    f"[{self.project_id}] DeliveryRealm: Execution Completed."
+                )
             else:
-                logging.info(
+                self._logger.info(
                     f"[{self.project_id}] Unrecognized action '{action}', skipping."
                 )
 
@@ -341,7 +348,7 @@ class DeliveryManager:
         ]
 
         if not included_samples:
-            logging.warning(
+            self._logger.warning(
                 f"[{self.project_id}] No 'QC=Passed' samples; skipping NGI report generation."
             )
             return
@@ -350,7 +357,7 @@ class DeliveryManager:
         config = ConfigLoader().load_config("delivery_config.json")
         base_analysis_dir = config.get("NGI_ANALYSIS_DIR")
         if not base_analysis_dir:
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] 'NGI_ANALYSIS_DIR' not found in delivery_config.json."
             )
             return
@@ -358,7 +365,7 @@ class DeliveryManager:
         # 3) Construct the project directory path
         project_analysis_dir = Path(base_analysis_dir) / self.project_id
         if not project_analysis_dir.exists():
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] Project directory '{project_analysis_dir}' not found; cannot generate NGI report."
             )
             return
@@ -373,10 +380,10 @@ class DeliveryManager:
         # )
         report_success = True  # For testing
         if not report_success:
-            logging.error(f"[{self.project_id}] NGI report generation failed.")
+            self._logger.error(f"[{self.project_id}] NGI report generation failed.")
             return
 
-        logging.info(
+        self._logger.info(
             f"[{self.project_id}] NGI report generated in '{project_analysis_dir}'"
         )
 
@@ -388,7 +395,7 @@ class DeliveryManager:
         final_report_path = project_analysis_dir / "reports" / file_name
 
         if not final_report_path.exists():
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] NGI report '{final_report_path}' not found; generation step failed unexpectedly."
             )
             return
@@ -398,12 +405,12 @@ class DeliveryManager:
             report_path=final_report_path, project_id=self.project_id, sample_id=None
         )
         if not transfer_ok:
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] Failed to transfer NGI report for signing."
             )
             return
 
-        logging.info(f"[{self.project_id}] NGI report transferred for signing.")
+        self._logger.info(f"[{self.project_id}] NGI report transferred for signing.")
 
         # 7) Fetch doc again, add NGI report entry, update status, and save
 
@@ -442,13 +449,13 @@ class DeliveryManager:
                     break
 
         if not taca_config:
-            logging.warning(
+            self._logger.warning(
                 f"[{self.project_id}] No TACA config found for method '{method}'. Cannot proceed."
             )
             # TODO: Notify someone about this issue (Slack?)
             return
 
-        logging.info(
+        self._logger.info(
             f"[{self.project_id}] Using TACA config '{taca_config}' for method '{method}'."
         )
 
@@ -483,14 +490,14 @@ class DeliveryManager:
         print(stage_cmd)
 
         # if await self.run_cmd(["bash", "-c", stage_cmd]) != 0:
-        #     logging.error(f"[{self.project_id}] Staging failed.")
+        #     self._logger.error(f"[{self.project_id}] Staging failed.")
         #     return
 
         # 5) Emails from user_info
         # TODO: Figure out how to insert these emails in the TACA command
         pi_email, contact_email, bioinfo_email = self.fetch_project_contact_emails()
         if not pi_email:
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] No PI email found, cannot proceed with DDS steps."
             )
             return
@@ -507,7 +514,7 @@ class DeliveryManager:
         print(upload_cmd)
 
         # if await self.run_cmd(["bash", "-c", upload_cmd]) != 0:
-        #     logging.error(f"[{self.project_id}] DDS upload failed.")
+        #     self._logger.error(f"[{self.project_id}] DDS upload failed.")
         #     return
 
         # 7) Release to user
@@ -522,13 +529,13 @@ class DeliveryManager:
         print(release_cmd)
 
         # if await self.run_cmd(["bash", "-c", release_cmd]) != 0:
-        #     logging.error(f"[{self.project_id}] DDS release failed.")
+        #     self._logger.error(f"[{self.project_id}] DDS release failed.")
         #     return
 
         # 8) Mark final status and insert a 'delivery_results' entry
         self.log_and_store_delivery_result()
 
-        logging.info(
+        self._logger.info(
             f"[{self.project_id}] TACA staging/upload steps completed successfully."
         )
 
@@ -547,7 +554,7 @@ class DeliveryManager:
             if sample.get("QC") == "Passed" and not sample.get("delivered")
         ]
         if not samples_delivered:
-            logging.warning(
+            self._logger.warning(
                 f"[{self.project_id}] No new samples to deliver?! Possibly already delivered."
             )
         else:
@@ -575,7 +582,7 @@ class DeliveryManager:
         # Now save doc
         self.ydm.save_document(self.doc)
 
-        logging.info(
+        self._logger.info(
             f"[{self.project_id}] New delivery entry added: {new_delivery_data}"
         )
 
@@ -604,14 +611,16 @@ class DeliveryManager:
             )
             stdout, stderr = await process.communicate()
             if process.returncode != 0:
-                logging.error(
+                self._logger.error(
                     f"Command failed: {' '.join(cmd)}\nStdout: {stdout.decode()}\nStderr:{stderr.decode()}"
                 )
             else:
-                logging.debug(f"Command success: {' '.join(cmd)}")
+                self._logger.debug(f"Command success: {' '.join(cmd)}")
             return process.returncode
         except Exception as e:
-            logging.error(f"Error running command {' '.join(cmd)}: {e}", exc_info=True)
+            self._logger.error(
+                f"Error running command {' '.join(cmd)}: {e}", exc_info=True
+            )
             return None
 
     def update_delivery_info(self, project_id: str, updates: dict):
@@ -620,7 +629,7 @@ class DeliveryManager:
         """
         doc = self.ydm.get_document_by_project_id(project_id)
         if not doc:
-            logging.error(
+            self._logger.error(
                 f"Cannot update delivery info, project {project_id} not found in yggdrasil DB."
             )
             return
@@ -631,4 +640,5 @@ class DeliveryManager:
 
         ygg_doc = YggdrasilDocument.from_dict(doc)
         self.ydm.save_document(ygg_doc)
-        logging.info(f"Updated delivery_info for {project_id} with {updates}.")
+        self._logger.info(f"Updated delivery_info for {project_id} with {updates}.")
+        self._logger.info(f"Updated delivery_info for {project_id} with {updates}.")

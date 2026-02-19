@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
@@ -8,8 +9,9 @@ from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
+from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 
-logging = custom_logger(__name__.split(".")[-1])
+# logger = custom_logger(__name__)
 
 
 class ProjectDBManager(CouchDBHandler):
@@ -22,8 +24,30 @@ class ProjectDBManager(CouchDBHandler):
     It is specialized for Yggdrasil needs (e.g., module registry lookups).
     """
 
-    def __init__(self) -> None:
-        super().__init__("projects")
+    def __init__(
+        self,
+        *,
+        endpoint: str = DEFAULT_ENDPOINT,
+        url: str | None = None,
+        user_env: str | None = None,
+        pass_env: str | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        params = resolve_couchdb_params(
+            endpoint=endpoint,
+            url=url,
+            user_env=user_env,
+            pass_env=pass_env,
+        )
+
+        super().__init__(
+            "projects",
+            url=params.url,
+            user_env=params.user_env,
+            pass_env=params.pass_env,
+            logger=self._logger,
+        )
         self.module_registry = ConfigLoader().load_config("module_registry.json")
 
     async def fetch_changes(self) -> AsyncGenerator[tuple[dict[str, Any], str], None]:
@@ -55,10 +79,10 @@ class ProjectDBManager(CouchDBHandler):
                         else:
                             # The majority of the tasks will not have a module configured.
                             # If you log this, expect to see many messages!
-                            # logging.warning(f"No module configured for task type '{method}'.")
+                            # self._logger.warning(f"No module configured for task type '{method}'.")
                             pass
                 except Exception as e:  # noqa: F841
-                    # logging.error(f"Error processing change: {e}")
+                    # self._logger.error(f"Error processing change: {e}")
                     pass
 
     async def get_changes(
@@ -104,14 +128,18 @@ class ProjectDBManager(CouchDBHandler):
                 if last_processed_seq is not None:
                     Ygg.save_last_processed_seq(last_processed_seq)
                 else:
-                    logging.warning(
+                    self._logger.warning(
                         "Received `None` for last_processed_seq. Skipping save."
                     )
 
                 if doc is not None:
                     yield doc
                 else:
-                    logging.warning(f"Document with ID {change['id']} is None.")
+                    self._logger.warning(f"Document with ID {change['id']} is None.")
             except Exception as e:
-                logging.warning(f"Error processing change: {e}")
-                logging.debug(f"Data causing the error: {change}")
+                self._logger.warning(f"Error processing change: {e}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")

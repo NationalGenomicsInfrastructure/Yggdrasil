@@ -62,7 +62,7 @@ class TestTransferReport(unittest.TestCase):
         )
 
     @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logging")
+    @patch("lib.module_utils.report_transfer.logger")
     def test_transfer_report_missing_config_key(self, mock_logging, mock_configs):
         # Set up configs to raise KeyError for missing 'server' key
         mock_configs.__getitem__.side_effect = KeyError("server")
@@ -120,7 +120,7 @@ class TestTransferReport(unittest.TestCase):
         mock_subprocess_run.side_effect = Exception("Unexpected error")
 
         # Mock logging
-        with patch("lib.module_utils.report_transfer.logging") as mock_logging:
+        with patch("lib.module_utils.report_transfer.logger") as mock_logging:
             # Call the function
             result = transfer_report(self.report_path, self.project_id, self.sample_id)
 
@@ -137,7 +137,7 @@ class TestTransferReport(unittest.TestCase):
 
     @patch("lib.module_utils.report_transfer.configs")
     @patch("lib.module_utils.report_transfer.subprocess.run")
-    @patch("lib.module_utils.report_transfer.logging")
+    @patch("lib.module_utils.report_transfer.logger")
     def test_transfer_report_general_exception_with_result(
         self, mock_logging, mock_subprocess_run, mock_configs
     ):
@@ -261,7 +261,7 @@ class TestTransferReport(unittest.TestCase):
         )
 
     @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logging")
+    @patch("lib.module_utils.report_transfer.logger")
     def test_transfer_report_missing_destination(self, mock_logging, mock_configs):
         # Set up configs missing 'destination'
         mock_configs.__getitem__.return_value = {
@@ -283,7 +283,7 @@ class TestTransferReport(unittest.TestCase):
         )
 
     @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logging")
+    @patch("lib.module_utils.report_transfer.logger")
     def test_transfer_report_nonexistent_report_path(self, mock_logging, mock_configs):
         # Set up configs
         mock_configs.__getitem__.return_value = {
@@ -364,7 +364,7 @@ class TestTransferReport(unittest.TestCase):
         )
 
     @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logging")
+    @patch("lib.module_utils.report_transfer.logger")
     def test_transfer_report_invalid_config_type(self, mock_logging, mock_configs):
         # Set up configs['report_transfer'] to be None
         mock_configs.__getitem__.return_value = None

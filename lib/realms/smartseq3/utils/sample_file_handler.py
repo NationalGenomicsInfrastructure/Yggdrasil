@@ -1,11 +1,12 @@
 import glob
+import logging
 import shutil
 from pathlib import Path
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.realms.smartseq3.utils.ss3_utils import SS3Utils
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class SampleFileHandler:
@@ -33,13 +34,14 @@ class SampleFileHandler:
     """
 
     # TODO: Only pass the project_name if project_info is not used anywhere else
-    def __init__(self, sample):
+    def __init__(self, sample, logger: logging.Logger | None = None):
         """
         Initialize the SampleFileHandler with sample information and configuration settings.
 
         Args:
             sample (object): The sample object containing sample data and project information.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.sample_id = sample.id
 
         # NOTE: Temporary solution to keep the plate id for the transition period
@@ -108,14 +110,16 @@ class SampleFileHandler:
             bool: True if the barcode file exists or is created successfully, False otherwise.
         """
         if not self.barcode_fpath.exists():
-            logging.info(
+            self._logger.info(
                 f"Barcode file for '{self.barcode}' does not exist. Creating..."
             )
-            logging.debug(f"In: {self.barcode_fpath}")
+            self._logger.debug(f"In: {self.barcode_fpath}")
             if not SS3Utils.create_barcode_file(
                 self.barcode, self.barcode_lookup_fpath, self.barcode_fpath
             ):
-                logging.error(f"Failed to create barcode file at {self.barcode_fpath}.")
+                self._logger.error(
+                    f"Failed to create barcode file at {self.barcode_fpath}."
+                )
                 return False
         return True
 
@@ -141,14 +145,14 @@ class SampleFileHandler:
                 if self.organism:
                     species_key = self.organism.strip().lower()
                 else:
-                    logging.warning(
+                    self._logger.warning(
                         f"Organism is None for {self.sample_id}. Handle manually."
                     )
                     return None
 
             # Validate species_key before proceeding
             if not species_key:
-                logging.warning(
+                self._logger.warning(
                     f"Invalid species_key for {self.sample_id}. Handle manually."
                 )
                 return None
@@ -158,7 +162,7 @@ class SampleFileHandler:
                 idx_path = Path(self.config["gen_refs"][species_key]["idx_path"])
                 gtf_path = Path(self.config["gen_refs"][species_key]["gtf_path"])
             except KeyError:
-                logging.warning(
+                self._logger.warning(
                     f"Reference for {species_key} species not found in config. Handle {self.sample_id} manually."
                 )
                 return None
@@ -168,14 +172,14 @@ class SampleFileHandler:
                 missing_files = "\n\t".join(
                     [str(p) for p in [idx_path, gtf_path] if not p.exists()]
                 )
-                logging.warning(
+                self._logger.warning(
                     f"Missing reference genome files: \n[\n\t{ missing_files }\n]"
                 )
                 return None
 
             return {"gen_path": idx_path, "gtf_path": gtf_path}
         except (IndexError, AttributeError) as e:
-            logging.error(
+            self._logger.error(
                 f"Error parsing sample_ref or accessing organism: {str(e)}. Handle {self.sample_id} manually."
             )
             return None
@@ -211,7 +215,7 @@ class SampleFileHandler:
 
         if not all(self.fastq_files.values()):
             missing = [key for key, value in self.fastq_files.items() if value is None]
-            logging.warning(
+            self._logger.warning(
                 f"Missing FASTQ files for {missing} in {Path(pattern).parent}"
             )
             return None
@@ -235,11 +239,11 @@ class SampleFileHandler:
             symlink_target = self.fastq_files_dir / fastq_parent_dir.name
             if not symlink_target.exists():
                 symlink_target.symlink_to(fastq_parent_dir)
-                logging.info(
+                self._logger.info(
                     f"Symlink created for directory {fastq_parent_dir} in {self.fastq_files_dir}"
                 )
             else:
-                logging.debug(
+                self._logger.debug(
                     f"Symlink for directory {fastq_parent_dir} already exists."
                 )
 
@@ -248,14 +252,14 @@ class SampleFileHandler:
                 source_file = fastq_parent_dir.with_suffix(file_extension)
                 if source_file.exists():
                     shutil.copy(source_file, self.fastq_files_dir)
-                    logging.info(f"Copied {source_file} to {self.fastq_files_dir}")
+                    self._logger.info(f"Copied {source_file} to {self.fastq_files_dir}")
                 else:
-                    logging.warning(
+                    self._logger.warning(
                         f"File {source_file} does not exist and was not copied."
                     )
 
         except Exception as e:
-            logging.error(f"Failed to create symlink and copy files: {e}")
+            self._logger.error(f"Failed to create symlink and copy files: {e}")
             return False
 
         return True
@@ -294,7 +298,7 @@ class SampleFileHandler:
             self.fastq_files_dir.mkdir(exist_ok=True)
             self.plots_dir.mkdir(exist_ok=True)
         else:
-            logging.error(
+            self._logger.error(
                 f"Sample {self.sample_id} directory does not exist (yet?): {self.sample_dir}"
             )
 
@@ -326,7 +330,7 @@ class SampleFileHandler:
         """
         if not (self.sample_dir.exists() and self.sample_dir.is_dir()):
             # TODO: In this case it might not make sense to continue, probably skip and report the issue (through Slack?)
-            logging.error(
+            self._logger.error(
                 f"Sample {self.sample_id} directory does not exist: {self.sample_dir}"
             )
             return
@@ -346,12 +350,12 @@ class SampleFileHandler:
 
         if missing_files:
             missing_files_str = "\n\t".join(missing_files)
-            logging.warning(
+            self._logger.warning(
                 f"Missing or empty crucial zUMIs output files for sample {self.sample_id} in {self.sample_dir}:\n[\n\t{missing_files_str}\n]"
             )
             return False
         else:
-            logging.info(
+            self._logger.info(
                 f"All expected zUMIs output files are present for sample {self.sample_id}."
             )
             return True

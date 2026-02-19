@@ -2,8 +2,6 @@ import argparse
 import asyncio
 
 from lib.core_utils.config_loader import ConfigLoader
-
-# import logging
 from lib.core_utils.logging_utils import configure_logging, custom_logger
 from lib.core_utils.ygg_session import YggSession
 from lib.core_utils.yggdrasil_core import YggdrasilCore
@@ -46,7 +44,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create plan only (for Genstat approval):
+  # Create plan only (for external approval):
   yggdrasil run-doc <doc_id> --plan-only
 
   # Create and execute plan (auto_run=True by default, but blocking if approval is needed):
@@ -121,7 +119,7 @@ Examples:
         # Normal mode: info level to console + file
         configure_logging(debug=False, console=True)
 
-    logging = custom_logger("Yggdrasil")
+    logger = custom_logger(__name__)
 
     # 3) Adjust root logger
     # logging.basicConfig(
@@ -131,12 +129,12 @@ Examples:
     # )
     # os.environ["PREFECT_LOGGING_LEVEL"] = "DEBUG" if args.dev else "INFO"
 
-    logging.debug("Yggdrasil: Starting up...")
+    logger.debug("Yggdrasil: Starting up...")
 
-    # 4) Prepare core (load config, init core, register handlers)
-    config = ConfigLoader().load_config("config.json")
+    # 4) Prepare core (load config, init core, discover realms)
+    config = ConfigLoader().load_config("main.json")
     core = YggdrasilCore(config)
-    core.setup_handlers()
+    core.setup_realms()
 
     if args.mode == "daemon":
         if getattr(args, "manual_submit", False):
@@ -147,20 +145,20 @@ Examples:
         try:
             asyncio.run(core.start())
         except KeyboardInterrupt:
-            logging.warning("[bold red blink] Shutting down Yggdrasil daemon... [/]")
+            logger.warning("[bold red blink] Shutting down Yggdrasil daemon... [/]")
             try:
                 asyncio.run(core.stop())
             except (asyncio.CancelledError, RuntimeError) as e:
                 # CancelledError: Tasks were cancelled during shutdown (expected)
                 # RuntimeError: Event loop issues during cleanup (can be ignored)
-                logging.debug(f"Shutdown exception (expected): {e}")
-            logging.info("Yggdrasil daemon stopped.")
+                logger.debug(f"Shutdown exception (expected): {e}")
+            logger.info("Yggdrasil daemon stopped.")
 
     elif args.mode == "run-doc":
         # Validate mode selection
         if not args.plan_only and not args.run_once:
             # Default to plan-only with notice
-            logging.info(
+            logger.info(
                 "No mode specified; defaulting to --plan-only. "
                 "Use --run-once to execute immediately."
             )

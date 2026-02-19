@@ -4,10 +4,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib.core_utils.logging_utils import configure_logging, custom_logger
+from lib.core_utils.logging_utils import (
+    DeduplicatingHandler,
+    configure_logging,
+    custom_logger,
+)
 
 
 class TestLoggingUtils(unittest.TestCase):
+
+    def _unwrap_handlers(self, handlers):
+        """Return underlying handlers, unwrapping DeduplicatingHandler if present."""
+        return [
+            h.wrapped_handler if isinstance(h, DeduplicatingHandler) else h
+            for h in handlers
+        ]
 
     def setUp(self):
         # Backup original logging handlers and level
@@ -18,7 +29,7 @@ class TestLoggingUtils(unittest.TestCase):
         logging.getLogger().handlers = []
 
         # Patch ConfigLoader to return mock configs
-        self.mock_configs = {"yggdrasil_log_dir": "/tmp/yggdrasil_logs"}
+        self.mock_configs = {"yggdrasil": {"log_dir": "/tmp/yggdrasil_logs"}}
         self.patcher_config_loader = patch("lib.core_utils.logging_utils.ConfigLoader")
         self.mock_config_loader_class = self.patcher_config_loader.start()
         self.mock_config_loader_class.return_value.load_config.return_value = (
@@ -65,7 +76,7 @@ class TestLoggingUtils(unittest.TestCase):
             with patch("lib.core_utils.logging_utils.AbbrevRichHandler") as mock_rich:
                 configure_logging()
 
-                expected_log_dir = Path(self.mock_configs["yggdrasil_log_dir"])
+                expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
                 expected_log_file = (
                     expected_log_dir / "yggdrasil_2021-01-01_12.00.00.log"
                 )
@@ -117,8 +128,10 @@ class TestLoggingUtils(unittest.TestCase):
             call_args = self.mock_basicConfig.call_args[1]
             self.assertEqual(call_args["level"], expected_log_level)
             self.assertIn(call_args["format"], possible_formats)
-            self.assertIn(mock_file_handler, call_args["handlers"])
-            self.assertIn(mock_rich_handler, call_args["handlers"])
+            handlers = call_args["handlers"]
+            unwrapped = self._unwrap_handlers(handlers)
+            self.assertIn(mock_file_handler, unwrapped)
+            self.assertIn(mock_rich_handler, unwrapped)
 
         # Patch _RICH_AVAILABLE to False and test with StreamHandler
         self.mock_mkdir.reset_mock()
@@ -130,14 +143,16 @@ class TestLoggingUtils(unittest.TestCase):
             call_args = self.mock_basicConfig.call_args[1]
             self.assertEqual(call_args["level"], expected_log_level)
             self.assertIn(call_args["format"], possible_formats)
-            self.assertIn(mock_file_handler, call_args["handlers"])
-            self.assertIn(mock_stream_handler, call_args["handlers"])
+            handlers = call_args["handlers"]
+            unwrapped = self._unwrap_handlers(handlers)
+            self.assertIn(mock_file_handler, unwrapped)
+            self.assertIn(mock_stream_handler, unwrapped)
 
     def test_configure_logging_creates_log_directory(self):
         # Ensure that configure_logging attempts to create the log directory
         configure_logging()
 
-        expected_log_dir = Path(self.mock_configs["yggdrasil_log_dir"])
+        expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
         self.mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
         self.assertEqual(self.mock_mkdir.call_args[0], ())
         self.assertEqual(
@@ -153,7 +168,7 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_configure_logging_logs_to_correct_file(self):
         configure_logging()
-        expected_log_dir = Path(self.mock_configs["yggdrasil_log_dir"])
+        expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
         expected_log_file = expected_log_dir / "yggdrasil_2021-01-01_12.00.00.log"
         self.mock_filehandler.assert_called_once_with(expected_log_file)
 
@@ -181,8 +196,8 @@ class TestLoggingUtils(unittest.TestCase):
             self.assertEqual(logger.level, logging.WARNING)
 
     def test_configure_logging_no_configs(self):
-        # Test behavior when configs do not contain 'yggdrasil_log_dir'
-        self.mock_configs.pop("yggdrasil_log_dir", None)
+        # Test behavior when configs do not contain 'yggdrasil.log_dir'
+        self.mock_configs.pop("yggdrasil", None)
 
         with self.assertRaises(KeyError):
             configure_logging()
@@ -234,8 +249,9 @@ class TestLoggingUtils(unittest.TestCase):
             call_args = self.mock_basicConfig.call_args[1]
             handlers = call_args["handlers"]
             self.assertEqual(len(handlers), 2)
-            self.assertIn(mock_file_handler.return_value, handlers)
-            self.assertIn(mock_rich_handler.return_value, handlers)
+            unwrapped = self._unwrap_handlers(handlers)
+            self.assertIn(mock_file_handler.return_value, unwrapped)
+            self.assertIn(mock_rich_handler.return_value, unwrapped)
 
     def test_configure_logging_log_format(self):
         configure_logging()
@@ -264,13 +280,16 @@ class TestLoggingUtils(unittest.TestCase):
     ):
         configure_logging(debug=True)
         handlers = self.mock_basicConfig.call_args[1]["handlers"]
-        self.assertEqual(handlers[0], mock_file_handler.return_value)
-        self.assertEqual(handlers[1], mock_rich_handler.return_value)
+        self.assertEqual(len(handlers), 2)
+        self.assertIsInstance(handlers[0], DeduplicatingHandler)
+        self.assertIsInstance(handlers[1], DeduplicatingHandler)
+        self.assertEqual(handlers[0].wrapped_handler, mock_file_handler.return_value)
+        self.assertEqual(handlers[1].wrapped_handler, mock_rich_handler.return_value)
 
     def test_configure_logging_timestamp_format(self):
         configure_logging()
         expected_timestamp = "2021-01-01_12.00.00"
-        expected_log_dir = Path(self.mock_configs["yggdrasil_log_dir"])
+        expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
         expected_log_file = expected_log_dir / f"yggdrasil_{expected_timestamp}.log"
         self.mock_filehandler.assert_called_with(expected_log_file)
 
@@ -282,7 +301,7 @@ class TestLoggingUtils(unittest.TestCase):
 
         configure_logging()
         expected_timestamp = "2022-02-02_14.30.00"
-        expected_log_dir = Path(self.mock_configs["yggdrasil_log_dir"])
+        expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
         expected_log_file = expected_log_dir / f"yggdrasil_{expected_timestamp}.log"
         self.mock_filehandler.assert_called_with(expected_log_file)
 
@@ -346,8 +365,9 @@ class TestLoggingUtils(unittest.TestCase):
             call_args = self.mock_basicConfig.call_args[1]
             handlers = call_args["handlers"]
             self.assertEqual(len(handlers), 2)
-            self.assertIn(mock_file_handler.return_value, handlers)
-            self.assertIn(mock_rich_handler.return_value, handlers)
+            unwrapped = self._unwrap_handlers(handlers)
+            self.assertIn(mock_file_handler.return_value, unwrapped)
+            self.assertIn(mock_rich_handler.return_value, unwrapped)
 
         # Case 2: Rich is not available
         self.mock_basicConfig.reset_mock()
@@ -356,8 +376,9 @@ class TestLoggingUtils(unittest.TestCase):
             call_args = self.mock_basicConfig.call_args[1]
             handlers = call_args["handlers"]
             self.assertEqual(len(handlers), 2)
-            self.assertIn(mock_file_handler.return_value, handlers)
-            self.assertIn(mock_stream_handler.return_value, handlers)
+            unwrapped = self._unwrap_handlers(handlers)
+            self.assertIn(mock_file_handler.return_value, unwrapped)
+            self.assertIn(mock_stream_handler.return_value, unwrapped)
 
     def test_configure_logging_respects_existing_loggers(self):
         # Test that existing loggers are not affected by configure_logging
@@ -417,16 +438,16 @@ class TestLoggingUtils(unittest.TestCase):
         self.mock_basicConfig.assert_called_once()
 
     def test_configure_logging_with_relative_log_dir(self):
-        # Test handling when 'yggdrasil_log_dir' is a relative path
-        self.mock_configs["yggdrasil_log_dir"] = "relative/path/to/logs"
+        # Test handling when log_dir is a relative path
+        self.mock_configs["yggdrasil"]["log_dir"] = "relative/path/to/logs"
         configure_logging()
 
         expected_log_dir = Path("relative/path/to/logs")
         self.mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
 
     def test_configure_logging_with_env_var_in_log_dir(self):
-        # Test handling when 'yggdrasil_log_dir' contains an environment variable
-        self.mock_configs["yggdrasil_log_dir"] = "${HOME}/logs"
+        # Test handling when log_dir contains an environment variable
+        self.mock_configs["yggdrasil"]["log_dir"] = "${HOME}/logs"
         with patch.dict(os.environ, {"HOME": "/home/testuser"}):
             configure_logging()
 
@@ -454,8 +475,9 @@ class TestLoggingUtils(unittest.TestCase):
                 handlers = self.mock_basicConfig.call_args[1]["handlers"]
                 # With defaults (debug=False, console=True), should have 2 handlers
                 self.assertEqual(len(handlers), 2)
-                self.assertIn(mock_file_handler_instance, handlers)
-                self.assertIn(mock_rich.return_value, handlers)
+                unwrapped = self._unwrap_handlers(handlers)
+                self.assertIn(mock_file_handler_instance, unwrapped)
+                self.assertIn(mock_rich.return_value, unwrapped)
 
     def test_configure_logging_with_no_handlers(self):
         # Test that an error is raised if FileHandler fails

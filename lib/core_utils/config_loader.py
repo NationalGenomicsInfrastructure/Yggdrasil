@@ -1,8 +1,9 @@
 import json
 import logging
 import types
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.ygg_session import YggSession
@@ -22,10 +23,10 @@ class ConfigLoader:
         _config (Optional[Mapping[str, Any]]): The loaded configuration data.
     """
 
-    _cache: Dict[Path, Mapping[str, Any]] = {}
+    _cache: dict[Path, Mapping[str, Any]] = {}
 
     def __init__(self) -> None:
-        self._config: Optional[Mapping[str, Any]] = None
+        self._config: Mapping[str, Any] | None = None
 
     def __getitem__(self, key: str) -> Any:
         """

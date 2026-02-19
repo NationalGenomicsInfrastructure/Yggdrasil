@@ -1,4 +1,4 @@
-from typing import Any, Dict, Type
+from typing import Any
 
 
 class SingletonMeta(type):
@@ -6,7 +6,7 @@ class SingletonMeta(type):
     A metaclass that creates a singleton instance of a class.
     """
 
-    _instances: Dict[type, Any] = {}
+    _instances: dict[type, Any] = {}
 
     def __call__(cls, *args: Any, **kwargs: Any) -> Any:
         if cls not in cls._instances:
@@ -14,7 +14,7 @@ class SingletonMeta(type):
         return cls._instances[cls]
 
 
-def singleton(cls: Type[Any]) -> Type[Any]:
+def singleton(cls: type[Any]) -> type[Any]:
     """
     Decorator to make a class a singleton by setting its metaclass to SingletonMeta.
 

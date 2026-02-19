@@ -1,15 +1,14 @@
 from pathlib import Path
-from typing import Dict, Union
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 def generate_slurm_script(
-    args_dict: Dict[str, str],
-    template_fpath: Union[str, Path],
-    output_fpath: Union[str, Path],
+    args_dict: dict[str, str],
+    template_fpath: str | Path,
+    output_fpath: str | Path,
 ) -> bool:
     """Generate a Slurm batch script by filling in placeholders in a template.
 
@@ -42,12 +41,12 @@ def generate_slurm_script(
         with output_path.open("w") as script_file:
             script_file.write(script_content)
 
-        logging.debug(f"Slurm script generated successfully at {output_fpath}")
+        logger.debug(f"Slurm script generated successfully at {output_fpath}")
         return True
     except FileNotFoundError as e:
-        logging.error(f"Template file not found: {e}")
+        logger.error(f"Template file not found: {e}")
     except KeyError as e:
-        logging.error(f"Missing placeholder in args_dict: {e}")
+        logger.error(f"Missing placeholder in args_dict: {e}")
     except Exception as e:
-        logging.error(f"Failed to generate Slurm script: {e}")
+        logger.error(f"Failed to generate Slurm script: {e}")
     return False

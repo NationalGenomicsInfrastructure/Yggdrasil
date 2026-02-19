@@ -4,7 +4,7 @@ from ruamel.yaml import YAML
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 yaml = YAML()
 yaml.width = 200
@@ -70,15 +70,15 @@ def write_yaml(config, args) -> bool:
     # TODO: Do not exit. Notify user (through Slack?).
     # TODO: Make a backup of the existing file (e.g. by appending a timestamp, or suffixing _old#)
     if args["out_yaml"].is_file():
-        logging.warning(f"YAML file `{args['out_yaml'].name}` already exists.")
-        logging.debug(f"Path: {args['out_yaml']}")
-        logging.warning("Continuing to overwrite the file...")
+        logger.warning(f"YAML file `{args['out_yaml'].name}` already exists.")
+        logger.debug(f"Path: {args['out_yaml']}")
+        logger.warning("Continuing to overwrite the file...")
 
     try:
         with open(args["out_yaml"], "w") as outfile:
             yaml.dump(template, outfile)
-        logging.debug(f"YAML file written successfully at {args['out_yaml']}")
+        logger.debug(f"YAML file written successfully at {args['out_yaml']}")
         return True
     except Exception as e:
-        logging.error(f"Failed to write YAML file {args['out_yaml']}: {e}")
+        logger.error(f"Failed to write YAML file {args['out_yaml']}: {e}")
         return False

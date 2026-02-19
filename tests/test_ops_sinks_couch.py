@@ -30,27 +30,47 @@ ApiException = MockApiException
 class TestOpsWriterInitialization(unittest.TestCase):
     """Tests for OpsWriter initialization."""
 
+    @patch("lib.ops.sinks.couch._get_couchdb_endpoint_config")
     @patch("lib.ops.sinks.couch.CouchDBHandler.__init__")
-    def test_init_default_db_name(self, mock_parent_init):
+    def test_init_default_db_name(self, mock_parent_init, mock_get_config):
         """Test initialization with default database name."""
         from lib.ops.sinks.couch import OpsWriter
 
+        mock_get_config.return_value = {
+            "url": "http://localhost:5984",
+            "auth": {"user_env": "TEST_USER", "pass_env": "TEST_PASS"},
+        }
         mock_parent_init.return_value = None
 
         writer = OpsWriter()
 
-        mock_parent_init.assert_called_once_with(db_name="yggdrasil_ops_dev")
+        mock_parent_init.assert_called_once_with(
+            "yggdrasil_ops_dev",
+            url="http://localhost:5984",
+            user_env="TEST_USER",
+            pass_env="TEST_PASS",
+        )
 
+    @patch("lib.ops.sinks.couch._get_couchdb_endpoint_config")
     @patch("lib.ops.sinks.couch.CouchDBHandler.__init__")
-    def test_init_custom_db_name(self, mock_parent_init):
+    def test_init_custom_db_name(self, mock_parent_init, mock_get_config):
         """Test initialization with custom database name."""
         from lib.ops.sinks.couch import OpsWriter
 
+        mock_get_config.return_value = {
+            "url": "http://localhost:5984",
+            "auth": {"user_env": "TEST_USER", "pass_env": "TEST_PASS"},
+        }
         mock_parent_init.return_value = None
 
         writer = OpsWriter(db_name="custom_ops_db")
 
-        mock_parent_init.assert_called_once_with(db_name="custom_ops_db")
+        mock_parent_init.assert_called_once_with(
+            "custom_ops_db",
+            url="http://localhost:5984",
+            user_env="TEST_USER",
+            pass_env="TEST_PASS",
+        )
 
 
 @patch("lib.ops.sinks.couch.ApiException", MockApiException)

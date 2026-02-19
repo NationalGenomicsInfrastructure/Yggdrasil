@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from lib.core_utils.event_types import EventType
 from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.watchers.couchdb_watcher import CouchDBWatcher
-from lib.watchers.seq_data_watcher import SeqDataWatcher, YggdrasilEvent
+from lib.watchers.abstract_watcher import YggdrasilEvent
 
 
 class TestYggdrasilCore(unittest.TestCase):
@@ -59,14 +58,9 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Sample configuration for testing
         self.test_config = {
-            "instrument_watch": [
-                {
-                    "name": "TestInstrument",
-                    "directory": "/test/path",
-                    "marker_files": ["test.txt"],
-                }
-            ],
-            "couchdb_poll_interval": 10,
+            "couchdb": {
+                "poll_interval": 10,
+            },
             "some_other_setting": "value",
         }
 
@@ -123,7 +117,9 @@ class TestYggdrasilCore(unittest.TestCase):
 
             # Assert
             self.assertEqual(core._logger, mock_default_logger)
-            mock_get_logger.assert_called_once_with("YggdrasilCore")
+            mock_get_logger.assert_called_once_with(
+                "lib.core_utils.yggdrasil_core.YggdrasilCore"
+            )
             mock_default_logger.info.assert_called_with("YggdrasilCore initialized.")
 
     def test_singleton_behavior(self):
@@ -208,57 +204,9 @@ class TestYggdrasilCore(unittest.TestCase):
             f"Registering watcher: {mock_watcher}"
         )
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_fs_watchers(self, mock_init_db):
-        """Test file system watcher setup with instrument configuration."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        initial_watchers_count = len(core.watchers)
-
-        # Act
-        core._setup_fs_watchers()
-
-        # Assert - Check that a watcher was added
-        self.assertEqual(len(core.watchers), initial_watchers_count + 1)
-
-        # Verify the watcher is a SeqDataWatcher
-        added_watcher = core.watchers[-1]
-        self.assertIsInstance(added_watcher, SeqDataWatcher)
-
-        # Verify watcher properties
-        self.assertEqual(
-            added_watcher.name, "SeqDataWatcher-MiSeq"
-        )  # From hardcoded config
-        self.assertEqual(added_watcher.event_type, EventType.FLOWCELL_READY)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_cdb_watchers(self, mock_init_db):
-        """Test CouchDB watcher setup."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        core.pdm = Mock()  # Mock the ProjectDBManager
-        core.pdm.fetch_changes = Mock()
-        initial_watchers_count = len(core.watchers)
-
-        # Act
-        core._setup_cdb_watchers()
-
-        # Assert - Check that a watcher was added
-        self.assertEqual(len(core.watchers), initial_watchers_count + 1)
-
-        # Verify the watcher is a CouchDBWatcher
-        added_watcher = core.watchers[-1]
-        self.assertIsInstance(added_watcher, CouchDBWatcher)
-
-        # Verify watcher properties
-        self.assertEqual(added_watcher.name, "ProjectDBWatcher")
-        self.assertEqual(added_watcher.event_type, EventType.PROJECT_CHANGE)
-        self.assertEqual(added_watcher.poll_interval, 10)  # From test config
-
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_fs_watchers")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_watchers(self, mock_init_db, mock_setup_fs, mock_setup_plan):
+    def test_setup_watchers(self, mock_init_db, mock_setup_plan):
         """Test main setup_watchers method."""
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
@@ -267,7 +215,6 @@ class TestYggdrasilCore(unittest.TestCase):
         core.setup_watchers()
 
         # Assert
-        mock_setup_fs.assert_called_once()
         mock_setup_plan.assert_called_once()
         expected_calls = [call("Setting up watchers..."), call("Watchers setup done.")]
         self.mock_logger.info.assert_has_calls(expected_calls, any_order=True)
@@ -290,116 +237,6 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertIn(EventType.PROJECT_CHANGE, core.subscriptions)
         self.assertEqual(core.subscriptions[EventType.PROJECT_CHANGE], [mock_handler])
         self.mock_logger.debug.assert_called()
-
-    @patch("importlib.metadata.entry_points")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_auto_register_external_handlers_success(
-        self, mock_init_db, mock_entry_points
-    ):
-        """Test successful auto-registration of external handlers."""
-        # Arrange
-        mock_handler_class = Mock()
-        mock_handler_class.event_type = EventType.DELIVERY_READY
-        mock_handler_instance = Mock()
-        mock_handler_class.return_value = mock_handler_instance
-
-        mock_entry_point = Mock()
-        mock_entry_point.name = "test_handler"
-        mock_entry_point.load.return_value = mock_handler_class
-
-        mock_entry_points.return_value = [mock_entry_point]
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-
-        # Act
-        core.auto_register_external_handlers()
-
-        # Assert
-        mock_entry_points.assert_called_once_with(group="ygg.handler")
-        mock_entry_point.load.assert_called_once()
-
-        # Verify that getattr was called on the handler class to get event_type
-        # and that the handler class was instantiated
-        self.assertIn(EventType.DELIVERY_READY, core.subscriptions)
-        self.assertEqual(
-            core.subscriptions[EventType.DELIVERY_READY], [mock_handler_instance]
-        )
-
-        # Check that the log message was written
-        self.mock_logger.info.assert_called()
-
-    @patch("importlib.metadata.entry_points")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_auto_register_external_handlers_invalid_event_type(
-        self, mock_init_db, mock_entry_points
-    ):
-        """Test auto-registration with invalid event type."""
-        # Arrange
-        mock_handler_class = Mock()
-        mock_handler_class.event_type = "invalid_event_type"  # Not an EventType
-
-        mock_entry_point = Mock()
-        mock_entry_point.name = "bad_handler"
-        mock_entry_point.load.return_value = mock_handler_class
-
-        mock_entry_points.return_value = [mock_entry_point]
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-
-        # Act
-        core.auto_register_external_handlers()
-
-        # Assert
-        self.assertEqual(len(core.subscriptions), 0)  # No handlers should be registered
-        self.mock_logger.error.assert_called()
-
-    @patch("importlib.metadata.entry_points")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_auto_register_external_handlers_no_event_type(
-        self, mock_init_db, mock_entry_points
-    ):
-        """Test auto-registration with missing event_type attribute."""
-        # Arrange
-        mock_handler_class = Mock()
-        del mock_handler_class.event_type  # No event_type attribute
-
-        mock_entry_point = Mock()
-        mock_entry_point.name = "no_event_type_handler"
-        mock_entry_point.load.return_value = mock_handler_class
-
-        mock_entry_points.return_value = [mock_entry_point]
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-
-        # Act
-        core.auto_register_external_handlers()
-
-        # Assert
-        self.assertEqual(len(core.subscriptions), 0)
-        self.mock_logger.error.assert_called()
-
-    @patch("lib.handlers.bp_analysis_handler.BestPracticeAnalysisHandler")
-    @patch(
-        "lib.core_utils.yggdrasil_core.YggdrasilCore.auto_register_external_handlers"
-    )
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_handlers(
-        self, mock_init_db, mock_auto_register, mock_bp_handler_class
-    ):
-        """Test complete handler setup process."""
-        # Arrange
-        mock_bp_handler_instance = Mock()
-        mock_bp_handler_class.return_value = mock_bp_handler_instance
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-
-        # Act
-        core.setup_handlers()
-
-        # Assert
-        mock_auto_register.assert_called_once()
-        # Removed bp_handler assertions - setup_handlers no longer registers built-in handlers
-        self.mock_logger.info.assert_called()
 
     # =====================================================
     # ASYNC LIFECYCLE TESTS
@@ -577,113 +414,8 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_logger.error.assert_called()
 
     # =====================================================
-    # CLI AND RUN_ONCE TESTS
+    # CLI TESTS
     # =====================================================
-
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.couchdb.project_db_manager.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_run_once_success(
-        self, mock_init_db, mock_pdm_class, mock_consumer_class, mock_ops_writer
-    ):
-        """Test successful run_once execution."""
-        # Arrange
-        mock_pdm_instance = Mock()
-        mock_doc = {"id": "test_doc", "project_id": "test_project", "data": "test"}
-        mock_pdm_instance.fetch_document_by_id.return_value = mock_doc
-        mock_pdm_class.return_value = mock_pdm_instance
-
-        mock_consumer_instance = Mock()
-        mock_consumer_class.return_value = mock_consumer_instance
-
-        mock_handler = Mock()
-        mock_handler.run_now = Mock()
-        mock_handler.class_qualified_name = Mock(return_value="MockHandler")
-        mock_handler.class_key = Mock(return_value=("test", "MockHandler"))
-        mock_handler.realm_id = "test_realm"
-        mock_handler.derive_scope = Mock(
-            return_value={"kind": "project", "id": "test_project"}
-        )
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        core.pdm = mock_pdm_instance  # Assign since _init_db_managers is patched
-        core.register_handler(EventType.PROJECT_CHANGE, mock_handler)
-
-        # Act
-        core.run_once("test_doc_id")
-
-        # Assert
-        mock_pdm_instance.fetch_document_by_id.assert_called_once_with("test_doc_id")
-        mock_handler.derive_scope.assert_called_once_with(mock_doc)
-        mock_handler.run_now.assert_called_once()
-        # Verify consumer was called
-        mock_consumer_instance.consume.assert_called_once()
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_run_once_document_not_found(self, mock_init_db):
-        """Test run_once when document is not found."""
-        # Arrange
-        mock_pdm = Mock()
-        mock_pdm.fetch_document_by_id.return_value = None
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        core.pdm = mock_pdm  # Assign since _init_db_managers is patched
-
-        # Act
-        core.run_once("nonexistent_doc")
-
-        # Assert
-        self.mock_logger.error.assert_called()
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_run_once_no_handler(self, mock_init_db):
-        """Test run_once when no handler is registered."""
-        # Arrange
-        mock_pdm = Mock()
-        mock_doc = {"id": "test_doc", "project_id": "test_project"}
-        mock_pdm.fetch_document_by_id.return_value = mock_doc
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        core.pdm = mock_pdm  # Assign since _init_db_managers is patched
-        # No handler registered
-
-        # Act
-        core.run_once("test_doc_id")
-
-        # Assert
-        self.mock_logger.error.assert_called()
-
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_run_once_handler_no_run_now_method(
-        self, mock_init_db, mock_consumer_class, mock_ops_writer
-    ):
-        """Test run_once when handler doesn't have run_now method."""
-        # Arrange
-        mock_pdm = Mock()
-        mock_doc = {"id": "test_doc", "project_id": "test_project"}
-        mock_pdm.fetch_document_by_id.return_value = mock_doc
-
-        mock_handler = Mock()
-        del mock_handler.run_now  # Remove run_now method
-        mock_handler.class_qualified_name = Mock(return_value="MockHandler")
-        mock_handler.class_key = Mock(return_value=("test", "MockHandler"))
-        mock_handler.realm_id = "test_realm"
-        mock_handler.derive_scope = Mock(
-            return_value={"kind": "project", "id": "test_project"}
-        )
-
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        core.pdm = mock_pdm  # Assign since _init_db_managers is patched
-        core.register_handler(EventType.PROJECT_CHANGE, mock_handler)
-
-        # Act
-        core.run_once("test_doc_id")
-
-        # Assert - should handle the exception gracefully
-        self.mock_logger.exception.assert_called()
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_process_cli_command(self, mock_init_db):
@@ -715,40 +447,6 @@ class TestYggdrasilCore(unittest.TestCase):
         # Should still initialize successfully
         self.assertIsInstance(core.watchers, list)
         self.assertIsInstance(core.subscriptions, dict)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_setup_fs_watchers_no_instruments(self, mock_init_db):
-        """Test file system watcher setup with no instruments configured."""
-        # Arrange
-        config_no_instruments = {}
-        core = YggdrasilCore(config_no_instruments, self.mock_logger)
-
-        # Act
-        core._setup_fs_watchers()
-
-        # Assert
-        # Should create one watcher from hardcoded config
-        self.assertEqual(len(core.watchers), 1)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_cdb_watcher_setup_uses_default_poll_interval(self, mock_init_db):
-        """Test CouchDB watcher setup uses default poll interval when not in config."""
-        # Arrange
-        config_no_poll = {}
-        core = YggdrasilCore(config_no_poll, self.mock_logger)
-        core.pdm = Mock()
-        core.pdm.fetch_changes = Mock()
-        initial_watchers_count = len(core.watchers)
-
-        # Act
-        core._setup_cdb_watchers()
-
-        # Assert - Check that a watcher was added
-        self.assertEqual(len(core.watchers), initial_watchers_count + 1)
-
-        # Verify the watcher uses default poll interval
-        added_watcher = core.watchers[-1]
-        self.assertEqual(added_watcher.poll_interval, 5)  # Default value
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_multiple_watchers_and_handlers(self, mock_init_db):
@@ -887,7 +585,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.assertEqual(mock_handler.realm_id, "explicit_realm")
-        self.assertIn("explicit_realm", core._realm_registry)
+        self.assertIn("explicit_realm", core._legacy_realm_class_registry)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_derive_realm_id_from_entry_point(self, mock_init_db):
@@ -908,7 +606,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.assertEqual(mock_handler.realm_id, "test_realm_package")
-        self.assertIn("test_realm_package", core._realm_registry)
+        self.assertIn("test_realm_package", core._legacy_realm_class_registry)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_derive_realm_id_from_module_name(self, mock_init_db):
@@ -925,7 +623,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.assertEqual(mock_handler.realm_id, "my_realm")
-        self.assertIn("my_realm", core._realm_registry)
+        self.assertIn("my_realm", core._legacy_realm_class_registry)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_derive_realm_id_duplicate_raises_error(self, mock_init_db):

@@ -13,7 +13,7 @@ from lib.realms.delivery.deliver import DeliveryManager
 
 # Configure logging
 configure_logging(debug=True)
-logging = custom_logger("Ygg-Mule")
+logger = custom_logger(__name__)
 
 
 async def launch_realm(realm):
@@ -21,7 +21,7 @@ async def launch_realm(realm):
         # await realm.launch()
         await realm.launch_template()
     except Exception as e:
-        logging.error(f"Error in realm.launch(): {e}", exc_info=True)
+        logger.error(f"Error in realm.launch(): {e}", exc_info=True)
 
 
 def process_project_doc(doc_id):
@@ -38,7 +38,7 @@ def process_project_doc(doc_id):
     # Fetch the document from the project database
     document = pdm.fetch_document_by_id(doc_id)
     if not document:
-        logging.error(f"Project document with ID {doc_id} not found in Project DB.")
+        logger.error(f"Project document with ID {doc_id} not found in Project DB.")
         return
 
     project_id = document.get("project_id")
@@ -46,7 +46,7 @@ def process_project_doc(doc_id):
     # Determine the appropriate module to load
     module_loc = get_module_location(document)
     if not module_loc:
-        logging.warning(f"No module found for document with ID {doc_id}.")
+        logger.warning(f"No module found for document with ID {doc_id}.")
         return
 
     # Load and execute the module
@@ -56,15 +56,15 @@ def process_project_doc(doc_id):
             realm = RealmClass(document, ydm)
             if realm.proceed:
                 asyncio.run(launch_realm(realm))
-                logging.info("Processing complete.")
+                logger.info("Processing complete.")
             else:
-                logging.info(
+                logger.info(
                     f"Skipping processing due to missing required information for project: {project_id}"
                 )
         else:
-            logging.warning(f"Failed to load module '{module_loc}' for doc {doc_id}.")
+            logger.warning(f"Failed to load module '{module_loc}' for doc {doc_id}.")
     except Exception as e:
-        logging.error(f"Error while processing project doc: {e}", exc_info=True)
+        logger.error(f"Error while processing project doc: {e}", exc_info=True)
 
 
 def process_yggdrasil_doc(doc_id):
@@ -81,7 +81,7 @@ def process_yggdrasil_doc(doc_id):
     # Fetch the document from the yggdrasil database
     document = ydm.get_document_by_project_id(doc_id)
     if not document:
-        logging.error(f"Document with ID {doc_id} not found in Yggdrasil DB.")
+        logger.error(f"Document with ID {doc_id} not found in Yggdrasil DB.")
         return
 
     # Load and execute the module
@@ -89,11 +89,11 @@ def process_yggdrasil_doc(doc_id):
         deliv_realm = DeliveryManager(document, ydm)
         if deliv_realm.proceed:
             asyncio.run(launch_realm(deliv_realm))
-            logging.info("Delivery processing complete.")
+            logger.info("Delivery processing complete.")
         else:
-            logging.info(f"Skipping delivery: Not enough info in doc {doc_id}.")
+            logger.info(f"Skipping delivery: Not enough info in doc {doc_id}.")
     except Exception as e:
-        logging.error(f"Error while processing yggdrasil doc: {e}", exc_info=True)
+        logger.error(f"Error while processing yggdrasil doc: {e}", exc_info=True)
 
 
 # TODO: If the module registry doesn’t change often, consider caching it to avoid reloading it every time
@@ -127,19 +127,19 @@ def get_module_location(document):
             if config.get("prefix") and method.startswith(registered_method):
                 return config["module"]
 
-        logging.warning(f"No module configuration found for method '{method}'.")
+        logger.warning(f"No module configuration found for method '{method}'.")
         return None
     except KeyError as e:
-        logging.error(f"Error accessing module location: {e}")
+        logger.error(f"Error accessing module location: {e}")
         return None
     except Exception as e:
-        logging.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"Unexpected error: {e}", exc_info=True)
         return None
 
 
 def main():
     """Main function to parse arguments and start Yggdrasil."""
-    logging.info("Ygg-Mule: Standalone Module Executor for Yggdrasil")
+    logger.info("Ygg-Mule: Standalone Module Executor for Yggdrasil")
 
     # Set up argument parser
     parser = argparse.ArgumentParser(

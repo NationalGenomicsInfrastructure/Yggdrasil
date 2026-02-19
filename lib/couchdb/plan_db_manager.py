@@ -8,6 +8,7 @@ Plan documents are stored in the dedicated `yggdrasil_plans` database,
 separate from operational data (yggdrasil_ops) and project data (projects).
 """
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -17,9 +18,10 @@ from ibmcloudant.cloudant_v1 import Document
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
+from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 from yggdrasil.flow.model import Plan
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 # Valid values for execution_authority field
 VALID_EXECUTION_AUTHORITIES = frozenset({"daemon", "run_once"})
@@ -85,9 +87,31 @@ class PlanDBManager(CouchDBHandler):
     }
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        endpoint: str = DEFAULT_ENDPOINT,
+        url: str | None = None,
+        user_env: str | None = None,
+        pass_env: str | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Initialize connection to yggdrasil_plans database."""
-        super().__init__("yggdrasil_plans")
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        params = resolve_couchdb_params(
+            endpoint=endpoint,
+            url=url,
+            user_env=user_env,
+            pass_env=pass_env,
+        )
+
+        super().__init__(
+            "yggdrasil_plans",
+            url=params.url,
+            user_env=params.user_env,
+            pass_env=params.pass_env,
+            logger=self._logger,
+        )
 
     def save_plan(
         self,
@@ -180,7 +204,7 @@ class PlanDBManager(CouchDBHandler):
                 document=serializable_doc,
             ).get_result()
 
-            logging.info(
+            self._logger.info(
                 "Saved plan '%s' (realm=%s, status=%s)",
                 doc_id,
                 realm,
@@ -189,7 +213,7 @@ class PlanDBManager(CouchDBHandler):
             return doc_id
 
         except ApiException as e:
-            logging.error("Failed to save plan '%s': %s", doc_id, e)
+            self._logger.error("Failed to save plan '%s': %s", doc_id, e)
             raise
 
     def fetch_plan(self, doc_id: str) -> dict[str, Any] | None:
@@ -220,7 +244,7 @@ class PlanDBManager(CouchDBHandler):
 
         plan_data = doc.get("plan")
         if not plan_data:
-            logging.warning("Plan document '%s' has no 'plan' field", doc_id)
+            self._logger.warning("Plan document '%s' has no 'plan' field", doc_id)
             return None
 
         try:
@@ -229,7 +253,7 @@ class PlanDBManager(CouchDBHandler):
             # Params remain as strings in the persisted document.
             return Plan.from_dict(plan_data)
         except (KeyError, TypeError) as e:
-            logging.error("Failed to deserialize plan '%s': %s", doc_id, e)
+            self._logger.error("Failed to deserialize plan '%s': %s", doc_id, e)
             return None
 
     def update_executed_token(
@@ -256,7 +280,7 @@ class PlanDBManager(CouchDBHandler):
         for attempt in range(1, max_retries + 1):
             doc = self.fetch_document_by_id(doc_id)
             if not doc:
-                logging.error("Cannot update token: plan '%s' not found", doc_id)
+                self._logger.error("Cannot update token: plan '%s' not found", doc_id)
                 return False
 
             # Update fields
@@ -271,7 +295,7 @@ class PlanDBManager(CouchDBHandler):
                     document=cast(Document, doc),
                 ).get_result()
 
-                logging.debug(
+                self._logger.debug(
                     "Updated executed_run_token=%d for plan '%s'",
                     run_token,
                     doc_id,
@@ -280,17 +304,17 @@ class PlanDBManager(CouchDBHandler):
 
             except ApiException as e:
                 if e.code == 409:
-                    logging.warning(
+                    self._logger.warning(
                         "Conflict updating plan '%s'; retry %d/%d",
                         doc_id,
                         attempt,
                         max_retries,
                     )
                     continue
-                logging.error("Failed to update plan '%s': %s", doc_id, e)
+                self._logger.error("Failed to update plan '%s': %s", doc_id, e)
                 return False
 
-        logging.error(
+        self._logger.error(
             "Failed to update plan '%s' after %d retries",
             doc_id,
             max_retries,
@@ -334,14 +358,14 @@ class PlanDBManager(CouchDBHandler):
                 if is_plan_eligible(doc):
                     eligible_plans.append(doc)
 
-            logging.info(
+            self._logger.info(
                 "Found %d eligible plans (of %d total) for recovery",
                 len(eligible_plans),
                 len(rows),
             )
 
         except ApiException as e:
-            logging.error("Failed to query approved pending plans: %s", e)
+            self._logger.error("Failed to query approved pending plans: %s", e)
             # Return empty list on error (caller handles recovery)
 
         return eligible_plans
@@ -358,12 +382,12 @@ class PlanDBManager(CouchDBHandler):
         """
         doc = self.fetch_document_by_id(doc_id)
         if not doc:
-            logging.warning("Cannot delete: plan '%s' not found", doc_id)
+            self._logger.warning("Cannot delete: plan '%s' not found", doc_id)
             return False
 
         rev = doc.get("_rev")
         if not rev:
-            logging.error("Cannot delete: plan '%s' has no _rev", doc_id)
+            self._logger.error("Cannot delete: plan '%s' has no _rev", doc_id)
             return False
 
         try:
@@ -372,11 +396,11 @@ class PlanDBManager(CouchDBHandler):
                 doc_id=doc_id,
                 rev=rev,
             ).get_result()
-            logging.info("Deleted plan '%s'", doc_id)
+            self._logger.info("Deleted plan '%s'", doc_id)
             return True
 
         except ApiException as e:
-            logging.error("Failed to delete plan '%s': %s", doc_id, e)
+            self._logger.error("Failed to delete plan '%s': %s", doc_id, e)
             return False
 
     def plan_exists(self, doc_id: str) -> bool:

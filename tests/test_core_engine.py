@@ -830,7 +830,7 @@ class TestEngine(unittest.TestCase):
             return "not a StepResult"
 
         with patch("yggdrasil.core.engine.resolve_callable", return_value=bad_step):
-            with patch("yggdrasil.core.engine.logger") as mock_logger:
+            with patch.object(self.engine, "_logger") as mock_logger:
                 plan = Plan(
                     plan_id="plan_010",
                     realm="test",

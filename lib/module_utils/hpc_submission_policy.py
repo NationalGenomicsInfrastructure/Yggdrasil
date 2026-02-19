@@ -1,6 +1,3 @@
-from typing import Optional
-
-
 class HPCSubmissionPolicy:
     """
     Aggregates multiple signals to decide HPC submission:
@@ -22,7 +19,7 @@ class HPCSubmissionPolicy:
 
     def __init__(
         self,
-        user_manual_submit: Optional[bool] = None,
+        user_manual_submit: bool | None = None,
         doc_auto_submit: bool = True,
         realm_supports_auto: bool = False,
     ):
@@ -37,11 +34,11 @@ class HPCSubmissionPolicy:
         self._realm_supports_auto = realm_supports_auto
 
     @property
-    def user_manual_submit(self) -> Optional[bool]:
+    def user_manual_submit(self) -> bool | None:
         return self._user_manual_submit
 
     @user_manual_submit.setter
-    def user_manual_submit(self, val: Optional[bool]):
+    def user_manual_submit(self, val: bool | None):
         self._user_manual_submit = val
 
     @property

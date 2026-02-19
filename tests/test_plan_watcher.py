@@ -40,14 +40,14 @@ class TestPlanWatcher(unittest.TestCase):
         self.mock_ygg_db = MagicMock()
         self.mock_ygg_db_class.return_value = self.mock_ygg_db
 
-        # Patch WatcherCheckpointStore
+        # Patch CouchDBCheckpointStore
         self.checkpoint_patcher = patch(
-            "lib.watchers.plan_watcher.WatcherCheckpointStore"
+            "lib.watchers.plan_watcher.CouchDBCheckpointStore"
         )
         self.mock_checkpoint_class = self.checkpoint_patcher.start()
         self.mock_checkpoint = MagicMock()
-        self.mock_checkpoint.get_checkpoint.return_value = None
-        self.mock_checkpoint.save_checkpoint.return_value = True
+        self.mock_checkpoint.load.return_value = None
+        self.mock_checkpoint.save.return_value = None
         self.mock_checkpoint_class.return_value = self.mock_checkpoint
 
         # Patch ChangesFetcher
@@ -85,7 +85,7 @@ class TestPlanWatcher(unittest.TestCase):
         """Test that PlanWatcher creates checkpoint store with correct name."""
         self.mock_checkpoint_class.assert_called_once()
         call_kwargs = self.mock_checkpoint_class.call_args[1]
-        self.assertEqual(call_kwargs["watcher_name"], "PlanWatcher")
+        self.assertIn("db_manager", call_kwargs)
 
     def test_init_creates_changes_fetcher(self):
         """Test that PlanWatcher creates changes fetcher with include_docs."""
@@ -263,11 +263,11 @@ class TestPlanWatcher(unittest.TestCase):
 
         asyncio.run(run_watcher_briefly())
 
-        self.mock_checkpoint.get_checkpoint.assert_called()
+        self.mock_checkpoint.load.assert_called_once_with("watcher:PlanWatcher")
 
     def test_start_resumes_from_checkpoint(self):
         """Test that start() resumes from saved checkpoint."""
-        self.mock_checkpoint.get_checkpoint.return_value = "100-abcdef"
+        self.mock_checkpoint.load.return_value = MagicMock(value="100-abcdef")
 
         async def mock_fetch_changes(since=None):
             # Verify since parameter
@@ -287,7 +287,7 @@ class TestPlanWatcher(unittest.TestCase):
         asyncio.run(run_watcher_briefly())
 
         # Checkpoint should have been retrieved
-        self.mock_checkpoint.get_checkpoint.assert_called()
+        self.mock_checkpoint.load.assert_called_once_with("watcher:PlanWatcher")
 
     def test_stop_sets_running_false(self):
         """Test that stop() sets _running to False."""
@@ -329,7 +329,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
         self.plan_db_patcher = patch("lib.watchers.plan_watcher.PlanDBManager")
         self.ygg_db_patcher = patch("lib.watchers.plan_watcher.YggdrasilDBManager")
         self.checkpoint_patcher = patch(
-            "lib.watchers.plan_watcher.WatcherCheckpointStore"
+            "lib.watchers.plan_watcher.CouchDBCheckpointStore"
         )
         self.fetcher_patcher = patch("lib.watchers.plan_watcher.ChangesFetcher")
 
@@ -346,8 +346,8 @@ class TestPlanWatcherIntegration(unittest.TestCase):
         self.mock_ygg_db_class.return_value = self.mock_ygg_db
 
         self.mock_checkpoint = MagicMock()
-        self.mock_checkpoint.get_checkpoint.return_value = None
-        self.mock_checkpoint.save_checkpoint.return_value = True
+        self.mock_checkpoint.load.return_value = None
+        self.mock_checkpoint.save.return_value = None
         self.mock_checkpoint_class.return_value = self.mock_checkpoint
 
         self.mock_fetcher = MagicMock()
@@ -464,15 +464,15 @@ class TestPlanWatcherIntegration(unittest.TestCase):
                 new_seq = change.get("seq")
                 await watcher._evaluate_change(change)
                 if new_seq:
-                    watcher.checkpoint_store.save_checkpoint(new_seq)
+                    watcher.checkpoint_store.save(Mock(value=new_seq))
             watcher._running = False
 
         asyncio.run(run_one_cycle())
 
         # Checkpoint should have been saved twice
-        self.assertEqual(self.mock_checkpoint.save_checkpoint.call_count, 2)
-        # Verify last checkpoint was final seq
-        self.mock_checkpoint.save_checkpoint.assert_called_with("101-def")
+        self.assertEqual(self.mock_checkpoint.save.call_count, 2)
+        # Verify final checkpoint was final seq
+        self.assertEqual(self.mock_checkpoint.save.call_args[0][0].value, "101-def")
 
 
 class TestPlanWatcherFiltering(unittest.TestCase):
@@ -492,13 +492,13 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         self.mock_ygg_db = MagicMock()
         self.mock_ygg_db_class.return_value = self.mock_ygg_db
 
-        # Patch WatcherCheckpointStore
+        # Patch CouchDBCheckpointStore
         self.checkpoint_patcher = patch(
-            "lib.watchers.plan_watcher.WatcherCheckpointStore"
+            "lib.watchers.plan_watcher.CouchDBCheckpointStore"
         )
         self.mock_checkpoint_class = self.checkpoint_patcher.start()
         self.mock_checkpoint = MagicMock()
-        self.mock_checkpoint.get_checkpoint.return_value = None
+        self.mock_checkpoint.load.return_value = None
         self.mock_checkpoint_class.return_value = self.mock_checkpoint
 
         # Patch ChangesFetcher

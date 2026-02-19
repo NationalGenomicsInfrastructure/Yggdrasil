@@ -1,9 +1,10 @@
 import datetime
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+# logger = custom_logger(__name__)
 
 
 class YggdrasilDocument:
@@ -22,7 +23,7 @@ class YggdrasilDocument:
     """
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "YggdrasilDocument":
+    def from_dict(cls, data: dict[str, Any]) -> "YggdrasilDocument":
         """Creates a YggdrasilDocument instance from a dictionary.
 
         Args:
@@ -62,7 +63,12 @@ class YggdrasilDocument:
         return instance
 
     def __init__(
-        self, project_id: str, projects_reference: str, project_name: str, method: str
+        self,
+        project_id: str,
+        projects_reference: str,
+        project_name: str,
+        method: str,
+        logger: logging.Logger | None = None,
     ) -> None:
         """Initializes a new YggdrasilDocument instance.
 
@@ -72,6 +78,7 @@ class YggdrasilDocument:
             project_name (str): The project name.
             method (str): The library construction method.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._id: str = project_id
         self.projects_reference: str = projects_reference
         self.method: str = method
@@ -84,12 +91,12 @@ class YggdrasilDocument:
         self.end_date: str = ""
 
         # Samples & Delivery
-        self.samples: List[Dict[str, Any]] = []
-        self.delivery_info: Dict[str, Any] = {"delivery_results": []}
-        self.ngi_report: List[Dict[str, Any]] = []
-        self.user_info: Dict[str, Dict[str, Optional[str]]] = {}
+        self.samples: list[dict[str, Any]] = []
+        self.delivery_info: dict[str, Any] = {"delivery_results": []}
+        self.ngi_report: list[dict[str, Any]] = []
+        self.user_info: dict[str, dict[str, str | None]] = {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Converts the YggdrasilDocument to a dictionary.
 
         Returns:
@@ -114,7 +121,7 @@ class YggdrasilDocument:
     # USER INFO
     # ---------------------------
 
-    def set_user_info(self, updated_info: Dict[str, Dict[str, Optional[str]]]) -> None:
+    def set_user_info(self, updated_info: dict[str, dict[str, str | None]]) -> None:
         """
         Updates self.user_info with the nested dictionary provided.
 
@@ -145,12 +152,12 @@ class YggdrasilDocument:
     def add_sample(
         self,
         sample_id: str,
-        slurm_job_id: Optional[str] = None,
+        slurm_job_id: str | None = None,
         # lib_prep_option: str,
         status: str = "pending",
-        flowcell_ids_processed_for: Optional[List[str]] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
+        flowcell_ids_processed_for: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
     ) -> None:
         """Adds or updates a sample to the document.
 
@@ -180,7 +187,7 @@ class YggdrasilDocument:
                 existing_sample["start_time"] = start_time
             if end_time:
                 existing_sample["end_time"] = end_time
-            # logging.debug(f"Updated sample: {existing_sample}")
+            # self._logger.debug(f"Updated sample: {existing_sample}")
         else:
             # Add new sample
             sample = {
@@ -195,11 +202,11 @@ class YggdrasilDocument:
                 "delivered": False,
             }
             self.samples.append(sample)
-            # logging.debug(f"Added sample: {sample}")
+            # self._logger.debug(f"Added sample: {sample}")
 
         # self.check_project_completion() # NOTE: Should this be here?
 
-    def get_sample(self, sample_id: str) -> Optional[Dict[str, Any]]:
+    def get_sample(self, sample_id: str) -> dict[str, Any] | None:
         """Retrieves a specific sample from the samples list by its ID.
 
         Args:
@@ -222,7 +229,7 @@ class YggdrasilDocument:
         """
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(
+            self._logger.error(
                 f"Sample '{sample_id}' not found in project '{self.project_id}'."
             )
             return False
@@ -255,7 +262,7 @@ class YggdrasilDocument:
         """
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(f"Cannot set QC: sample '{sample_id}' not found.")
+            self._logger.error(f"Cannot set QC: sample '{sample_id}' not found.")
             return
         sample["QC"] = qc_value
 
@@ -265,11 +272,13 @@ class YggdrasilDocument:
         """
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(f"Cannot mark delivered: sample '{sample_id}' not found.")
+            self._logger.error(
+                f"Cannot mark delivered: sample '{sample_id}' not found."
+            )
             return
         sample["delivered"] = True
 
-    def get_sample_status(self, sample_id: str) -> Optional[str]:
+    def get_sample_status(self, sample_id: str) -> str | None:
         sample = self.get_sample(sample_id)
         if sample:
             return sample.get("status")
@@ -290,24 +299,24 @@ class YggdrasilDocument:
             bool: True if the sample was found and updated, False otherwise.
         """
         if field_name == "status":
-            logging.warning(
+            self._logger.warning(
                 "Attempted to update sample status via 'update_sample_field';"
             )
             if value:
-                logging.info("Attempting to use 'update_sample_status'.")
+                self._logger.info("Attempting to use 'update_sample_status'.")
                 return self.update_sample_status(sample_id, value)
             return False
 
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(
+            self._logger.error(
                 f"Cannot update field '{field_name}' for sample '{sample_id}' "
                 f"in project '{self.project_id}': sample not found."
             )
             return False
 
         sample[field_name] = value
-        logging.debug(
+        self._logger.debug(
             f"Updated sample '{sample_id}' in project '{self.project_id}' with "
             f"'{field_name}': {value}"
         )
@@ -323,7 +332,7 @@ class YggdrasilDocument:
 
     def sync_project_metadata(
         self,
-        user_info: Dict[str, Dict[str, Optional[str]]],
+        user_info: dict[str, dict[str, str | None]],
         is_sensitive: bool,
     ) -> None:
         """
@@ -411,7 +420,7 @@ class YggdrasilDocument:
         # self.end_date = ""
         self.update_project_status("partially_completed")
 
-    def get_project_status(self) -> Optional[str]:
+    def get_project_status(self) -> str | None:
         """Retrieves the status of a project.
 
         Returns:
@@ -423,7 +432,7 @@ class YggdrasilDocument:
     # NGI REPORT MANAGEMENT
     # ------------------------------------------------------------------------
 
-    def add_ngi_report_entry(self, report_data: Dict[str, Any]) -> bool:
+    def add_ngi_report_entry(self, report_data: dict[str, Any]) -> bool:
         """
         Append a new record to `ngi_report`.
         Example `report_data`:
@@ -448,14 +457,14 @@ class YggdrasilDocument:
             self.ngi_report.append(report_data)
             return True
         else:
-            logging.error("Invalid report_data format or missing required keys.")
+            self._logger.error("Invalid report_data format or missing required keys.")
             return False
 
     # ------------------------------------------------------------------------
     # DELIVERY INFO / DELIVERY EVENTS
     # ------------------------------------------------------------------------
 
-    def add_delivery_entry(self, delivery_data: Dict[str, Any]) -> None:
+    def add_delivery_entry(self, delivery_data: dict[str, Any]) -> None:
         """
         Add a new entry to `delivery_info.delivery_results`.
         Example `delivery_data`:

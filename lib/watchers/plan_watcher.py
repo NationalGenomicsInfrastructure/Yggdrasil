@@ -8,27 +8,26 @@ This watcher implements the Plan Approval & Execution Workflow by:
 4. Managing checkpoint persistence for restart safety
 
 Key design principles:
-- Uses WatcherCheckpointStore for DB-backed checkpoint persistence
+- Uses CouchDBCheckpointStore for DB-backed checkpoint persistence
 - Uses ChangesFetcher for generic _changes streaming
 - Uses is_plan_eligible() pure function for eligibility logic
 - Graceful error handling (log + continue, no crash)
 """
 
-import asyncio
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
-from requests.exceptions import ConnectionError as RequestsConnectionError
-from urllib3.exceptions import ProtocolError
-
 from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from lib.couchdb.changes_fetcher import ChangesFetcher
 from lib.couchdb.plan_db_manager import PlanDBManager
-from lib.couchdb.watcher_checkpoint_store import WatcherCheckpointStore
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
+from lib.watchers.backends.base import Checkpoint
+from lib.watchers.backends.checkpoint_store import CouchDBCheckpointStore
 
 
 class PlanWatcher(AbstractWatcher):
@@ -47,10 +46,12 @@ class PlanWatcher(AbstractWatcher):
 
     Attributes:
         plan_db: PlanDBManager for accessing yggdrasil_plans
-        checkpoint_store: WatcherCheckpointStore for checkpoint persistence
+        checkpoint_store: CouchDBCheckpointStore for checkpoint persistence
         changes_fetcher: ChangesFetcher for streaming _changes
         poll_interval_sec: Seconds between poll cycles
     """
+
+    CHECKPOINT_KEY = "watcher:PlanWatcher"
 
     def __init__(
         self,
@@ -75,11 +76,12 @@ class PlanWatcher(AbstractWatcher):
                 Used in run-once mode to isolate concurrent CLI invocations.
             logger: Optional logger; uses module logger if None
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         super().__init__(
             on_event=on_event,
             event_type=EventType.PLAN_EXECUTION,
             name="PlanWatcher",
-            logger=logger,
+            logger=self._logger,
         )
 
         self.poll_interval_sec = poll_interval_sec
@@ -91,17 +93,13 @@ class PlanWatcher(AbstractWatcher):
         self._yggdrasil_db = YggdrasilDBManager()
 
         # Initialize checkpoint store (persists to yggdrasil DB)
-        self.checkpoint_store = WatcherCheckpointStore(
-            watcher_name="PlanWatcher",
-            db_handler=self._yggdrasil_db,
-            logger=self._logger,
+        self.checkpoint_store = CouchDBCheckpointStore(
+            db_manager=self._yggdrasil_db,
         )
 
         # Initialize changes fetcher (reads from yggdrasil_plans DB)
         self.changes_fetcher = ChangesFetcher(
-            db_handler=self.plan_db,
-            include_docs=True,
-            logger=self._logger,
+            db_handler=self.plan_db, include_docs=True
         )
 
         self._logger.debug(
@@ -115,15 +113,11 @@ class PlanWatcher(AbstractWatcher):
         """
         Start watching for plan changes.
 
-        Resumes from checkpoint if available; otherwise starts from beginning.
+        Resumes from checkpoint if available; otherwise starts from current head.
         Runs until stop() is called.
 
-        The watcher loop:
-        1. Fetch changes since last checkpoint
-        2. For each change, check eligibility
-        3. Emit event for eligible plans
-        4. Update checkpoint
-        5. Sleep and repeat
+        Uses ChangesFetcher.stream_changes_continuously() as the canonical
+        polling/backoff path.
         """
         if self._running:
             self._logger.warning("PlanWatcher already running; ignoring start()")
@@ -132,51 +126,42 @@ class PlanWatcher(AbstractWatcher):
         self._running = True
         self._logger.info("Starting PlanWatcher...")
 
-        # Get starting checkpoint (None = start from "0")
-        current_seq = self.checkpoint_store.get_checkpoint()
-        if current_seq:
+        # Get starting checkpoint. If missing, start from "now" to avoid
+        # replaying full history by default for plans.
+        checkpoint = self.checkpoint_store.load(self.CHECKPOINT_KEY)
+        if checkpoint and checkpoint.value is not None:
+            current_seq = str(checkpoint.value)
             self._logger.info("Resuming from checkpoint: seq='%s'", current_seq)
         else:
-            self._logger.info("No checkpoint found; starting from beginning")
-            current_seq = "0"
+            self._logger.info("No checkpoint found; starting from 'now'")
+            current_seq = "now"
 
-        while self._running:
-            try:
-                # Fetch changes since last checkpoint
-                async for change in self.changes_fetcher.fetch_changes(
-                    since=current_seq
-                ):
-                    if not self._running:
-                        break
+        try:
+            async for change in self.changes_fetcher.stream_changes_continuously(
+                since=current_seq,
+                poll_interval_sec=self.poll_interval_sec,
+            ):
+                if not self._running:
+                    break
 
-                    # Update current_seq for checkpoint
-                    new_seq = change.get("seq")
-                    if new_seq:
-                        current_seq = new_seq
+                # Evaluate the change (filter + eligibility check + emit)
+                await self._evaluate_change(change)
 
-                    # Evaluate the change (filter + eligibility check + emit)
-                    await self._evaluate_change(change)
-
-                    # Save checkpoint after each change (durability)
-                    if new_seq:
-                        self.checkpoint_store.save_checkpoint(new_seq)
-
-            except (RequestsConnectionError, ProtocolError) as e:
-                # Connection resets are typically transient; log succinctly and retry.
-                # TODO: Consider longpoll + backoff/jitter and health checks to reduce churn.
-                self._logger.warning(
-                    "PlanWatcher connection error while polling changes (will retry): %s",
-                    e,
-                )
-            except Exception as e:
-                # Unexpected error: log succinctly (no full stacktrace) and continue.
-                # TODO: Add structured error classification and retry/backoff policy.
-                self._logger.error("Error in PlanWatcher loop: %s", e)
-                # Continue polling despite errors (resilience)
-
-            # Sleep between poll cycles
-            if self._running:
-                await asyncio.sleep(self.poll_interval_sec)
+                # Update current_seq and checkpoint after each change
+                new_seq = change.get("seq")
+                if new_seq is not None:
+                    current_seq = str(new_seq)
+                    self.checkpoint_store.save(
+                        Checkpoint(
+                            backend_key=self.CHECKPOINT_KEY,
+                            value=current_seq,
+                            updated_at=datetime.now(UTC).isoformat(),
+                        )
+                    )
+        except Exception as e:
+            # stream_changes_continuously handles transient retry/backoff internally.
+            # Unexpected errors are logged and terminate start().
+            self._logger.error("PlanWatcher stream terminated with error: %s", e)
 
         self._logger.info("PlanWatcher stopped.")
 
@@ -352,4 +337,9 @@ class PlanWatcher(AbstractWatcher):
             }
             await self.emit(payload, source="PlanWatcher:recovery")
 
+        return filtered_plans
+        return filtered_plans
+        return filtered_plans
+        return filtered_plans
+        return filtered_plans
         return filtered_plans

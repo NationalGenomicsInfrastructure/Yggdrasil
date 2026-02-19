@@ -46,7 +46,7 @@ class WatcherCheckpointStore:
         """
         self.watcher_name = watcher_name
         self.db_handler = db_handler
-        self._logger = logger or custom_logger(__name__.split(".")[-1])
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     def checkpoint_doc_id(self) -> str:
         """
