@@ -10,7 +10,7 @@ from typing import Any
 from lib.core_utils.logging_utils import custom_logger
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 PlanFilter = Callable[[str, str], bool] | None
 
@@ -33,7 +33,7 @@ class FileSpoolConsumer:
                     continue
                 snapshot = build_plan_snapshot(plan_dir, realm, plan_id)
                 if not snapshot.get("scope"):
-                    logging.warning(
+                    logger.warning(
                         f"Missing scope in plan.json for {realm}/{plan_id}; skipping..."
                     )
                     continue

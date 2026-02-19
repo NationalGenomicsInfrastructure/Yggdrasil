@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from lib.core_utils.logging_utils import custom_logger
 from yggdrasil.flow.errors import PermanentStepError, TransientStepError
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import Plan, StepResult, StepSpec
@@ -17,7 +18,7 @@ from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
 from yggdrasil.flow.utils.typing_coerce import coerce_params_to_signature_types
 from yggdrasil.flow.utils.ygg_time import utcnow_compact, utcnow_iso
 
-logger = logging.getLogger("yggdrasil.core.engine")
+logger = custom_logger(__name__)
 
 
 # ------------ Utilities ------------
@@ -107,7 +108,9 @@ class Engine:
         self,
         work_root: str | Path | None = None,
         emitter: EventEmitter | None = None,
+        logger: logging.Logger | None = None,
     ):
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.work_root = Path(
             work_root or os.environ.get("YGG_WORK_ROOT") or "/tmp/ygg_work"
         )
@@ -239,7 +242,7 @@ class Engine:
                 ) from e
 
             if result is not None and not isinstance(result, StepResult):
-                logger.warning(
+                self._logger.warning(
                     "Step %s returned %r (expected StepResult or None)",
                     spec.step_id,
                     type(result),

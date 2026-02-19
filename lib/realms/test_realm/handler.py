@@ -5,6 +5,7 @@ TestRealmHandler responds to COUCHDB_DOC_CHANGED events for scenario documents,
 generating execution plans from scenario documents stored in the yggdrasil database.
 """
 
+import logging
 from typing import Any, ClassVar, cast
 
 from lib.core_utils.event_types import EventType
@@ -13,8 +14,6 @@ from lib.handlers.base_handler import BaseHandler
 from lib.realms.test_realm.templates import TEMPLATES, get_template
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
-
-logging = custom_logger(__name__.split(".")[-1])
 
 
 class TestRealmHandler(BaseHandler):
@@ -41,6 +40,9 @@ class TestRealmHandler(BaseHandler):
 
     event_type: ClassVar[EventType] = EventType.COUCHDB_DOC_CHANGED
     handler_id: ClassVar[str] = "test_scenario_handler"
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         """
@@ -156,7 +158,7 @@ class TestRealmHandler(BaseHandler):
             overrides = doc.get("overrides", {})
 
             # Generate steps from template
-            logging.info(
+            self._logger.info(
                 "Generating plan from template '%s' for scenario '%s'",
                 template_name,
                 doc.get("_id"),
@@ -166,7 +168,7 @@ class TestRealmHandler(BaseHandler):
 
         elif custom_steps:
             # Custom steps mode
-            logging.info(
+            self._logger.info(
                 "Generating plan from custom steps for scenario '%s'",
                 doc.get("_id"),
             )

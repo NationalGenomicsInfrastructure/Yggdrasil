@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
+from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from lib.handlers.base_handler import BaseHandler
 
@@ -21,9 +22,9 @@ class BestPracticeAnalysisHandler(BaseHandler):
     or synchronously (run_now).
     """
 
-    def __init__(self):
+    def __init__(self, logger: logging.Logger | None = None):
         self.ydm = YggdrasilDBManager()
-        self.logger = logging.getLogger("BPA-Handler")
+        self.logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     async def handle_task(self, payload: dict[str, Any]) -> None:
         """
