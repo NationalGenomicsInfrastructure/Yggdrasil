@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from lib.couchdb.project_db_manager import ProjectDBManager
 
@@ -106,6 +106,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
             url="http://localhost:5984",
             user_env="COUCHDB_USER",
             pass_env="COUCHDB_PASS",
+            logger=ANY,
         )
         mock_config_instance.load_config.assert_called_once_with("module_registry.json")
         self.assertEqual(manager.module_registry, self.mock_module_registry)
@@ -372,7 +373,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
     @patch("lib.couchdb.project_db_manager.Ygg.save_last_processed_seq")
-    @patch("lib.couchdb.project_db_manager.logging")
+    @patch("lib.couchdb.project_db_manager.custom_logger")
     async def test_get_changes_none_document(
         self,
         mock_logging,
@@ -422,7 +423,9 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
 
         # Assert
         self.assertEqual(len(results), 0)  # No documents should be yielded
-        mock_logging.warning.assert_called_with("Document with ID missing_doc is None.")
+        mock_logging.return_value.warning.assert_called_with(
+            "Document with ID missing_doc is None."
+        )
         mock_save_seq.assert_called_once_with("1")
 
     @patch("lib.couchdb.project_db_manager.resolve_couchdb_params")
@@ -430,7 +433,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
     @patch("lib.couchdb.project_db_manager.Ygg.save_last_processed_seq")
-    @patch("lib.couchdb.project_db_manager.logging")
+    @patch("lib.couchdb.project_db_manager.custom_logger")
     async def test_get_changes_none_sequence(
         self,
         mock_logging,
@@ -477,7 +480,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
 
         # Assert
         self.assertEqual(len(results), 1)
-        mock_logging.warning.assert_called_with(
+        mock_logging.return_value.warning.assert_called_with(
             "Received `None` for last_processed_seq. Skipping save."
         )
         mock_save_seq.assert_not_called()
@@ -486,7 +489,7 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
     @patch("lib.couchdb.project_db_manager.ConfigLoader")
     @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.project_db_manager.Ygg.get_last_processed_seq")
-    @patch("lib.couchdb.project_db_manager.logging")
+    @patch("lib.couchdb.project_db_manager.custom_logger")
     async def test_get_changes_fetch_document_exception(
         self,
         mock_logging,
@@ -538,10 +541,12 @@ class TestProjectDBManager(unittest.IsolatedAsyncioTestCase):
 
         # Assert
         self.assertEqual(len(results), 0)  # No documents should be yielded
-        mock_logging.warning.assert_called_with(
+        mock_logging.return_value.warning.assert_called_with(
             "Error processing change: Database error"
         )
-        mock_logging.debug.assert_called_with(f"Data causing the error: {mock_change}")
+        mock_logging.return_value.debug.assert_called_with(
+            f"Data causing the error: {mock_change}"
+        )
 
     @patch("lib.couchdb.project_db_manager.resolve_couchdb_params")
     @patch("lib.couchdb.project_db_manager.ConfigLoader")

@@ -59,7 +59,7 @@ class TestCouchDBWatcher(unittest.TestCase):
                 self.log_list.append(record.getMessage())
 
         # Attach the handler
-        self.logger = logging.getLogger("ProjectDBTest")
+        self.logger = self.watcher._logger
         self.logger.setLevel(logging.DEBUG)
         self.handler = CaptureHandler(self.log_output)
         self.logger.addHandler(self.handler)

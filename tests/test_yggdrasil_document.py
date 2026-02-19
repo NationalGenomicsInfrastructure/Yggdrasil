@@ -438,7 +438,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         self.assertIsNone(result)
 
     @patch("lib.couchdb.yggdrasil_document.datetime")
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_update_sample_status_success(self, mock_logging, mock_datetime):
         """Test successful sample status update."""
         # Arrange
@@ -494,7 +494,7 @@ class TestYggdrasilDocument(unittest.TestCase):
             self.assertEqual(sample["status"], "completed")
             self.assertEqual(sample["end_time"], self.mock_datetime)
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_update_sample_status_nonexistent(self, mock_logging):
         """Test updating status of non-existent sample."""
         # Arrange
@@ -510,11 +510,11 @@ class TestYggdrasilDocument(unittest.TestCase):
 
         # Assert
         self.assertFalse(result)
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             f"Sample 'S999' not found in project '{self.test_project_id}'."
         )
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_set_sample_qc_status_success(self, mock_logging):
         """Test setting QC status for existing sample."""
         # Arrange
@@ -535,7 +535,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         if sample is not None:
             self.assertEqual(sample["QC"], "Passed")
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_set_sample_qc_status_nonexistent(self, mock_logging):
         """Test setting QC status for non-existent sample."""
         # Arrange
@@ -550,9 +550,11 @@ class TestYggdrasilDocument(unittest.TestCase):
         doc.set_sample_qc_status("S999", "Passed")
 
         # Assert
-        mock_logging.error.assert_called_with("Cannot set QC: sample 'S999' not found.")
+        mock_logging.return_value.error.assert_called_with(
+            "Cannot set QC: sample 'S999' not found."
+        )
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_mark_sample_as_delivered_success(self, mock_logging):
         """Test marking sample as delivered."""
         # Arrange
@@ -573,7 +575,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         if sample is not None:
             self.assertTrue(sample["delivered"])
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_mark_sample_as_delivered_nonexistent(self, mock_logging):
         """Test marking non-existent sample as delivered."""
         # Arrange
@@ -588,7 +590,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         doc.mark_sample_as_delivered("S999")
 
         # Assert
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             "Cannot mark delivered: sample 'S999' not found."
         )
 
@@ -625,7 +627,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         # Assert
         self.assertIsNone(result)
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_update_sample_field_success(self, mock_logging):
         """Test updating a sample field."""
         # Arrange
@@ -649,7 +651,7 @@ class TestYggdrasilDocument(unittest.TestCase):
             self.assertEqual(sample["slurm_job_id"], "789012")
         doc.check_project_completion.assert_called_once()
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_update_sample_field_status_warning(self, mock_logging):
         """Test updating sample status field gives warning and redirects."""
         # Arrange
@@ -667,15 +669,15 @@ class TestYggdrasilDocument(unittest.TestCase):
 
         # Assert
         self.assertTrue(result)
-        mock_logging.warning.assert_called_with(
+        mock_logging.return_value.warning.assert_called_with(
             "Attempted to update sample status via 'update_sample_field';"
         )
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "Attempting to use 'update_sample_status'."
         )
         doc.update_sample_status.assert_called_once_with("S001", "completed")
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_update_sample_field_status_no_value(self, mock_logging):
         """Test updating sample status field with empty value."""
         # Arrange
@@ -692,11 +694,11 @@ class TestYggdrasilDocument(unittest.TestCase):
 
         # Assert
         self.assertFalse(result)
-        mock_logging.warning.assert_called_with(
+        mock_logging.return_value.warning.assert_called_with(
             "Attempted to update sample status via 'update_sample_field';"
         )
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_update_sample_field_nonexistent_sample(self, mock_logging):
         """Test updating field of non-existent sample."""
         # Arrange
@@ -712,7 +714,7 @@ class TestYggdrasilDocument(unittest.TestCase):
 
         # Assert
         self.assertFalse(result)
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             f"Cannot update field 'slurm_job_id' for sample 'S999' "
             f"in project '{self.test_project_id}': sample not found."
         )
@@ -924,7 +926,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         # Assert
         self.assertEqual(result, "processing")
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_add_ngi_report_entry_success(self, mock_logging):
         """Test successful NGI report entry addition."""
         # Arrange
@@ -943,7 +945,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         self.assertEqual(len(doc.ngi_report), 1)
         self.assertEqual(doc.ngi_report[0], self.test_ngi_report)
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_add_ngi_report_entry_invalid_data(self, mock_logging):
         """Test NGI report entry addition with invalid data."""
         # Arrange
@@ -962,11 +964,11 @@ class TestYggdrasilDocument(unittest.TestCase):
         # Assert
         self.assertFalse(result)
         self.assertEqual(len(doc.ngi_report), 0)
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             "Invalid report_data format or missing required keys."
         )
 
-    @patch("lib.couchdb.yggdrasil_document.logging")
+    @patch("lib.couchdb.yggdrasil_document.custom_logger")
     def test_add_ngi_report_entry_non_dict(self, mock_logging):
         """Test NGI report entry addition with non-dict data."""
         # Arrange
@@ -983,7 +985,7 @@ class TestYggdrasilDocument(unittest.TestCase):
         # Assert
         self.assertFalse(result)
         self.assertEqual(len(doc.ngi_report), 0)
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             "Invalid report_data format or missing required keys."
         )
 

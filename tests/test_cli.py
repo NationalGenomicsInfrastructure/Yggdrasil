@@ -526,7 +526,7 @@ class TestYggdrasilCLI(unittest.TestCase):
 
             # Verify that logging was configured and logger was created
             mock_configure_logging.assert_called_once_with(debug=False, console=True)
-            mock_custom_logger.assert_called_once_with("Yggdrasil")
+            mock_custom_logger.assert_called_once_with("yggdrasil.cli")
             # Verify that debug logging was called (indicates logging is working)
             mock_logger.debug.assert_called_once_with("Yggdrasil: Starting up...")
 

@@ -117,7 +117,9 @@ class TestYggdrasilCore(unittest.TestCase):
 
             # Assert
             self.assertEqual(core._logger, mock_default_logger)
-            mock_get_logger.assert_called_once_with("YggdrasilCore")
+            mock_get_logger.assert_called_once_with(
+                "lib.core_utils.yggdrasil_core.YggdrasilCore"
+            )
             mock_default_logger.info.assert_called_with("YggdrasilCore initialized.")
 
     def test_singleton_behavior(self):

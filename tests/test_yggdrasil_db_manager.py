@@ -1,6 +1,6 @@
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 
 # Mock IBM Cloud SDK modules before importing the module under test
@@ -90,11 +90,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
             url="http://localhost:5984",
             user_env="COUCH_USER",
             pass_env="COUCH_PASS",
+            logger=ANY,
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDocument")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_create_project_success(
         self, mock_logging, mock_ygg_doc_class, mock_handler_init
     ):
@@ -128,7 +129,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         self.assertEqual(mock_ygg_doc.user_info, self.mock_user_info)
         mock_ygg_doc.delivery_info.__setitem__.assert_called_with("sensitive", True)
         manager.save_document.assert_called_once_with(mock_ygg_doc)
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "New project with ID 'P12345' created successfully."
         )
         self.assertEqual(result, mock_ygg_doc)
@@ -171,7 +172,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         self.assertEqual(result, mock_ygg_doc)
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_save_document_new_document(self, mock_logging, mock_handler_init):
         """Test saving a new document (no existing _rev)."""
         # Arrange
@@ -203,12 +204,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         mock_server.put_document.assert_called_once_with(
             db="yggdrasil", doc_id="P12345", document={"_id": "P12345", "data": "test"}
         )
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "Document with ID 'P12345' saved successfully in 'yggdrasil' DB."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_save_document_existing_document(self, mock_logging, mock_handler_init):
         """Test saving an existing document (preserves _rev)."""
         # Arrange
@@ -246,7 +247,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_save_document_exception(self, mock_logging, mock_handler_init):
         """Test save_document when an exception occurs."""
         # Arrange
@@ -265,7 +266,9 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document(mock_doc)
 
         # Assert
-        mock_logging.error.assert_called_with("Error saving document: Database error")
+        mock_logging.return_value.error.assert_called_with(
+            "Error saving document: Database error"
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDocument")
@@ -375,7 +378,7 @@ class TestYggdrasilDBManager(unittest.TestCase):
         self.assertIsNone(result)
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_check_project_exists_true(self, mock_logging, mock_handler_init):
         """Test check_project_exists when project exists."""
         # Arrange
@@ -391,10 +394,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         # Assert
         self.assertTrue(result)
         manager.get_document_by_project_id.assert_called_once_with("P12345")
-        mock_logging.info.assert_called_with("Project with ID 'P12345' exists.")
+        mock_logging.return_value.info.assert_called_with(
+            "Project with ID 'P12345' exists."
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_check_project_exists_false(self, mock_logging, mock_handler_init):
         """Test check_project_exists when project doesn't exist."""
         # Arrange
@@ -409,12 +414,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         # Assert
         self.assertFalse(result)
         manager.get_document_by_project_id.assert_called_once_with("nonexistent")
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "Project with ID 'nonexistent' does not exist."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_add_sample_success(self, mock_logging, mock_handler_init):
         """Test successful sample addition using the decorated method."""
         # Arrange
@@ -432,12 +437,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.get_document_by_project_id.assert_called_once_with("P12345")
         mock_doc.add_sample.assert_called_once_with(sample_id="S003", status="pending")
         manager.save_document.assert_called_once_with(mock_doc)
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "Sample 'S003' added with status 'pending'."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_add_sample_project_not_found(self, mock_logging, mock_handler_init):
         """Test add_sample when project doesn't exist."""
         # Arrange
@@ -454,12 +459,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         self.assertIsNone(result)
         manager.get_document_by_project_id.assert_called_once_with("nonexistent")
         manager.save_document.assert_not_called()
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             "Project 'nonexistent' not found in Yggdrasil DB."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_add_sample_exception_in_method(self, mock_logging, mock_handler_init):
         """Test add_sample when an exception occurs in the decorated method."""
         # Arrange
@@ -477,12 +482,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         # Assert
         self.assertIsNone(result)
         manager.save_document.assert_not_called()
-        mock_logging.error.assert_called_with(
+        mock_logging.return_value.error.assert_called_with(
             "Error in add_sample for project P12345: Sample error"
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_update_sample_status_success(self, mock_logging, mock_handler_init):
         """Test successful sample status update."""
         # Arrange
@@ -502,12 +507,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
             sample_id="S001", status="completed"
         )
         manager.save_document.assert_called_once_with(mock_doc)
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "Sample 'S001' status updated to 'completed'."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_add_ngi_report_entry_success(self, mock_logging, mock_handler_init):
         """Test successful NGI report entry addition."""
         # Arrange
@@ -527,10 +532,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.get_document_by_project_id.assert_called_once_with("P12345")
         mock_doc.add_ngi_report_entry.assert_called_once_with(self.mock_ngi_report)
         manager.save_document.assert_called_once_with(mock_doc)
-        mock_logging.info.assert_called_with("NGI report entry added to the document.")
+        mock_logging.return_value.info.assert_called_with(
+            "NGI report entry added to the document."
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_add_ngi_report_entry_failure(self, mock_logging, mock_handler_init):
         """Test NGI report entry addition when document method returns False."""
         # Arrange
@@ -551,12 +558,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document.assert_called_once_with(
             mock_doc
         )  # Still saves even if method returns False
-        mock_logging.warning.assert_called_with(
+        mock_logging.return_value.warning.assert_called_with(
             "NGI report entry failed to be added to the document."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_update_sample_slurm_job_id_success(self, mock_logging, mock_handler_init):
         """Test successful SLURM job ID update."""
         # Arrange
@@ -577,12 +584,12 @@ class TestYggdrasilDBManager(unittest.TestCase):
             "S001", "slurm_job_id", "789012"
         )
         manager.save_document.assert_called_once_with(mock_doc)
-        mock_logging.info.assert_called_with(
+        mock_logging.return_value.info.assert_called_with(
             "Sample 'S001' slurm_job_id set to '789012'."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_update_sample_slurm_job_id_failure(self, mock_logging, mock_handler_init):
         """Test SLURM job ID update when document method returns False."""
         # Arrange
@@ -604,13 +611,13 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.save_document.assert_called_once_with(
             mock_doc
         )  # Still saves even if method returns False
-        mock_logging.warning.assert_called_with(
+        mock_logging.return_value.warning.assert_called_with(
             "Failed to update slurm_job_id for sample 'S001'."
         )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDocument")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_create_project_with_default_sensitive_flag(
         self, mock_logging, mock_ygg_doc_class, mock_handler_init
     ):
@@ -690,10 +697,11 @@ class TestAutoLoadAndSaveDecorator(unittest.TestCase):
         self.mock_manager.get_document_by_project_id.assert_called_once_with("P12345")
         self.mock_manager.save_document.assert_called_once_with(self.mock_doc)
 
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.logger")
     def test_decorator_project_not_found(self, mock_logging):
         """Test decorator when project is not found."""
         # Arrange
+        self.mock_manager._logger = mock_logging
         self.mock_manager.get_document_by_project_id.return_value = None
 
         @auto_load_and_save
@@ -708,14 +716,15 @@ class TestAutoLoadAndSaveDecorator(unittest.TestCase):
         self.mock_manager.get_document_by_project_id.assert_called_once_with(
             "nonexistent"
         )
-        mock_logging.error.assert_called_with(
+        self.mock_manager._logger.error.assert_called_with(
             "Project 'nonexistent' not found in Yggdrasil DB."
         )
 
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.logger")
     def test_decorator_method_exception(self, mock_logging):
         """Test decorator when the wrapped method raises an exception."""
         # Arrange
+        self.mock_manager._logger = mock_logging
         self.mock_manager.get_document_by_project_id.return_value = self.mock_doc
         self.mock_manager.save_document = MagicMock()
 
@@ -730,7 +739,7 @@ class TestAutoLoadAndSaveDecorator(unittest.TestCase):
         self.assertIsNone(result)
         self.mock_manager.get_document_by_project_id.assert_called_once_with("P12345")
         self.mock_manager.save_document.assert_not_called()
-        mock_logging.error.assert_called_with(
+        self.mock_manager._logger.error.assert_called_with(
             "Error in test_method for project P12345: Method error"
         )
 
@@ -757,7 +766,7 @@ class TestEdgeCasesAndIntegration(unittest.TestCase):
         self.assertIsNone(result)
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
-    @patch("lib.couchdb.yggdrasil_db_manager.logging")
+    @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
     def test_save_document_with_put_document_exception(
         self, mock_logging, mock_handler_init
     ):
@@ -785,7 +794,9 @@ class TestEdgeCasesAndIntegration(unittest.TestCase):
         manager.save_document(mock_doc)
 
         # Assert
-        mock_logging.error.assert_called_with("Error saving document: Put failed")
+        mock_logging.return_value.error.assert_called_with(
+            "Error saving document: Put failed"
+        )
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     def test_multiple_decorated_methods_same_project(self, mock_handler_init):
@@ -816,5 +827,6 @@ class TestEdgeCasesAndIntegration(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()
     unittest.main()
