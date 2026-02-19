@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 
+from lib.core_utils.logging_utils import custom_logger
 from yggdrasil.core.realm.descriptor import RealmDescriptor
 
 
@@ -37,7 +38,7 @@ def discover_realms(
         List of :class:`RealmDescriptor` instances (``None`` returns are
         skipped silently).
     """
-    logger = logger or logging.getLogger("RealmDiscovery")
+    logger = logger or custom_logger(__name__)
     eps = list(importlib.metadata.entry_points(group="ygg.realm"))
 
     # Deduplicate entry points (importlib.metadata can return duplicates
