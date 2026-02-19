@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.plan_eligibility import is_plan_eligible
 from lib.core_utils.singleton_decorator import singleton
 from lib.couchdb.plan_db_manager import PlanDBManager
@@ -51,7 +52,7 @@ class YggdrasilCore:
             logger: If not provided, a default named logger is created.
         """
         self.config = config
-        self._logger = logger or logging.getLogger("YggdrasilCore")
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._running = False
 
         # Watchers: a list of classes that inherit from AbstractWatcher
@@ -225,7 +226,7 @@ class YggdrasilCore:
 
         # 1. Discover realms via ygg.realm entry points
         #    (Includes test_realm when registered as entry point)
-        descriptors = discover_realms(logger=self._logger)
+        descriptors = discover_realms()
 
         # 2. Legacy ygg.handler support (backward compat)
         legacy_descriptors = self._discover_legacy_handlers()
@@ -633,7 +634,6 @@ class YggdrasilCore:
             on_event=self._handle_plan_execution_event,
             poll_interval_sec=poll_interval,
             execution_authority_filter="daemon",  # Skip run_once plans
-            logger=self._logger,
         )
         self.register_watcher(plan_watcher)
         self._plan_watcher = plan_watcher  # Keep reference for recovery
@@ -1376,7 +1376,6 @@ class YggdrasilCore:
             poll_interval_sec=2.0,  # Responsive for interactive use
             execution_owner_filter=execution_owner,
             # NOTE: No execution_authority_filter; we check origin in callback
-            logger=self._logger,
         )
 
         # Handle Ctrl+C
