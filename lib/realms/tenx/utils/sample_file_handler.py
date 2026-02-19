@@ -1,10 +1,11 @@
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class SampleFileHandler:
@@ -28,12 +29,17 @@ class SampleFileHandler:
         summary_fpath (Path): Path to the summary output file.
     """
 
-    def __init__(self, sample: Any) -> None:
+    def __init__(
+        self,
+        sample: Any,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Initialize the SampleFileHandler with sample information and configuration settings.
 
         Args:
             sample (Any): The sample object containing sample data and project information.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.sample_id: str = sample.run_sample_id
         self.project_id: str = sample.project_info.get("project_id", "")
         self.project_name: str = sample.project_info.get("project_name", "")
@@ -79,19 +85,21 @@ class SampleFileHandler:
         """Check if the CellRanger run completed successfully."""
 
         if not self.slurm_output_path.exists():
-            logging.error(f"CellRanger output file not found: {self.slurm_output_path}")
+            self._logger.error(
+                f"CellRanger output file not found: {self.slurm_output_path}"
+            )
             return False
 
         with open(self.slurm_output_path) as f:
             content = f.read()
 
         if "Pipestance completed successfully!" in content:
-            logging.info(
+            self._logger.info(
                 f"CellRanger run completed successfully for sample {self.sample_id}"
             )
             return True
         else:
-            logging.error(
+            self._logger.error(
                 f"CellRanger did not complete successfully for sample {self.sample_id}"
             )
             return False
@@ -99,7 +107,9 @@ class SampleFileHandler:
     def extract_report_path(self) -> bool:
         """Extract the report path from the Cell Ranger output file."""
         if not self.slurm_output_path.exists():
-            logging.error(f"CellRanger output file not found: {self.slurm_output_path}")
+            self._logger.error(
+                f"CellRanger output file not found: {self.slurm_output_path}"
+            )
             return False
 
         with open(self.slurm_output_path) as f:
@@ -117,10 +127,10 @@ class SampleFileHandler:
 
         if report_path and report_path.exists():
             self._report_path = report_path
-            logging.info(f"Report path found: {self.report_path}")
+            self._logger.info(f"Report path found: {self.report_path}")
             return True
         else:
-            logging.error(
+            self._logger.error(
                 f"Report path not found in CellRanger output for sample {self.sample_id}"
             )
             return False

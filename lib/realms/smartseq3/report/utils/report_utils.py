@@ -12,7 +12,7 @@ from reportlab.platypus import Image, PageBreak, Paragraph, Spacer
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__)
+logger = custom_logger(__name__)
 
 
 def get_image(path, width=1 * cm, **kwargs):
@@ -93,8 +93,8 @@ def add_figures(report, style, info):
             pil_image.save(buf, format="PNG")
             buf.seek(0)
         else:
-            logging.error(f"Unrecognized source type: {type(info['source'])}")
-            logging.debug(info["source"])
+            logger.error(f"Unrecognized source type: {type(info['source'])}")
+            logger.debug(info["source"])
             continue
 
         # Add image to report using aspect ratio
@@ -163,7 +163,7 @@ def get_bc_wells(bc_set, bc_file, reagent="1.5"):
     elif reagent == "1.0":
         target_col = "XC_NovaSeq"
     else:
-        logging.error(
+        logger.error(
             f"No recognized reagent version: {reagent}. Currently supported versions: 1.0, 1.5"
         )
         # TODO: Handle this error properly and possibly raise an exception

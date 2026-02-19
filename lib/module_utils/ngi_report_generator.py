@@ -6,7 +6,7 @@ from typing import Any
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__)
+logger = custom_logger(__name__)
 configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
 
 
@@ -31,7 +31,7 @@ def generate_ngi_report(
         # Command to activate the environment and run the NGI report generation
         activate_env_cmd = configs.get("yggdrasil", {}).get("activate_ngi_cmd")
         if not activate_env_cmd:
-            logging.error(
+            logger.error(
                 "NGI environment activation command not found in the configuration. "
                 "NGI report will not be generated."
             )
@@ -56,19 +56,17 @@ def generate_ngi_report(
 
         # Check the outcome of the subprocess
         if process.returncode == 0:
-            logging.info("NGI report generated successfully.")
+            logger.info("NGI report generated successfully.")
             return True
         else:
             # Log the error message if the command failed
-            logging.error(f"Failed to generate NGI report: {process.stderr.strip()}")
+            logger.error(f"Failed to generate NGI report: {process.stderr.strip()}")
             return False
     except subprocess.SubprocessError as e:
         # Handle exceptions related to the subprocess module
-        logging.error(f"Subprocess error occurred while generating the NGI report: {e}")
+        logger.error(f"Subprocess error occurred while generating the NGI report: {e}")
         return False
     except Exception as e:
         # Log any unexpected exceptions during the execution
-        logging.exception(
-            f"An error occurred while generating the NGI report: {str(e)}"
-        )
+        logger.exception(f"An error occurred while generating the NGI report: {str(e)}")
         return False

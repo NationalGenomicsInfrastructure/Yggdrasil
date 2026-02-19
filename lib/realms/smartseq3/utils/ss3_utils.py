@@ -15,15 +15,15 @@
 #         flowcell_ids = []
 #         library_prep = metadata.get('library_prep', {})
 #         if not library_prep:
-#             logging.warning("No library_prep information found in metadata.")
+#             logger.warning("No library_prep information found in metadata.")
 #         for prep_info in library_prep.values():
 #             if 'sequenced_fc' in prep_info:
 #                 flowcell_ids.extend(prep_info['sequenced_fc'])
 #             else:
-#                 logging.warning("sequenced_fc not found in library_prep.")
+#                 logger.warning("sequenced_fc not found in library_prep.")
 #         return flowcell_ids
 #     except Exception as e:
-#         logging.error(f"Error while collecting flowcell IDs: {e}")
+#         logger.error(f"Error while collecting flowcell IDs: {e}")
 #         return []
 from datetime import datetime
 
@@ -31,7 +31,7 @@ import pandas as pd
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class SS3Utils:
@@ -78,7 +78,7 @@ class SS3Utils:
                 return datetime.strptime(date_str, fmt).date()
             except ValueError:
                 continue
-        logging.error(f"Could not parse date for flowcell {flowcell_id}.")
+        logger.error(f"Could not parse date for flowcell {flowcell_id}.")
         return None
 
     @staticmethod
@@ -101,16 +101,16 @@ class SS3Utils:
             # Attempt to extract and reset index for barcode data
             bc = SS3Utils.extract_well_ids(bc_set, bc_lookup_fpath)
             if bc is None:
-                logging.error("Failed to extract well IDs.")
+                logger.error("Failed to extract well IDs.")
                 return False
             bc = bc.reset_index()
 
             # Attempt to save the barcode data to file
             bc["XC"].to_csv(save_as, index=False, header=False)
-            logging.info("Barcode file created successfully.")
+            logger.info("Barcode file created successfully.")
             return True
         except Exception as e:
-            logging.error(f"Failed to create barcode file: {e}")
+            logger.error(f"Failed to create barcode file: {e}")
             return False
 
     @staticmethod
@@ -135,7 +135,7 @@ class SS3Utils:
         elif reagent == "1.0":
             target_col = "XC_NovaSeq"
         else:
-            logging.warning(
+            logger.warning(
                 f"Unsupported reagent version '{reagent}'. Using default '1.5'."
             )
             target_col = "XC"
@@ -144,7 +144,7 @@ class SS3Utils:
             # Read the CSV file
             bc_data = pd.read_csv(barcode_lookup_fpath, sep=",")
         except Exception as e:
-            logging.error(f"Error reading barcode lookup file: {e}")
+            logger.error(f"Error reading barcode lookup file: {e}")
             return None
 
         # Filter data to get well IDs for the specified barcode set

@@ -4,7 +4,7 @@ from typing import Any
 from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class TenXUtils:
@@ -24,21 +24,21 @@ class TenXUtils:
         """
         config_file = Ygg.get_path(file_name)
         if config_file is None:
-            logging.error(f"Decision table file '{file_name}' not found.")
+            logger.error(f"Decision table file '{file_name}' not found.")
             return []
 
         try:
             with open(config_file) as f:
                 decision_table = json.load(f)
                 if not isinstance(decision_table, list):
-                    logging.error(f"Decision table '{file_name}' is not a list.")
+                    logger.error(f"Decision table '{file_name}' is not a list.")
                     return []
                 return decision_table
         except json.JSONDecodeError as e:
-            logging.error(f"Error parsing decision table '{file_name}': {e}")
+            logger.error(f"Error parsing decision table '{file_name}': {e}")
             return []
         except Exception as e:
-            logging.error(f"Unexpected error loading decision table '{file_name}': {e}")
+            logger.error(f"Unexpected error loading decision table '{file_name}': {e}")
             return []
 
     @staticmethod
@@ -60,7 +60,7 @@ class TenXUtils:
                 entry.get("features", [])
             ) == set(features):
                 return entry
-        logging.warning(
+        logger.warning(
             f"No pipeline information found for library_prep_method '{library_prep_method}' "
             f"and features '{features}'."
         )

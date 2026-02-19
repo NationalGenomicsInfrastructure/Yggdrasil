@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import subprocess
 from collections.abc import Mapping
@@ -8,7 +9,7 @@ from typing import Any
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class SlurmManagerFactory:
@@ -47,7 +48,10 @@ class SlurmJobManager:
     configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
 
     def __init__(
-        self, polling_interval: float = 10.0, command_timeout: float = 8.0
+        self,
+        polling_interval: float = 10.0,
+        command_timeout: float = 8.0,
+        logger: logging.Logger | None = None,
     ) -> None:
         """Initialize the SlurmJobManager with specified polling interval and command timeout.
 
@@ -57,6 +61,7 @@ class SlurmJobManager:
             command_timeout (float, optional): Timeout for Slurm commands in seconds.
                 Defaults to 8.0 seconds.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.polling_interval: float = self.configs.get("yggdrasil", {}).get(
             "job_monitor_poll_interval", polling_interval
         )
@@ -74,7 +79,7 @@ class SlurmJobManager:
         sbatch_command = ["sbatch", str(script_path)]
 
         if not Path(script_path).is_file():
-            logging.error(f"Script file does not exist: {script_path}")
+            self._logger.error(f"Script file does not exist: {script_path}")
             return None
 
         try:
@@ -88,7 +93,7 @@ class SlurmJobManager:
             )
 
             if process.returncode != 0:
-                logging.error(f"Error submitting job. Details: {stderr.decode()}")
+                self._logger.error(f"Error submitting job. Details: {stderr.decode()}")
                 return None
 
             match = re.search(r"\d+", stdout.decode())
@@ -100,16 +105,16 @@ class SlurmJobManager:
             # job_id = match.group(1) if match else None
 
             if job_id:
-                logging.info(f"Job submitted with ID: {job_id}")
+                self._logger.info(f"Job submitted with ID: {job_id}")
                 return job_id
             else:
-                logging.error(
+                self._logger.error(
                     f"Failed to parse job ID from sbatch output: {stdout.decode().strip()}"
                 )
         except TimeoutError:
-            logging.error("Timeout while submitting job.")
+            self._logger.error("Timeout while submitting job.")
         except Exception as e:
-            logging.error(f"Unexpected error: {e}")
+            self._logger.error(f"Unexpected error: {e}")
 
         return None
 
@@ -123,12 +128,12 @@ class SlurmJobManager:
             job_id (str): The job ID.
             sample (Any): The sample object with `id` attribute.
         """
-        logging.debug(f"[{sample.id}] Job {job_id} submitted for monitoring.")
+        self._logger.debug(f"[{sample.id}] Job {job_id} submitted for monitoring.")
         while True:
             status = await self._job_status(job_id)
             # if status in ["COMPLETED", "FAILED", "CANCELLED", "CANCELLED+", "TIMEOUT", "OUT_OF_ME+"]:
             if status in self.slurm_end_states:
-                # logging.info(f"Job {job_id} status: {status}")
+                # self._logger.info(f"Job {job_id} status: {status}")
                 # self.check_status(job_id, status, sample)
                 self.check_status_new(job_id, status, sample)
                 break
@@ -153,18 +158,18 @@ class SlurmJobManager:
             stdout, stderr = await process.communicate()
 
             if stderr:
-                logging.error(f"sacct stderr: {stderr.decode().strip()}")
+                self._logger.error(f"sacct stderr: {stderr.decode().strip()}")
 
             if stdout:
                 stdout_decoded = stdout.decode().strip()
-                logging.debug(f"sacct stdout for job {job_id}: {stdout_decoded}")
+                self._logger.debug(f"sacct stdout for job {job_id}: {stdout_decoded}")
                 return stdout_decoded
         except TimeoutError:
-            logging.error(f"Timeout while checking status of job {job_id}.")
+            self._logger.error(f"Timeout while checking status of job {job_id}.")
         except UnicodeDecodeError:
-            logging.error(f"Failed to decode sbatch stdout for job {job_id}.")
+            self._logger.error(f"Failed to decode sbatch stdout for job {job_id}.")
         except Exception as e:
-            logging.error(
+            self._logger.error(
                 f"Unexpected error while checking status of job {job_id}: {e}"
             )
 
@@ -179,18 +184,18 @@ class SlurmJobManager:
             status (str): The status of the job.
             sample (object): The sample object with `id` and `status` attributes.
         """
-        logging.info("\n")
-        logging.debug(f"[{sample.id}] Job {job_id} status: {status}")
+        logger.info("\n")
+        logger.debug(f"[{sample.id}] Job {job_id} status: {status}")
         if status == "COMPLETED":
-            logging.info(f"[{sample.id}] Job completed successfully.")
+            logger.info(f"[{sample.id}] Job completed successfully.")
             sample.status = "processed"
             sample.post_process()
             # sample.status = "completed"
         elif status in ["FAILED", "CANCELLED", "CANCELLED+", "TIMEOUT", "OUT_OF_ME+"]:
             sample.status = "processing_failed"
-            logging.info(f"[{sample.id}] Job failed.")
+            logger.info(f"[{sample.id}] Job failed.")
         else:
-            logging.warning(f"[{sample.id}] Job ended with unexpacted status: {status}")
+            logger.warning(f"[{sample.id}] Job ended with unexpacted status: {status}")
             sample.status = "processing_failed"
 
     @staticmethod
@@ -199,7 +204,7 @@ class SlurmJobManager:
         Called when SlurmJobManager.monitor_job determines the job is done or failed.
         We just set the sample status now. We do NOT call sample.post_process().
         """
-        logging.info(f"[{sample.id}] Slurm job {job_id} ended with state '{status}'.")
+        logger.info(f"[{sample.id}] Slurm job {job_id} ended with state '{status}'.")
 
         # Mark job complete or failed
         if status == "COMPLETED":
@@ -209,5 +214,5 @@ class SlurmJobManager:
         elif status in ["FAILED", "CANCELLED", "CANCELLED+", "TIMEOUT", "OUT_OF_ME+"]:
             sample.status = "processing_failed"
         else:
-            logging.warning(f"[{sample.id}] Unexpected Slurm terminal state: {status}")
+            logger.warning(f"[{sample.id}] Unexpected Slurm terminal state: {status}")
             sample.status = "processing_failed"
