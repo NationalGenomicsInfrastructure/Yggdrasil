@@ -18,6 +18,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
+from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.changes_fetcher import ChangesFetcher
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
@@ -25,7 +26,7 @@ from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBa
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger(__name__.split(".")[-1])
+# logger = custom_logger(__name__)
 
 
 class CouchDBBackend(WatcherBackend):
@@ -111,7 +112,7 @@ class CouchDBBackend(WatcherBackend):
             config=config,
             checkpoint_store=checkpoint_store,
             queue_maxsize=queue_maxsize,
-            logger=logger or logging.getLogger(f"{__name__}.CouchDBBackend"),
+            logger=logger or custom_logger(f"{__name__}.CouchDBBackend"),
         )
 
         # Validate required config keys (must be present AND non-empty)

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterable, Callable
 from typing import Any
 
 from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
 
 
@@ -68,7 +69,7 @@ class CouchDBWatcher(AbstractWatcher):
         self.changes_fetcher = changes_fetcher
         self.poll_interval = poll_interval
         self.name = name
-        self._logger = logger or logging.getLogger(self.name)
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     async def start(self):
         """

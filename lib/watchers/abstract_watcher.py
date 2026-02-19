@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 
 
 class YggdrasilEvent:
@@ -97,7 +98,7 @@ class AbstractWatcher(ABC):
         self._on_event_callback = on_event
         self.event_type = event_type
         self.name = name or self.__class__.__name__
-        self._logger = logger or logging.getLogger(self.name)
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     @abstractmethod
     async def start(self):

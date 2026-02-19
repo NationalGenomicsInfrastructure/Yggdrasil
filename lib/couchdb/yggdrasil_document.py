@@ -1,9 +1,10 @@
 import datetime
+import logging
 from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+# logger = custom_logger(__name__)
 
 
 class YggdrasilDocument:
@@ -62,7 +63,12 @@ class YggdrasilDocument:
         return instance
 
     def __init__(
-        self, project_id: str, projects_reference: str, project_name: str, method: str
+        self,
+        project_id: str,
+        projects_reference: str,
+        project_name: str,
+        method: str,
+        logger: logging.Logger | None = None,
     ) -> None:
         """Initializes a new YggdrasilDocument instance.
 
@@ -72,6 +78,7 @@ class YggdrasilDocument:
             project_name (str): The project name.
             method (str): The library construction method.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._id: str = project_id
         self.projects_reference: str = projects_reference
         self.method: str = method
@@ -180,7 +187,7 @@ class YggdrasilDocument:
                 existing_sample["start_time"] = start_time
             if end_time:
                 existing_sample["end_time"] = end_time
-            # logging.debug(f"Updated sample: {existing_sample}")
+            # self._logger.debug(f"Updated sample: {existing_sample}")
         else:
             # Add new sample
             sample = {
@@ -195,7 +202,7 @@ class YggdrasilDocument:
                 "delivered": False,
             }
             self.samples.append(sample)
-            # logging.debug(f"Added sample: {sample}")
+            # self._logger.debug(f"Added sample: {sample}")
 
         # self.check_project_completion() # NOTE: Should this be here?
 
@@ -222,7 +229,7 @@ class YggdrasilDocument:
         """
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(
+            self._logger.error(
                 f"Sample '{sample_id}' not found in project '{self.project_id}'."
             )
             return False
@@ -255,7 +262,7 @@ class YggdrasilDocument:
         """
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(f"Cannot set QC: sample '{sample_id}' not found.")
+            self._logger.error(f"Cannot set QC: sample '{sample_id}' not found.")
             return
         sample["QC"] = qc_value
 
@@ -265,7 +272,9 @@ class YggdrasilDocument:
         """
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(f"Cannot mark delivered: sample '{sample_id}' not found.")
+            self._logger.error(
+                f"Cannot mark delivered: sample '{sample_id}' not found."
+            )
             return
         sample["delivered"] = True
 
@@ -290,24 +299,24 @@ class YggdrasilDocument:
             bool: True if the sample was found and updated, False otherwise.
         """
         if field_name == "status":
-            logging.warning(
+            self._logger.warning(
                 "Attempted to update sample status via 'update_sample_field';"
             )
             if value:
-                logging.info("Attempting to use 'update_sample_status'.")
+                self._logger.info("Attempting to use 'update_sample_status'.")
                 return self.update_sample_status(sample_id, value)
             return False
 
         sample = self.get_sample(sample_id)
         if not sample:
-            logging.error(
+            self._logger.error(
                 f"Cannot update field '{field_name}' for sample '{sample_id}' "
                 f"in project '{self.project_id}': sample not found."
             )
             return False
 
         sample[field_name] = value
-        logging.debug(
+        self._logger.debug(
             f"Updated sample '{sample_id}' in project '{self.project_id}' with "
             f"'{field_name}': {value}"
         )
@@ -448,7 +457,7 @@ class YggdrasilDocument:
             self.ngi_report.append(report_data)
             return True
         else:
-            logging.error("Invalid report_data format or missing required keys.")
+            self._logger.error("Invalid report_data format or missing required keys.")
             return False
 
     # ------------------------------------------------------------------------

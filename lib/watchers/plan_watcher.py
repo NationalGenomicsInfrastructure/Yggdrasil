@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from lib.couchdb.changes_fetcher import ChangesFetcher
 from lib.couchdb.plan_db_manager import PlanDBManager
@@ -75,11 +76,12 @@ class PlanWatcher(AbstractWatcher):
                 Used in run-once mode to isolate concurrent CLI invocations.
             logger: Optional logger; uses module logger if None
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         super().__init__(
             on_event=on_event,
             event_type=EventType.PLAN_EXECUTION,
             name="PlanWatcher",
-            logger=logger,
+            logger=self._logger,
         )
 
         self.poll_interval_sec = poll_interval_sec
@@ -335,6 +337,8 @@ class PlanWatcher(AbstractWatcher):
             }
             await self.emit(payload, source="PlanWatcher:recovery")
 
+        return filtered_plans
+        return filtered_plans
         return filtered_plans
         return filtered_plans
         return filtered_plans

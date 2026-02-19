@@ -1,4 +1,5 @@
 import functools
+import logging
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -10,7 +11,7 @@ from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 from lib.couchdb.yggdrasil_document import YggdrasilDocument
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 def auto_load_and_save(method: Callable) -> Callable:
@@ -25,14 +26,16 @@ def auto_load_and_save(method: Callable) -> Callable:
     def wrapper(self, project_id: str, *args, **kwargs) -> Any:
         ygg_doc = self.get_document_by_project_id(project_id)
         if not ygg_doc:
-            logging.error(f"Project '{project_id}' not found in Yggdrasil DB.")
+            self._logger.error(f"Project '{project_id}' not found in Yggdrasil DB.")
             return None  # or raise an exception
 
         try:
             # Inject the doc into the method call
             result = method(self, ygg_doc, *args, **kwargs)
         except Exception as e:
-            logging.error(f"Error in {method.__name__} for project {project_id}: {e}")
+            self._logger.error(
+                f"Error in {method.__name__} for project {project_id}: {e}"
+            )
             return
 
         # Save the doc (assuming it was modified)
@@ -52,7 +55,9 @@ class YggdrasilDBManager(CouchDBHandler):
         url: str | None = None,
         user_env: str | None = None,
         pass_env: str | None = None,
+        logger: logging.Logger | None = None,
     ) -> None:
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         params = resolve_couchdb_params(
             endpoint=endpoint,
             url=url,
@@ -65,6 +70,7 @@ class YggdrasilDBManager(CouchDBHandler):
             url=params.url,
             user_env=params.user_env,
             pass_env=params.pass_env,
+            logger=self._logger,
         )
 
     def create_project(
@@ -106,7 +112,7 @@ class YggdrasilDBManager(CouchDBHandler):
         new_document.delivery_info["sensitive"] = sensitive
 
         self.save_document(new_document)
-        logging.info(f"New project with ID '{project_id}' created successfully.")
+        self._logger.info(f"New project with ID '{project_id}' created successfully.")
         return new_document
 
     def save_document(self, document: YggdrasilDocument) -> None:
@@ -145,11 +151,11 @@ class YggdrasilDBManager(CouchDBHandler):
                 doc_id=document._id,
                 document=cast(Document, doc_dict),
             ).get_result()
-            logging.info(
+            self._logger.info(
                 f"Document with ID '{document._id}' saved successfully in '{self.db_name}' DB."
             )
         except Exception as e:
-            logging.error(f"Error saving document: {e}")
+            self._logger.error(f"Error saving document: {e}")
 
     def get_document_by_project_id(self, project_id: str) -> YggdrasilDocument | None:
         """Retrieves a document by project ID.
@@ -177,12 +183,12 @@ class YggdrasilDBManager(CouchDBHandler):
         """
         existing_document = self.get_document_by_project_id(project_id)
         if existing_document:
-            logging.info(f"Project with ID '{project_id}' exists.")
+            self._logger.info(f"Project with ID '{project_id}' exists.")
             # TODO: Return the document or just True?
             # return existing_document
             return True
         else:
-            logging.info(f"Project with ID '{project_id}' does not exist.")
+            self._logger.info(f"Project with ID '{project_id}' does not exist.")
             return False
 
     # --------------------------------------
@@ -211,7 +217,7 @@ class YggdrasilDBManager(CouchDBHandler):
             status (str): The status of the sample. Defaults to "pending".
         """
         _doc_injected.add_sample(sample_id=sample_id, status=status)
-        logging.info(f"Sample '{sample_id}' added with status '{status}'.")
+        self._logger.info(f"Sample '{sample_id}' added with status '{status}'.")
 
     @auto_load_and_save
     def update_sample_status(
@@ -235,7 +241,7 @@ class YggdrasilDBManager(CouchDBHandler):
             status (str): The new status for the sample.
         """
         _doc_injected.update_sample_status(sample_id=sample_id, status=status)
-        logging.info(f"Sample '{sample_id}' status updated to '{status}'.")
+        self._logger.info(f"Sample '{sample_id}' status updated to '{status}'.")
 
     @auto_load_and_save
     def add_ngi_report_entry(
@@ -260,9 +266,9 @@ class YggdrasilDBManager(CouchDBHandler):
             report_data (Dict[str, Any]): The NGI report data.
         """
         if not _doc_injected.add_ngi_report_entry(report_data):
-            logging.warning("NGI report entry failed to be added to the document.")
+            self._logger.warning("NGI report entry failed to be added to the document.")
             return False
-        logging.info("NGI report entry added to the document.")
+        self._logger.info("NGI report entry added to the document.")
         return True
 
     @auto_load_and_save
@@ -283,7 +289,19 @@ class YggdrasilDBManager(CouchDBHandler):
             sample_id, "slurm_job_id", slurm_job_id
         )
         if success:
-            logging.info(f"Sample '{sample_id}' slurm_job_id set to '{slurm_job_id}'.")
+            self._logger.info(
+                f"Sample '{sample_id}' slurm_job_id set to '{slurm_job_id}'."
+            )
         else:
-            logging.warning(f"Failed to update slurm_job_id for sample '{sample_id}'.")
-            logging.warning(f"Failed to update slurm_job_id for sample '{sample_id}'.")
+            self._logger.warning(
+                f"Failed to update slurm_job_id for sample '{sample_id}'."
+            )
+            self._logger.warning(
+                f"Failed to update slurm_job_id for sample '{sample_id}'."
+            )
+            self._logger.warning(
+                f"Failed to update slurm_job_id for sample '{sample_id}'."
+            )
+            self._logger.warning(
+                f"Failed to update slurm_job_id for sample '{sample_id}'."
+            )

@@ -8,6 +8,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
 
 
@@ -130,7 +131,7 @@ class SeqDataWatcher(AbstractWatcher):
         # For storing the loop in start()
         self._loop: asyncio.AbstractEventLoop | None = None
 
-        self._logger = logger or logging.getLogger(f"FileSystemWatcher-{self.name}")
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     async def start(self):
         """

@@ -60,7 +60,7 @@ class ChangesFetcher:
         self.include_docs = include_docs
         self.retry_delay_sec = retry_delay_sec
         self.max_retries = max_retries
-        self._logger = logger or custom_logger(__name__.split(".")[-1])
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._last_seq: str | None = None
 
     @property

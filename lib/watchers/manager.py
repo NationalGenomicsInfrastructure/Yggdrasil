@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
+from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import CouchDBCheckpointStore
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
     from lib.watchers.watchspec import BoundWatchSpec
 
-logger = logging.getLogger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 @dataclass
@@ -160,7 +161,7 @@ class WatcherManager:
         self.config = config
         self._on_event = on_event
         self.checkpoint_store = checkpoint_store or CouchDBCheckpointStore()
-        self._logger = logger or logging.getLogger(f"{__name__}.WatcherManager")
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
         self._watcher_groups: dict[tuple[str, str], WatcherBackendGroup] = {}
         # BoundWatchSpecs grouped by backend group key
@@ -734,5 +735,7 @@ def _register_default_backends() -> None:
     WatcherManager.register_backend("couchdb", CouchDBBackend)
 
 
+# Register defaults when module is imported
+_register_default_backends()
 # Register defaults when module is imported
 _register_default_backends()

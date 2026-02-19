@@ -27,10 +27,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from lib.core_utils.logging_utils import custom_logger
+
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger(__name__.split(".")[-1])
+# logger = custom_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -198,9 +200,7 @@ class WatcherBackend(ABC):
         self.config = config
         self.checkpoint_store = checkpoint_store
         self._queue_maxsize = queue_maxsize
-        self._logger = logger or logging.getLogger(
-            f"{__name__}.{self.__class__.__name__}"
-        )
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
         self._running = False
         self._event_queue: Queue[RawWatchEvent | None] = Queue(maxsize=queue_maxsize)

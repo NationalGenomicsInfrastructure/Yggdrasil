@@ -13,7 +13,9 @@ Design principles:
 - Clear errors on misconfiguration (no silent defaults)
 """
 
+import logging
 import os
+import threading
 from typing import Any
 
 from ibm_cloud_sdk_core.api_exception import ApiException
@@ -21,7 +23,7 @@ from ibmcloudant import CouchDbSessionAuthenticator, cloudant_v1
 
 from lib.core_utils.logging_utils import custom_logger
 
-logger = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class CouchDBClientFactory:
@@ -39,6 +41,7 @@ class CouchDBClientFactory:
     """
 
     _logged_connections: set[tuple[str, str]] = set()
+    _logged_lock = threading.Lock()
 
     @staticmethod
     def create_client(
@@ -101,20 +104,22 @@ class CouchDBClientFactory:
                     version = "unknown"
 
                 conn_key = (url, user)
-                if conn_key not in CouchDBClientFactory._logged_connections:
-                    logger.info(
-                        "Connected to CouchDB at %s (user=%s, version=%s)",
-                        url,
-                        user,
-                        version,
-                    )
-                    CouchDBClientFactory._logged_connections.add(conn_key)
-                else:
-                    logger.debug(
-                        "Reconnected to CouchDB at %s (user=%s)",
-                        url,
-                        user,
-                    )
+
+                with CouchDBClientFactory._logged_lock:
+                    if conn_key not in CouchDBClientFactory._logged_connections:
+                        logger.info(
+                            "Connected to CouchDB at %s (user=%s, version=%s)",
+                            url,
+                            user,
+                            version,
+                        )
+                        CouchDBClientFactory._logged_connections.add(conn_key)
+                    else:
+                        logger.debug(
+                            "Reconnected to CouchDB at %s (user=%s)",
+                            url,
+                            user,
+                        )
 
             return client
 
@@ -147,6 +152,7 @@ class CouchDBHandler:
         url: str,
         user_env: str,
         pass_env: str,
+        logger: logging.Logger | None = None,
     ) -> None:
         """
         Initialize CouchDB handler for a specific database.
@@ -162,6 +168,7 @@ class CouchDBHandler:
             RuntimeError: If required env var is missing
             ConnectionError: If database doesn't exist or connection fails
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.db_name = db_name
 
         # Create client via factory (each handler owns its client)
@@ -195,17 +202,19 @@ class CouchDBHandler:
             ).get_result()
             if isinstance(document, dict):
                 return document
-            logger.warning("Unexpected non-dict response when fetching %s", doc_id)
+            self._logger.warning(
+                "Unexpected non-dict response when fetching %s", doc_id
+            )
             return None
         except ApiException as e:
             if e.code == 404:
-                logger.debug(
+                self._logger.debug(
                     "Document '%s' not found in database '%s'",
                     doc_id,
                     self.db_name,
                 )
                 return None
-            logger.error(
+            self._logger.error(
                 "Cloudant API error fetching '%s' from %s: %s %s",
                 doc_id,
                 self.db_name,
@@ -214,7 +223,7 @@ class CouchDBHandler:
             )
             return None
         except Exception as e:
-            logger.error("Error while accessing database %s: %s", self.db_name, e)
+            self._logger.error("Error while accessing database %s: %s", self.db_name, e)
             return None
 
     def post_changes(
