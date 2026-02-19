@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -6,8 +7,6 @@ from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.ygg_session import YggSession
 from lib.module_utils.hpc_submission_policy import HPCSubmissionPolicy
 from lib.module_utils.sjob_manager import SlurmManagerFactory
-
-logging = custom_logger(__name__.split(".")[-1])
 
 
 class AbstractProject(ABC):
@@ -27,13 +26,19 @@ class AbstractProject(ABC):
         ydm (Any): The database manager (yggdrasil_db_manager) for Yggdrasil-specific database operations.
     """
 
-    def __init__(self, doc: Any, yggdrasil_db_manager: Any) -> None:
+    def __init__(
+        self,
+        doc: Any,
+        yggdrasil_db_manager: Any,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Initialize the AbstractProject.
 
         Args:
             doc (Any): The document representing the project (data to be processed).
             yggdrasil_db_manager (Any): The database manager for Yggdrasil-specific database operations.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.sjob_manager: Any = SlurmManagerFactory.get_manager(YggSession.is_dev())
         self.submission_policy: HPCSubmissionPolicy = HPCSubmissionPolicy(
             user_manual_submit=YggSession.is_manual_submit()
@@ -99,7 +104,7 @@ class AbstractProject(ABC):
     #         # self._extract_project_specific_info()
     #         # self.extract_samples()
     #     else:
-    #         logging.error("Cannot proceed due to missing required fields.")
+    #         self._logger.error("Cannot proceed due to missing required fields.")
 
     @property
     def project_status(self):
@@ -110,11 +115,13 @@ class AbstractProject(ABC):
         self._project_status = new_status
         doc = self.ydm.get_document_by_project_id(self.project_id)
         if not doc:
-            logging.error(f"[{self.project_id}] Cannot set status. Project not found.")
+            self._logger.error(
+                f"[{self.project_id}] Cannot set status. Project not found."
+            )
             return
         doc.update_project_status(new_status)
         self.ydm.save_document(doc)
-        logging.info(f"[{self.project_id}] Project status set to '{new_status}'.")
+        self._logger.info(f"[{self.project_id}] Project status set to '{new_status}'.")
 
     def initialize_project_in_db(self):
         """
@@ -156,20 +163,22 @@ class AbstractProject(ABC):
                 self.user_info,
                 self.is_sensitive,
             )
-            logging.info(f"Project {self.project_id} created in YggdrasilDB.")
+            self._logger.info(f"Project {self.project_id} created in YggdrasilDB.")
             self.proceed = True
         else:
-            logging.info(f"Project {self.project_id} already exists in YggdrasilDB.")
+            self._logger.info(
+                f"Project {self.project_id} already exists in YggdrasilDB."
+            )
             document = self.ydm.get_document_by_project_id(self.project_id)
             if document:
                 self.project_status = document.project_status
                 if self.project_status == "completed":
-                    logging.info(
+                    self._logger.info(
                         f"Project with ID {self.project_id} is already completed. Skipping processing."
                     )
                     self.proceed = False
                 else:
-                    logging.info(
+                    self._logger.info(
                         f"Project with ID {self.project_id} has status '{self.project_status}' and will be processed."
                     )
                     self.proceed = True
@@ -180,7 +189,7 @@ class AbstractProject(ABC):
                     )
                     self.ydm.save_document(document)
             else:
-                logging.error(
+                self._logger.error(
                     f"Could not fetch YggdrasilDocument for {self.project_id}."
                 )
                 self.proceed = False
@@ -277,10 +286,10 @@ class AbstractProject(ABC):
         merges relevant fields like slurm_job_id, status, etc. from the DB record into the
         in-memory sample object.
         """
-        logging.info(f"[{self.project_id}] Fetching and merging sample info.")
+        self._logger.info(f"[{self.project_id}] Fetching and merging sample info.")
         doc = self.ydm.get_document_by_project_id(self.project_id)
         if not doc:
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] Cannot fetch project doc. Merge aborted."
             )
             return
@@ -288,7 +297,9 @@ class AbstractProject(ABC):
         for sample in self.samples:
             sample_doc = doc.get_sample(sample.id)
             if not sample_doc:
-                logging.warning(f"Sample '{sample.id}' not found in DB doc. Skipping.")
+                self._logger.warning(
+                    f"Sample '{sample.id}' not found in DB doc. Skipping."
+                )
                 continue
 
             # For HPC job
@@ -299,7 +310,7 @@ class AbstractProject(ABC):
             db_status = sample_doc.get("status")
             if db_status and db_status != sample.status:
                 # Update local status if different
-                logging.info(
+                self._logger.info(
                     f"Updating sample '{sample.id}' status from '{sample.status}' "
                     f"to '{db_status}' based on DB."
                 )
@@ -308,7 +319,7 @@ class AbstractProject(ABC):
             # Optionally, merge other fields:
             # e.g., "custom_field": sample_doc["custom_field"]
 
-        logging.info(f"Fetched HPC info for {len(self.samples)} samples from DB.")
+        self._logger.info(f"Fetched HPC info for {len(self.samples)} samples from DB.")
 
     # async def launch_template(self):
     #     """
@@ -319,20 +330,20 @@ class AbstractProject(ABC):
     #     # 1) Check if we have all required fields
     #     self.proceed = self.check_required_fields()
     #     if not self.proceed:
-    #         logging.info("Skipping project because required fields are missing.")
+    #         self._logger.info("Skipping project because required fields are missing.")
     #         return
 
     #     # 2) Initialize or fetch the project in yggdrasilDB
     #     self.initialize_project_in_db()
     #     if not self.proceed:
-    #         logging.info("Skipping project after DB initialization check.")
+    #         self._logger.info("Skipping project after DB initialization check.")
     #         return
 
     #     # 3) Extract realm-specific samples
     #     # NOTE: Assumes all future realms will be sample-centric
     #     self.samples = self.do_extract_samples()
     #     if not self.samples:
-    #         logging.info("No samples found to process.")
+    #         self._logger.info("No samples found to process.")
     #         return
 
     #     # 4) Add samples to the respective project in yggdrasilDB
@@ -348,13 +359,13 @@ class AbstractProject(ABC):
         # 1) Check required fields
         # self.proceed = self.check_required_fields()
         # if not self.proceed:
-        #     logging.warning(f"{self.project_id} Missing required fields => skipping.")
+        #     self._logger.warning(f"{self.project_id} Missing required fields => skipping.")
         #     return
 
         # # 2) Initialize or load from DB
         # self.initialize_project_in_db()
         # if not self.proceed:
-        #     logging.warning(
+        #     self._logger.warning(
         #         f"{self.project_id} Skipping after DB initialization check."
         #     )
         #     return
@@ -369,11 +380,11 @@ class AbstractProject(ABC):
             case "manually_submitted_samples":
                 await self._handle_manually_submitted_flow()
             case "completed":
-                logging.info(
+                self._logger.info(
                     f"Project {self.project_id} is already completed. Nothing to do."
                 )
             case _:
-                logging.warning(
+                self._logger.warning(
                     f"Project {self.project_id} in unknown status '{self.project_status}'. Skipping."
                 )
 
@@ -394,14 +405,16 @@ class AbstractProject(ABC):
         """
         Optional hook for pre-processing. Realms can override if needed.
         """
-        logging.info("Default do_pre_process_samples: override in realm if needed.")
+        self._logger.info(
+            "Default do_pre_process_samples: override in realm if needed."
+        )
 
     async def do_process_samples(self, samples):
         """
         Process samples automatically if realm or sample requires it.
         Realms override if more advanced logic is needed.
         """
-        logging.info("Default do_process_samples: override in realm.")
+        self._logger.info("Default do_process_samples: override in realm.")
 
     async def do_submit_sample_jobs(self):
         """
@@ -410,10 +423,10 @@ class AbstractProject(ABC):
         Override in realm if needed.
         """
         if not self.samples:
-            logging.warning("No samples to process.")
+            self._logger.warning("No samples to process.")
             return
 
-        logging.info(f"[{self.project_id}] Submitting sample jobs...")
+        self._logger.info(f"[{self.project_id}] Submitting sample jobs...")
         tasks = [sample.submit_job() for sample in self.samples]
         await asyncio.gather(*tasks)
 
@@ -425,11 +438,11 @@ class AbstractProject(ABC):
             if sample.status == "job_submission_failed"
         ]
         if failed:
-            logging.error(
+            self._logger.error(
                 f"[{self.project_id}] Some samples failed to submit: {[sample.id for sample in failed]}"
             )
         else:
-            logging.info(f"[{self.project_id}] Sample jobs submitted.")
+            self._logger.info(f"[{self.project_id}] Sample jobs submitted.")
 
     async def do_monitor_hpc_jobs(self):
         """
@@ -452,21 +465,21 @@ class AbstractProject(ABC):
             ]  # `processing` is not a status right now
         ]
         if not running_samples:
-            logging.info(f"No HPC jobs to monitor for project {self.project_id}.")
+            self._logger.info(f"No HPC jobs to monitor for project {self.project_id}.")
             return
 
         tasks = []
         for sample in running_samples:
             job_id = sample.job_id
-            logging.info(f"Monitoring HPC job {job_id} for sample {sample.id}...")
+            self._logger.info(f"Monitoring HPC job {job_id} for sample {sample.id}...")
             # We'll call monitor_job(...) in parallel
             tasks.append(
                 asyncio.create_task(self.sjob_manager.monitor_job(job_id, sample))
             )
 
-        logging.info(f"Created {len(tasks)} monitoring tasks for HPC jobs.")
+        self._logger.info(f"Created {len(tasks)} monitoring tasks for HPC jobs.")
         await asyncio.gather(*tasks)
-        logging.info("All HPC monitoring tasks completed.")
+        self._logger.info("All HPC monitoring tasks completed.")
 
         # Now each sample is either 'processed' or 'processing_failed'
         # HPC is done for those that were monitored.
@@ -485,15 +498,15 @@ class AbstractProject(ABC):
         ]
 
         if processed_samples:
-            logging.info(f"Post-processing {len(processed_samples)} samples.")
+            self._logger.info(f"Post-processing {len(processed_samples)} samples.")
             for sample in processed_samples:
                 old_status = sample.status
                 sample.post_process()  # Sample status will become either 'completed' or 'post_processing_failed'
-                logging.info(
+                self._logger.info(
                     f"Sample {sample.id} status went from '{old_status}' to '{sample.status}'."
                 )
         else:
-            logging.info("No samples in 'processed' => skipping post-process.")
+            self._logger.info("No samples in 'processed' => skipping post-process.")
 
         # List any samples that failed post-processing
         failed_post_processing = [
@@ -502,11 +515,11 @@ class AbstractProject(ABC):
             if sample.status == "post_processing_failed"
         ]
         if failed_post_processing:
-            logging.warning(
+            self._logger.warning(
                 f"Post-processing failed for {len(failed_post_processing)} samples:"
             )
             for sample in failed_post_processing:
-                logging.warning(f" - Sample {sample.id} failed post-processing.")
+                self._logger.warning(f" - Sample {sample.id} failed post-processing.")
 
         # List any samples that DO NOT have status 'completed' or 'post_processing_failed'
         leftover = []
@@ -518,18 +531,20 @@ class AbstractProject(ABC):
                 leftover.append(sample)
 
         if leftover:
-            logging.info("Some samples were not post-processed due to their status:")
+            self._logger.info(
+                "Some samples were not post-processed due to their status:"
+            )
             for sample in leftover:
-                logging.info(f" - Sample {sample.id} is '{sample.status}'")
+                self._logger.info(f" - Sample {sample.id} is '{sample.status}'")
 
-        logging.info("Post-process step complete.")
+        self._logger.info("Post-process step complete.")
 
     async def do_finalize_project(self):
         """
         Some final steps to wrap up a project and set project status.
         Realms or base can override/extend.
         """
-        logging.info(
+        self._logger.info(
             "Default do_finalize_project: override or extend in realm if needed."
         )
         self.project_status = "completed"
@@ -546,12 +561,12 @@ class AbstractProject(ABC):
         Finally, we decide whether we do HPC monitoring or update the project status
         to 'manually_submitted_samples'.
         """
-        logging.info(f"[{self.project_id}] Handling main flow for project.")
+        self._logger.info(f"[{self.project_id}] Handling main flow for project.")
 
         # 1) Extract & register samples
         self.do_extract_samples()
         if not self.samples:
-            logging.warning("No samples found => nothing to do.")
+            self._logger.warning("No samples found => nothing to do.")
             return
 
         self.fetch_and_merge_sample_info_from_db()
@@ -560,7 +575,9 @@ class AbstractProject(ABC):
         # 2) Pre-process
         await self.do_pre_process_samples()
         if not self.samples:
-            logging.warning("No samples left after pre-processing => nothing to do.")
+            self._logger.warning(
+                "No samples left after pre-processing => nothing to do."
+            )
             return
 
         # 3) Decide auto vs. manual
@@ -569,7 +586,7 @@ class AbstractProject(ABC):
         # auto_submit = self.doc.get("pipeline_info", {}).get("submit", True)
         # if auto_submit:
         if self.submission_policy.should_auto_submit():
-            logging.info("Auto-submitting HPC jobs for all samples.")
+            self._logger.info("Auto-submitting HPC jobs for all samples.")
             await self.do_submit_sample_jobs()
 
             # Optionally immediately monitor them here or set a new status
@@ -579,7 +596,7 @@ class AbstractProject(ABC):
             processed_samples = [
                 sample for sample in self.samples if sample.status == "processed"
             ]
-            logging.info(
+            self._logger.info(
                 f"Samples that finished successfully: "
                 f"{[sample.id for sample in processed_samples]}\n"
             )
@@ -588,7 +605,7 @@ class AbstractProject(ABC):
             await self.do_post_process_samples()
             await self.do_finalize_project()
         else:
-            logging.info("Manual submission required => no HPC submission now.")
+            self._logger.info("Manual submission required => no HPC submission now.")
             self.project_status = "manually_submitted_samples"
 
     async def _handle_manually_submitted_flow(self):
@@ -596,14 +613,14 @@ class AbstractProject(ABC):
         The user has manually submitted HPC jobs for these samples.
         We'll re-extract, load job IDs, monitor, then post-process once done.
         """
-        logging.info(
+        self._logger.info(
             f"Handling 'manually_submitted_samples' flow for project {self.project_id}."
         )
 
         # 1) Extract or re-extract samples
         self.do_extract_samples()
         if not self.samples:
-            logging.warning("No samples found => nothing to do.")
+            self._logger.warning("No samples found => nothing to do.")
             return
 
         # 2) Merge any HPC job IDs or updated statuses from DB
@@ -616,11 +633,12 @@ class AbstractProject(ABC):
         processed_samples = [
             sample for sample in self.samples if sample.status == "processed"
         ]
-        logging.info(
+        self._logger.info(
             f"Samples that finished successfully: "
             f"{[sample.id for sample in processed_samples]}\n"
         )
 
         # If HPC is done for all, post-process and finalize
         await self.do_post_process_samples()
+        await self.do_finalize_project()
         await self.do_finalize_project()

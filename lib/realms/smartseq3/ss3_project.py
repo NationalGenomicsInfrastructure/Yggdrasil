@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 
 from lib.base.abstract_project import AbstractProject
@@ -6,8 +7,6 @@ from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 from lib.module_utils.ngi_report_generator import generate_ngi_report
 from lib.realms.smartseq3.ss3_sample import SS3Sample
-
-logging = custom_logger("SS3 Project")
 
 
 class SmartSeq3(AbstractProject):
@@ -25,14 +24,20 @@ class SmartSeq3(AbstractProject):
 
     config = ConfigLoader().load_config("ss3_config.json")
 
-    def __init__(self, doc, yggdrasil_db_manager):
+    def __init__(
+        self,
+        doc,
+        yggdrasil_db_manager,
+        logger: logging.Logger | None = None,
+    ):
         """
         Initialize a SmartSeq3 project instance.
 
         Args:
             doc (dict): Document containing project metadata.
         """
-        super().__init__(doc, yggdrasil_db_manager)
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        super().__init__(doc, yggdrasil_db_manager, logger=self._logger)
         self.submission_policy.realm_supports_auto = True
         self.proceed = self.check_required_fields()
 
@@ -57,7 +62,9 @@ class SmartSeq3(AbstractProject):
         ]
 
         if missing_keys:
-            logging.warning(f"Missing required project information: {missing_keys}.")
+            self._logger.warning(
+                f"Missing required project information: {missing_keys}."
+            )
             return False
 
         # Check sample-specific required fields
@@ -65,13 +72,15 @@ class SmartSeq3(AbstractProject):
         for sample_id, sample_data in samples.items():
             for field in sample_required_fields:
                 if not self._is_field(field, sample_data):
-                    logging.warning(
+                    self._logger.warning(
                         f"Missing required sample information '{field}' in sample '{sample_id}'."
                     )
 
                     if "total_reads_(m)" in field:
                         # TODO: Send this message as a notification on Slack
-                        logging.warning("Consider running 'Aggregate Reads' in LIMS.")
+                        self._logger.warning(
+                            "Consider running 'Aggregate Reads' in LIMS."
+                        )
                     return False
         return True
 
@@ -113,7 +122,9 @@ class SmartSeq3(AbstractProject):
 
             return project_info
         except Exception as e:
-            logging.error(f"Error occurred while extracting project information: {e}")
+            self._logger.error(
+                f"Error occurred while extracting project information: {e}"
+            )
             return (
                 {}
             )  # Return an empty dict or some default values to allow continuation
@@ -135,14 +146,14 @@ class SmartSeq3(AbstractProject):
             project_dir.mkdir(parents=True, exist_ok=True)
             return project_dir
         except Exception as e:
-            logging.error(f"Failed to create project directory: {e}")
+            self._logger.error(f"Failed to create project directory: {e}")
             return None
 
     async def launch(self):
         pass
 
     #     """Launch the SmartSeq3 Realm to handle its samples."""
-    #     logging.info(
+    #     self._logger.info(
     #         f"Processing SmartSeq3 project {self.project_info['project_name']}"
     #     )
     #     self.status = "processing"
@@ -150,7 +161,7 @@ class SmartSeq3(AbstractProject):
     #     # 1) Gather all samples, including aborted/unsequenced
     #     self.samples = self.extract_samples()
     #     if not self.samples:
-    #         logging.warning("No samples found. Returning...")
+    #         self._logger.warning("No samples found. Returning...")
     #         return
 
     #     # 2) Register them in YggdrasilDB
@@ -160,7 +171,7 @@ class SmartSeq3(AbstractProject):
     #     self.samples = self.select_samples_for_processing()
 
     #     if not self.samples:
-    #         logging.warning("No valid (sequenced) samples to process. Returning...")
+    #         self._logger.warning("No valid (sequenced) samples to process. Returning...")
     #         return
 
     #     # 4) Pre-process samples
@@ -175,11 +186,11 @@ class SmartSeq3(AbstractProject):
     #     ]
 
     #     if not pre_processed_samples:
-    #         logging.warning("No samples passed pre-processing. Exiting...")
+    #         self._logger.warning("No samples passed pre-processing. Exiting...")
     #         return
 
-    #     logging.info("\n")
-    #     logging.info(
+    #     self._logger.info("\n")
+    #     self._logger.info(
     #         f"Samples that passed pre-processing:"
     #         f"{[sample.id for sample in pre_processed_samples]}"
     #     )
@@ -187,21 +198,21 @@ class SmartSeq3(AbstractProject):
     #     # 4.5) Create Scripts for each sample
     #     for sample in pre_processed_samples:
     #         if sample.create_submission_scripts():
-    #             logging.info(f"Scripts created for sample '{sample.id}'")
+    #             self._logger.info(f"Scripts created for sample '{sample.id}'")
     #         else:
-    #             logging.error(f"Failed to create scripts for sample '{sample.id}'")
+    #             self._logger.error(f"Failed to create scripts for sample '{sample.id}'")
 
     #     # 5) Process samples
     #     tasks = [sample.process() for sample in pre_processed_samples]
-    #     logging.debug(f"Sample tasks created. Waiting for completion...: {tasks}")
+    #     self._logger.debug(f"Sample tasks created. Waiting for completion...: {tasks}")
     #     await asyncio.gather(*tasks)
 
     #     # Log samples that passed processing
     #     processed_samples = [
     #         sample for sample in pre_processed_samples if sample.status == "completed"
     #     ]
-    #     logging.info("\n")
-    #     logging.info(
+    #     self._logger.info("\n")
+    #     self._logger.info(
     #         f"Samples that finished successfully: "
     #         f"{[sample.id for sample in processed_samples]}\n"
     #     )
@@ -224,7 +235,7 @@ class SmartSeq3(AbstractProject):
                 sample_data.get("details", {}).get("status_(manual)", "").lower()
             )
             if manual_status == "aborted":
-                logging.info(
+                self._logger.info(
                     f"Skipping sample '{sample_id}' => status '{manual_status}'"
                 )
                 continue  # do not register in YggdrasilDB
@@ -251,7 +262,7 @@ class SmartSeq3(AbstractProject):
         for sample in self.samples:
             # If a sample is aborted, unsequenced or completed, skip
             if sample.status in ("aborted", "unsequenced", "completed"):
-                logging.info(
+                self._logger.info(
                     f"Skipping sample '{sample.id}' => status '{sample.status}'"
                 )
                 continue
@@ -280,9 +291,9 @@ class SmartSeq3(AbstractProject):
             project_path, project_id, user_name, sample_list
         )
         if report_success:
-            logging.info("NGI report was generated successfully.")
+            self._logger.info("NGI report was generated successfully.")
         else:
-            logging.error("Failed to generate the NGI report.")
+            self._logger.error("Failed to generate the NGI report.")
 
     def create_slurm_job(self, sample):
         """
@@ -331,14 +342,16 @@ class SmartSeq3(AbstractProject):
         2) Pre-process each sample asynchronously (e.g. gather).
         3) Keep only those that ended in 'pre_processed'.
         """
-        logging.info("SS3 realm: Selecting samples for pre-processing.")
+        self._logger.info("SS3 realm: Selecting samples for pre-processing.")
         # Filter out unsequenced or aborted
         self.samples = self.select_samples_for_processing()
         if not self.samples:
-            logging.warning("No valid (sequenced) samples to process. Returning...")
+            self._logger.warning(
+                "No valid (sequenced) samples to process. Returning..."
+            )
             return
 
-        logging.info("SS3 realm: Pre-processing samples in parallel.")
+        self._logger.info("SS3 realm: Pre-processing samples in parallel.")
         pre_tasks = [sample.pre_process() for sample in self.samples]
         await asyncio.gather(*pre_tasks)
 
@@ -347,9 +360,9 @@ class SmartSeq3(AbstractProject):
             sample for sample in self.samples if sample.status == "pre_processed"
         ]
         if not self.samples:
-            logging.warning("No samples passed pre-processing.")
+            self._logger.warning("No samples passed pre-processing.")
         else:
-            logging.info(
+            self._logger.info(
                 f"Samples that passed pre-processing: {[sample.id for sample in self.samples]}"
             )
 
@@ -364,5 +377,6 @@ class SmartSeq3(AbstractProject):
         #        Potential opitons: "pending_samples", "partially_completed"
         #        Otherwise if all samples are completed, status can be "completed" or "pending_QC".
         self.project_status = "pending_QC"
-        logging.info(f"[{self.project_id}] Project finalized.")
+        self._logger.info(f"[{self.project_id}] Project finalized.")
+        # NOTE: Add more steps here, like preparing deliveries, etc.
         # NOTE: Add more steps here, like preparing deliveries, etc.
