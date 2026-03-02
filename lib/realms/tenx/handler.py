@@ -7,6 +7,7 @@ from typing import Any
 
 from lib.ops.sinks.couch import OpsWriter
 from yggdrasil.core.engine import Engine
+from yggdrasil.flow.data_access import DataAccess
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.planner import PlanningContext
@@ -30,6 +31,7 @@ def handle_project_change(payload: dict[str, Any]) -> None:
         emitter=FileSpoolEmitter(),
         source_doc=doc,
         reason=payload.get("reason", "project.updated"),
+        data=DataAccess("tenx"),
     )
 
     draft = TenxPlanner().generate(ctx)

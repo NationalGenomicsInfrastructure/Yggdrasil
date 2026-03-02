@@ -168,6 +168,7 @@ class TestPlanningContext(unittest.TestCase):
             emitter=None,
             source_doc={"id": "doc123"},
             reason="test trigger",
+            data=Mock(),
         )
 
         self.assertEqual(ctx.realm, "test")
@@ -191,6 +192,7 @@ class TestPlanningContext(unittest.TestCase):
             source_doc={"type": "flowcell", "status": "complete"},
             reason="flowcell completed",
             realm_config=realm_config,
+            data=Mock(),
         )
 
         self.assertEqual(ctx.realm, "production")
@@ -207,6 +209,7 @@ class TestPlanningContext(unittest.TestCase):
             emitter=None,
             source_doc={},
             reason="test",
+            data=Mock(),
         )
 
         # Should have dataclass functionality
@@ -228,6 +231,7 @@ class TestPlanningContext(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
             self.assertEqual(ctx.realm, realm)
 
@@ -248,6 +252,7 @@ class TestPlanningContext(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
             self.assertEqual(ctx.scope, scope)
 
@@ -267,6 +272,7 @@ class TestPlanningContext(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
             self.assertEqual(ctx.scope_dir, path)
 
@@ -282,6 +288,7 @@ class TestPlanningContext(unittest.TestCase):
                 emitter=emitter,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
             self.assertEqual(ctx.emitter, emitter)
 
@@ -301,6 +308,7 @@ class TestPlanningContext(unittest.TestCase):
                 emitter=None,
                 source_doc=doc,
                 reason="test",
+                data=Mock(),
             )
             self.assertEqual(ctx.source_doc, doc)
 
@@ -321,6 +329,7 @@ class TestPlanningContext(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason=reason,
+                data=Mock(),
             )
             self.assertEqual(ctx.reason, reason)
 
@@ -342,6 +351,7 @@ class TestPlanningContext(unittest.TestCase):
             },
             reason="project status changed to samples_received",
             realm_config={"analysis_pipeline": "v2.1", "notify": True},
+            data=Mock(),
         )
 
         self.assertEqual(ctx.scope["kind"], "project")
@@ -362,10 +372,24 @@ class TestPlanningContext(unittest.TestCase):
                 "run_date": "2025-01-12",
             },
             reason="sequencing completed",
+            data=Mock(),
         )
 
         self.assertEqual(ctx.scope["kind"], "flowcell")
         self.assertEqual(ctx.source_doc["status"], "sequencing_complete")
+
+    def test_planning_context_data_guard_passes_with_mock(self):
+        """Construction with Mock data sets ctx.data correctly."""
+        ctx = PlanningContext(
+            realm="test",
+            scope={},
+            scope_dir=self.scope_dir,
+            emitter=None,
+            source_doc={},
+            reason="test",
+            data=Mock(),
+        )
+        self.assertIsNotNone(ctx.data)
 
 
 class TestPlanDraft(unittest.TestCase):
@@ -607,6 +631,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
 
             draft = planner.generate(ctx)
@@ -649,6 +674,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
             draft_prod = planner.generate(ctx_prod)
 
@@ -663,6 +689,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
             draft_test = planner.generate(ctx_test)
 
@@ -711,6 +738,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 emitter=None,
                 source_doc={"sample_count": 5},
                 reason="test",
+                data=Mock(),
             )
 
             draft = planner.generate(ctx)
@@ -764,6 +792,7 @@ class TestAPIIntegration(unittest.TestCase):
             emitter=Mock(),
             source_doc=source_doc,
             reason="project ready for processing",
+            data=Mock(),
         )
 
         # 3. Planner generates draft
@@ -837,6 +866,7 @@ class TestAPIIntegration(unittest.TestCase):
                 emitter=None,
                 source_doc={},
                 reason="test",
+                data=Mock(),
             )
 
             draft = planner.generate(ctx)

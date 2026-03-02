@@ -17,7 +17,6 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
@@ -307,13 +306,16 @@ class WatcherManager:
         """
         Resolve full backend config from endpoints + connections.
 
+        Uses external_systems_resolver for endpoint/connection lookup, then
+        merges watch-specific settings (WatcherManager-only concern) on top.
+
         Algorithm:
-        1. Look up connection_name in config["connections"]
-        2. Get endpoint_name from connection["endpoint"]
-        3. Look up endpoint in config["endpoints"]
-        4. Merge: endpoint config + connection["resource"]
-        5. Normalize URL (add scheme if missing)
-        6. Pass env var names to resolved config (not values)
+        1. Delegate endpoint + connection lookup to resolve_connection()
+        2. Build base config from resolved endpoint (backend, url)
+        3. Merge global watcher defaults (start_seq etc.)
+        4. Merge per-connection watch settings (poll_interval, limit etc.)
+        5. Merge resource (db, path, etc.)
+        6. Pass auth env var names (not values) for backend credential resolution
 
         Resource semantics per backend:
         - couchdb: {"db": "database_name"}
@@ -322,9 +324,6 @@ class WatcherManager:
 
         Env var handling (all under "auth" key):
         - Env var NAMES are passed through, not resolved values
-        - {"user_env": "VAR_NAME"} → resolved["user_env"] = "VAR_NAME"
-        - {"pass_env": "VAR_NAME"} → resolved["pass_env"] = "VAR_NAME"
-        - {"dsn_env": "VAR_NAME"} → resolved["dsn_env"] = "VAR_NAME"
         - Backend/factory resolves env vars at client creation time
 
         Args:
@@ -336,90 +335,41 @@ class WatcherManager:
         Raises:
             KeyError: If connection, endpoint, or required URL is missing
         """
-        connections = self.config.get("connections", {})
-        endpoints = self.config.get("endpoints", {})
+        from lib.core_utils.external_systems_resolver import resolve_connection
 
-        if connection_name not in connections:
-            raise KeyError(f"Unknown connection: {connection_name}")
+        # Delegate endpoint + connection lookup to shared resolver
+        resolved_conn = resolve_connection(connection_name, self.config)
 
-        conn = connections[connection_name]
-        endpoint_name = conn.get("endpoint")
-
-        if not endpoint_name:
-            raise KeyError(
-                f"Connection '{connection_name}' missing required 'endpoint' key"
-            )
-
-        if endpoint_name not in endpoints:
-            raise KeyError(f"Unknown endpoint: {endpoint_name}")
-
-        endpoint = endpoints[endpoint_name]
-
-        # Get and normalize URL (add scheme if missing)
-        raw_url = endpoint.get("url")
-        if not raw_url:
-            raise KeyError(f"Endpoint '{endpoint_name}' missing required 'url' key")
-        normalized_url = Ygg.normalize_url(raw_url)
-
-        # Build merged config
+        # Build base config from resolver output
         resolved: dict[str, Any] = {
-            "backend": endpoint.get("backend"),
-            "url": normalized_url,
+            "backend": resolved_conn.endpoint.backend_type,
+            "url": resolved_conn.endpoint.url,
         }
 
-        # Merge global watcher defaults and per-connection watch settings.
+        # Merge watch-specific settings (WatcherManager-only concern).
         # Precedence: defaults < connection.watch < resource
         defaults = self.config.get("defaults", {})
         if isinstance(defaults, dict):
             resolved.update(defaults)
 
+        connections = self.config.get("connections", {})
+        conn = connections.get(connection_name, {})
         watch = conn.get("watch", {})
         if isinstance(watch, dict):
             resolved.update(watch)
 
-        # Merge resource (backend-specific)
+        # Merge resource (backend-specific: db, path, etc.)
         resource = conn.get("resource", {})
         resolved.update(resource)
 
-        # Pass auth env var names (not resolved values)
-        # Backend/factory will resolve env vars at client creation time
-        auth = endpoint.get("auth", {})
-        self._pass_auth_env_names(auth, resolved)
+        # Use pre-resolved endpoint auth fields — already computed by resolve_connection().
+        # ResolvedEndpoint carries user_env, pass_env and dsn_env (optional).
+        resolved["user_env"] = resolved_conn.endpoint.user_env
+        resolved["pass_env"] = resolved_conn.endpoint.pass_env
+        if resolved_conn.endpoint.dsn_env is not None:
+            resolved["dsn_env"] = resolved_conn.endpoint.dsn_env
 
         return resolved
-
-    def _pass_auth_env_names(
-        self,
-        auth: dict[str, Any],
-        resolved: dict[str, Any],
-    ) -> None:
-        """
-        Pass auth env var names to resolved config (without resolving values).
-
-        WatcherManager passes env var names only, never values.
-        The backend/factory resolves env vars at client creation time.
-        This ensures:
-        - No secrets in config dicts at resolution time
-        - Clear errors at client creation if env vars missing
-        - Support for runtime credential rotation
-
-        Args:
-            auth: The auth section from endpoint config
-            resolved: The resolved config dict to update
-        """
-        # Default env var names for CouchDB
-        DEFAULT_USER_ENV = "YGG_COUCH_USER"
-        DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
-
-        # user_env -> pass through (with default)
-        resolved["user_env"] = auth.get("user_env", DEFAULT_USER_ENV)
-
-        # pass_env -> pass through (with default)
-        resolved["pass_env"] = auth.get("pass_env", DEFAULT_PASS_ENV)
-
-        # dsn_env -> pass through (no default, optional for Postgres etc.)
-        if "dsn_env" in auth:
-            resolved["dsn_env"] = auth["dsn_env"]
 
     # -------------------------------------------------------------------------
     # Backend Instantiation
@@ -735,7 +685,5 @@ def _register_default_backends() -> None:
     WatcherManager.register_backend("couchdb", CouchDBBackend)
 
 
-# Register defaults when module is imported
-_register_default_backends()
 # Register defaults when module is imported
 _register_default_backends()

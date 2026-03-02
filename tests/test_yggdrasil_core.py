@@ -667,15 +667,21 @@ class TestYggdrasilCore(unittest.TestCase):
             os.environ,
             {"YGG_WORK_ROOT": "/tmp/ygg_work", "YGG_EVENT_SPOOL": "/tmp/ygg_events"},
         ):
-            ctx = core._make_planning_ctx(mock_handler, scope, doc=doc, reason=reason)
+            result = core._make_planning_ctx(
+                mock_handler, scope, doc=doc, reason=reason
+            )
 
-        # Assert
-        self.assertEqual(ctx.realm, "test_realm")
-        self.assertEqual(ctx.scope, scope)
-        self.assertEqual(ctx.source_doc, doc)
-        self.assertEqual(ctx.reason, reason)
-        self.assertIn("test_realm", str(ctx.scope_dir))
-        self.assertIn("P12345", str(ctx.scope_dir))
+        # Assert: _make_planning_ctx now delegates to handler.build_planning_context()
+        # Verify it was called with the correct arguments
+        mock_handler.build_planning_context.assert_called_once()
+        call_kwargs = mock_handler.build_planning_context.call_args.kwargs
+        self.assertEqual(call_kwargs["scope"], scope)
+        self.assertEqual(call_kwargs["source_doc"], doc)
+        self.assertEqual(call_kwargs["reason"], reason)
+        self.assertIn("test_realm", str(call_kwargs["scope_dir"]))
+        self.assertIn("P12345", str(call_kwargs["scope_dir"]))
+        # Result is whatever build_planning_context returned
+        self.assertEqual(result, mock_handler.build_planning_context.return_value)
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_as_event_type_with_event_type_enum(self, mock_init_db):

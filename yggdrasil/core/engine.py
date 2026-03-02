@@ -76,7 +76,7 @@ def _default_fingerprint(spec: StepSpec, fn: Any) -> str:
         for key in input_keys:
             value = spec.params.get(key)
             # Accept Path or str (defensive: accept Path values if provided)
-            if isinstance(value, (str, Path)):
+            if isinstance(value, str | Path):
                 declared[key] = str(value)
 
     # Hash only declared inputs
@@ -195,6 +195,8 @@ class Engine:
                 continue
 
             # build context and call the step function
+            from yggdrasil.flow.data_access import DataAccess
+
             ctx = StepContext(
                 realm=plan.realm,
                 scope=spec.scope or plan.scope,
@@ -207,6 +209,7 @@ class Engine:
                 run_mode=os.environ.get("YGG_RUN_MODE", "auto"),
                 fingerprint=fingerprint,
                 run_id=run_id,
+                data=DataAccess(plan.realm),
             )
 
             try:

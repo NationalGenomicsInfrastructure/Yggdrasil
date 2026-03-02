@@ -11,7 +11,11 @@ from typing import Any, ClassVar, cast
 from lib.core_utils.event_types import EventType
 from lib.core_utils.logging_utils import custom_logger
 from lib.handlers.base_handler import BaseHandler
-from lib.realms.test_realm.templates import TEMPLATES, get_template
+from lib.realms.test_realm.templates import (
+    TEMPLATES,
+    data_fetch_plan_steps,
+    get_template,
+)
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 
@@ -111,13 +115,41 @@ class TestRealmHandler(BaseHandler):
 
         return steps
 
+    async def _do_plan_time_fetch(self, ctx: PlanningContext) -> str:
+        """
+        Fetch the data-access reference document from CouchDB during planning.
+
+        Returns a human-readable string that gets baked into the generated
+        plan's step params, making the fetch observable in the plan record.
+        On any error the method returns a descriptive error string rather than
+        raising, so the plan is still created (with an error message visible
+        in the step params).
+        """
+        from yggdrasil.flow.data_access import DataAccessError
+
+        try:
+            client = ctx.data.couchdb("yggdrasil_db")
+            doc = await client.get("data_access_test:reference_doc")
+            if doc is None:
+                return "reference doc not found in yggdrasil_db"
+            msg = doc.get("message", "<no message field>")
+            value = doc.get("value", "<no value field>")
+            return f"Fetched at plan time: {msg!r} (value={value})"
+        except DataAccessError as exc:
+            return f"DataAccess error during planning: {exc}"
+        except Exception as exc:
+            return f"Unexpected error during planning fetch: {exc}"
+
     async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
         """
         Generate a PlanDraft from the scenario document.
 
-        Supports two modes:
-        1. Template-based: Provide 'template' field (e.g., 'happy_path')
-        2. Custom steps: Provide 'steps' array directly
+        Supports three modes:
+        1. data_fetch_plan: Fetches a CouchDB document *during planning* and
+           bakes the result into the step params — proving the fetch happened
+           at plan-generation time by making it visible in the persisted plan.
+        2. Template-based: Provide 'template' field (e.g., 'happy_path').
+        3. Custom steps: Provide 'steps' array directly.
 
         Args:
             payload: Event payload containing:
@@ -142,22 +174,39 @@ class TestRealmHandler(BaseHandler):
                 f"Document _id: {doc.get('_id')}"
             )
 
-        # Determine if using template or custom steps
         template_name = doc.get("template")
         custom_steps = doc.get("steps")
 
-        if template_name:
-            # Template-based mode
+        # --- Mode 1: Planning-time data fetch ---
+        if template_name == "data_fetch_plan":
+            self._logger.info(
+                "Generating data_fetch_plan for scenario '%s': "
+                "fetching reference doc from CouchDB during planning",
+                doc.get("_id"),
+            )
+            fetched_message = await self._do_plan_time_fetch(ctx)
+            steps = data_fetch_plan_steps(fetched_message=fetched_message)
+            notes = (
+                "Planning-time data fetch: reference doc content baked into step params"
+            )
+            preview = {
+                "template": "data_fetch_plan",
+                "step_count": len(steps),
+                "step_names": [s.name for s in steps],
+                "planning_time_fetch": True,
+                "fetched_message": fetched_message,
+            }
+
+        # --- Mode 2: Standard template-based ---
+        elif template_name:
             if template_name not in TEMPLATES:
                 raise ValueError(
                     f"Unknown template '{template_name}'. "
                     f"Available: {list(TEMPLATES.keys())}"
                 )
 
-            # Get optional overrides
             overrides = doc.get("overrides", {})
 
-            # Generate steps from template
             self._logger.info(
                 "Generating plan from template '%s' for scenario '%s'",
                 template_name,
@@ -165,14 +214,26 @@ class TestRealmHandler(BaseHandler):
             )
             template_fn = get_template(template_name)
             steps = template_fn(overrides=overrides)
+            notes = f"Test scenario using template '{template_name}'"
+            preview = {
+                "template": template_name,
+                "step_count": len(steps),
+                "step_names": [s.name for s in steps],
+            }
 
+        # --- Mode 3: Custom steps ---
         elif custom_steps:
-            # Custom steps mode
             self._logger.info(
                 "Generating plan from custom steps for scenario '%s'",
                 doc.get("_id"),
             )
             steps = self._parse_custom_steps(custom_steps)
+            notes = f"Test scenario with {len(steps)} custom step(s)"
+            preview = {
+                "template": None,
+                "step_count": len(steps),
+                "step_names": [s.name for s in steps],
+            }
 
         else:
             raise ValueError(
@@ -187,22 +248,12 @@ class TestRealmHandler(BaseHandler):
             steps=steps,
         )
 
-        # Determine auto_run (default True for test scenarios)
         auto_run = doc.get("auto_run", True)
-
-        # Build preview from template info
-        preview = {
-            "template": template_name,
-            "step_count": len(steps),
-            "step_names": [s.name for s in steps],
-        }
-
-        notes = f"Test scenario using template '{template_name}'"
 
         return PlanDraft(
             plan=plan,
             auto_run=auto_run,
-            approvals_required=[],  # Test realm never requires approval
+            approvals_required=[],
             notes=notes,
             preview=preview,
         )

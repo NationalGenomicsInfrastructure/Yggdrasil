@@ -221,10 +221,60 @@ class CouchDBHandler:
                 e.code,
                 e.message,
             )
-            return None
+            raise
         except Exception as e:
             self._logger.error("Error while accessing database %s: %s", self.db_name, e)
-            return None
+            raise
+
+    def find_documents(
+        self,
+        selector: dict[str, Any],
+        *,
+        fields: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """
+        Run a Mango selector query against this database.
+
+        Uses the cloudant SDK post_find() endpoint.
+
+        Args:
+            selector: Mango query selector dict (e.g. {"status": {"$eq": "ready"}})
+            fields: Optional list of field names to include in results.
+                    If None or empty, all fields are returned.
+            limit: Maximum number of documents to return (default: 200)
+
+        Returns:
+            List of matching documents. Empty list if no matches.
+        """
+        try:
+            response = self.server.post_find(
+                db=self.db_name,
+                selector=selector,
+                fields=fields or [],
+                limit=limit,
+            )
+            result = response.get_result()
+            if not isinstance(result, dict):
+                self._logger.warning(
+                    "Unexpected non-dict response from post_find on '%s'", self.db_name
+                )
+                return []
+            docs = result.get("docs", [])
+            return docs if isinstance(docs, list) else []
+        except ApiException as e:
+            self._logger.error(
+                "Cloudant API error in find_documents on '%s': %s %s",
+                self.db_name,
+                e.code,
+                e.message,
+            )
+            raise
+        except Exception as e:
+            self._logger.error(
+                "Error in find_documents on database '%s': %s", self.db_name, e
+            )
+            raise
 
     def post_changes(
         self,
