@@ -300,13 +300,14 @@ class TestYggdrasilDBManager(unittest.TestCase):
         mock_ygg_doc_class.from_dict.assert_called_once_with(self.mock_project_data)
         self.assertEqual(result, mock_ygg_doc)
 
+    @patch("lib.couchdb.couchdb_connection.ApiException", MockApiException)
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     def test_get_document_by_project_id_not_found(self, mock_handler_init):
         """Test document retrieval when document doesn't exist.
 
-        Note: Error logging is now handled by the base class fetch_document_by_id method.
-        This test verifies that get_document_by_project_id returns None when the
-        underlying fetch_document_by_id returns None (due to 404).
+        Uses a per-test patch for couchdb_connection.ApiException so that
+        MockApiException(code=404) is correctly caught by fetch_document_by_id,
+        regardless of test-suite import order.
         """
         # Arrange
         mock_handler_init.return_value = None
@@ -330,9 +331,8 @@ class TestYggdrasilDBManager(unittest.TestCase):
     def test_get_document_by_project_id_exception(self, mock_handler_init):
         """Test document retrieval when an exception occurs.
 
-        Note: Error logging is now handled by the base class fetch_document_by_id method.
-        This test verifies that get_document_by_project_id returns None when the
-        underlying fetch_document_by_id returns None (due to exception).
+        Since CouchDBHandler.fetch_document_by_id re-raises non-404 exceptions,
+        general exceptions propagate through get_document_by_project_id to the caller.
         """
         # Arrange
         mock_handler_init.return_value = None
@@ -343,11 +343,11 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.server = mock_server
         manager.db_name = "yggdrasil"
 
-        # Act
-        result = manager.get_document_by_project_id("P12345")
+        # Act / Assert — exception propagates; not silently converted to None
+        with self.assertRaises(Exception) as ctx:
+            manager.get_document_by_project_id("P12345")
 
-        # Assert
-        self.assertIsNone(result)
+        self.assertIn("Database error", str(ctx.exception))
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     def test_get_document_by_project_id_api_exception_other_codes(
@@ -355,9 +355,8 @@ class TestYggdrasilDBManager(unittest.TestCase):
     ):
         """Test document retrieval when API exception with non-404 code occurs.
 
-        Note: Error logging is now handled by the base class fetch_document_by_id method.
-        This test verifies that get_document_by_project_id returns None when the
-        underlying fetch_document_by_id returns None (due to API error).
+        Since CouchDBHandler.fetch_document_by_id re-raises non-404 ApiException,
+        the exception propagates through get_document_by_project_id to the caller.
         """
         # Arrange
         mock_handler_init.return_value = None
@@ -371,11 +370,9 @@ class TestYggdrasilDBManager(unittest.TestCase):
         manager.server = mock_server
         manager.db_name = "yggdrasil"
 
-        # Act
-        result = manager.get_document_by_project_id("P12345")
-
-        # Assert
-        self.assertIsNone(result)
+        # Act / Assert — non-404 API exception propagates; not silently converted to None
+        with self.assertRaises(MockApiException):
+            manager.get_document_by_project_id("P12345")
 
     @patch("lib.couchdb.yggdrasil_db_manager.CouchDBHandler.__init__")
     @patch("lib.couchdb.yggdrasil_db_manager.custom_logger")
