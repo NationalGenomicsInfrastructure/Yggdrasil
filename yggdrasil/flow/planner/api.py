@@ -4,9 +4,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from yggdrasil.flow.model import Plan
+
+if TYPE_CHECKING:
+    from yggdrasil.flow.data_access import DataAccess
 
 
 class FactsProvider(ABC):
@@ -24,6 +27,7 @@ class PlanningContext:
     emitter: Any  # EventEmitter (or None; planner can ignore)
     source_doc: dict[str, Any]  # triggering document snapshot
     reason: str  # e.g. "projects/P12345 updated"
+    data: DataAccess  # realm-scoped read-only data access; always set by build_planning_context
     realm_config: Mapping[str, Any] | None = None  # optional realm-specific config
 
 

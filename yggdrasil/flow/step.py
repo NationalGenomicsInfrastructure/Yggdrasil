@@ -5,7 +5,10 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin, get_type_hints
+
+if TYPE_CHECKING:
+    from yggdrasil.flow.data_access import DataAccess
 
 from yggdrasil.flow.artifacts import ArtifactRefProtocol, ensure_artifact_ref
 from yggdrasil.flow.errors import PermanentStepError, TransientStepError
@@ -92,6 +95,9 @@ class StepContext:
     run_mode: str = "auto"  # "auto" or "render_only"
     fingerprint: str | None = None  # set by engine; steps can read it
     run_id: str | None = None  #
+    data: DataAccess | None = (
+        None  # realm-scoped read-only data access (injected by Engine)
+    )
     _seq: int = 0  # private counter, starts at 0
     _artifacts: list[Artifact] = field(default_factory=list)
 

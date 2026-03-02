@@ -654,7 +654,11 @@ class TestBaseHandler(unittest.TestCase):
         # generate_plan_draft returns PlanDraft (coroutine that returns PlanDraft)
         self.assertEqual(generate_plan_draft_sig.return_annotation, PlanDraft)
         # run_now also returns PlanDraft (blocking version of generate_plan_draft)
-        self.assertEqual(run_now_sig.return_annotation, PlanDraft)
+        # Use get_type_hints() to resolve string annotations (PEP 563 / from __future__ import annotations)
+        import typing
+
+        run_now_hints = typing.get_type_hints(handler.__class__.run_now)
+        self.assertEqual(run_now_hints.get("return"), PlanDraft)
 
     def test_interface_contract_compliance(self):
         """Test that concrete implementations satisfy the interface contract."""

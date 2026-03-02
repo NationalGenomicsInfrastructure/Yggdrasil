@@ -192,8 +192,7 @@ class YggdrasilCore:
             spool_dir=os.getenv("YGG_EVENT_SPOOL", "/tmp/ygg_events")
         )
         # ops_db = os.getenv("OPS_DB", "yggdrasil_ops")
-        return PlanningContext(
-            realm=handler.realm_id,
+        return handler.build_planning_context(
             scope=scope,
             scope_dir=scope_dir,
             emitter=emitter,

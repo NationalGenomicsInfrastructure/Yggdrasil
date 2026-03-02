@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 
 from lib.realms.test_realm.handler import TestRealmHandler
-from yggdrasil.flow.planner.api import PlanningContext
+from yggdrasil.flow.events.emitter import FileSpoolEmitter
 
 # Create a simple test scenario with custom steps
 scenario_doc = {
@@ -59,12 +59,9 @@ scope = handler.derive_scope(scenario_doc)
 work_root = Path(os.getenv("YGG_WORK_ROOT", "/tmp/ygg_work"))
 scope_dir = work_root / handler.realm_id / scope["id"]
 
-from yggdrasil.flow.events.emitter import FileSpoolEmitter
-
 emitter = FileSpoolEmitter(spool_dir=os.getenv("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
 
-ctx = PlanningContext(
-    realm=handler.realm_id,
+ctx = handler.build_planning_context(
     scope=scope,
     scope_dir=scope_dir,
     emitter=emitter,
