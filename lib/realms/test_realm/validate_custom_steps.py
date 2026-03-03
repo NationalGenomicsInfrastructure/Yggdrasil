@@ -3,7 +3,7 @@
 Example: Validating custom step definitions in a realm handler.
 
 This script demonstrates how realm developers can validate their handler's
-ability to generate plans from custom step configurations (without templates).
+ability to generate plans from custom step configurations (without recipes).
 
 Usage:
     cd /path/to/Yggdrasil

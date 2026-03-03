@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Example: Validating template-based plan generation in a realm handler.
+Example: Validating recipe-based plan generation in a realm handler.
 
 This script demonstrates how realm developers can validate their handler's
-ability to generate plans from template configurations.
+ability to generate plans from recipe configurations.
 
 Usage:
     cd /path/to/Yggdrasil
-    python lib/realms/test_realm/example_random_template.py
+    python lib/realms/test_realm/example_random_recipe.py
 
 Expected output:
-    - Plan generated from 'random_fail' template
+    - Plan generated from 'random_fail' recipe
     - Shows steps: echo_start → random_step → echo_end
     - No database interaction (just validates handler logic)
 """
@@ -21,12 +21,12 @@ from pathlib import Path
 from lib.realms.test_realm.handler import TestRealmHandler
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 
-# Test scenario with random_fail template
+# Test scenario with random_fail recipe
 scenario_doc = {
-    "_id": "test_scenario:random_template_test",
+    "_id": "test_scenario:random_recipe_test",
     "type": "ygg_test_scenario",
-    "template": "random_fail",
-    "name": "Random Fail Template Test",
+    "recipe": "random_fail",
+    "name": "Random Fail Recipe Test",
     "auto_run": True,
 }
 
@@ -45,13 +45,13 @@ ctx = handler.build_planning_context(
     scope_dir=scope_dir,
     emitter=emitter,
     source_doc=scenario_doc,
-    reason="test random_fail template",
+    reason="test random_fail recipe",
 )
 
 payload = {"doc": scenario_doc, "planning_ctx": ctx}
 
 # Generate plan draft
-print("Testing random_fail template...")
+print("Testing random_fail recipe...")
 try:
     draft = handler.run_now(payload)
     print("✓ Plan generated successfully!")
@@ -64,7 +64,7 @@ try:
         if step.params:
             print(f"     params: {step.params}")
 
-    print("\n✓ random_fail template working correctly!")
+    print("✓ random_fail recipe working correctly!")
 
 except Exception as e:
     print(f"✗ Error: {e}")

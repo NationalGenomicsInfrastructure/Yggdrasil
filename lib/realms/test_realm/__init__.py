@@ -11,7 +11,7 @@ discovered at all (no handlers, no watchspecs).
 Components:
     - TestRealmHandler: Processes COUCHDB_DOC_CHANGED events for scenario docs
     - WatchSpec: Monitors yggdrasil DB for scenario documents (filter_expr based)
-    - Templates: Pre-defined test plans (happy_path, fail_fast, etc.)
+    - Recipes: Pre-defined test plans (happy_path, fail_fast, etc.)
     - Steps: Controllable test steps (echo, sleep, fail, write_file, random_fail)
 
 Usage:
@@ -20,14 +20,14 @@ Usage:
         {
             "_id": "test_scenario:my_test",
             "type": "ygg_test_scenario",
-            "template": "happy_path",
+            "recipe": "happy_path",
             "auto_run": true
         }
     3. WatcherManager detects the document change via CouchDBBackend
-    4. Handler generates a plan from the template
+    4. Handler generates a plan from the recipe
     5. Engine executes the plan
 
-Templates:
+Recipes:
     - happy_path: All steps succeed
     - fail_fast: First step fails
     - fail_mid_plan: Middle step fails
@@ -38,7 +38,7 @@ Scenario Document Schema:
     {
         "_id": "test_scenario:<unique_id>",  # Required
         "type": "ygg_test_scenario",          # Required (must be exact)
-        "template": "<template_name>",        # Required
+        "recipe": "<recipe_name>",          # Required
         "auto_run": true | false,             # Optional (default: true)
         "overrides": {                        # Optional
             "<step_id>": {"param": "value"}
