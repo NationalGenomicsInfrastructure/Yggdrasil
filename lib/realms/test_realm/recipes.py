@@ -1,8 +1,8 @@
 """
-Test realm templates for generating test plans.
+Test realm recipes for generating test plans.
 
-Templates are factory functions that return a list of StepSpec objects.
-Each template represents a different test scenario:
+Recipes are factory functions that return a list of StepSpec objects.
+Each recipe represents a different test scenario:
 
 - happy_path: All steps succeed
 - fail_fast: First step fails
@@ -37,7 +37,7 @@ def _make_step(
 
 
 # ---------------------------------------------------------------------------
-# Template: happy_path
+# Recipe: happy_path
 # ---------------------------------------------------------------------------
 
 
@@ -88,7 +88,7 @@ def happy_path(
 
 
 # ---------------------------------------------------------------------------
-# Template: random_fail
+# Recipe: random_fail
 # ---------------------------------------------------------------------------
 
 
@@ -143,7 +143,7 @@ def random_fail(
 
 
 # ---------------------------------------------------------------------------
-# Template: fail_fast
+# Recipe: fail_fast
 # ---------------------------------------------------------------------------
 
 
@@ -185,7 +185,7 @@ def fail_fast(
 
 
 # ---------------------------------------------------------------------------
-# Template: fail_mid_plan
+# Recipe: fail_mid_plan
 # ---------------------------------------------------------------------------
 
 
@@ -243,7 +243,7 @@ def fail_mid_plan(
 
 
 # ---------------------------------------------------------------------------
-# Template: long_running
+# Recipe: long_running
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +294,7 @@ def long_running(
 
 
 # ---------------------------------------------------------------------------
-# Template: artifact_write
+# Recipe: artifact_write
 # ---------------------------------------------------------------------------
 
 
@@ -358,7 +358,7 @@ def artifact_write(
 
 
 # ---------------------------------------------------------------------------
-# Template: data_fetch_plan  (planning-time — called from handler, not registry)
+# Recipe: data_fetch_plan  (planning-time — called from handler, not registry)
 # ---------------------------------------------------------------------------
 
 
@@ -366,7 +366,7 @@ def data_fetch_plan_steps(fetched_message: str) -> list[StepSpec]:
     """
     Generate steps for the data_fetch_plan scenario.
 
-    This function is NOT in the TEMPLATES registry because it requires the
+    This function is NOT in the RECIPES registry because it requires the
     already-fetched message to be passed in at plan-generation time. The handler
     fetches the reference document during generate_plan_draft() and then calls
     this function so the fetched content is baked into the step params.
@@ -400,7 +400,7 @@ def data_fetch_plan_steps(fetched_message: str) -> list[StepSpec]:
 
 
 # ---------------------------------------------------------------------------
-# Template: data_fetch_exec
+# Recipe: data_fetch_exec
 # ---------------------------------------------------------------------------
 
 
@@ -451,7 +451,7 @@ def data_fetch_exec(
 
 
 # ---------------------------------------------------------------------------
-# Template: data_access_denied
+# Recipe: data_access_denied
 # ---------------------------------------------------------------------------
 
 
@@ -509,7 +509,7 @@ def data_access_denied(
 
 
 # ---------------------------------------------------------------------------
-# Template: data_fetch_all_methods
+# Recipe: data_fetch_all_methods
 # ---------------------------------------------------------------------------
 
 
@@ -563,7 +563,7 @@ def data_fetch_all_methods(
 
 
 # ---------------------------------------------------------------------------
-# Template: data_verify_limit_clamping
+# Recipe: data_verify_limit_clamping
 # ---------------------------------------------------------------------------
 
 
@@ -651,10 +651,10 @@ def _apply_overrides(
 
 
 # ---------------------------------------------------------------------------
-# Template registry
+# Recipe registry
 # ---------------------------------------------------------------------------
 
-TEMPLATES: dict[str, Any] = {
+RECIPES: dict[str, Any] = {
     "happy_path": happy_path,
     "random_fail": random_fail,
     "fail_fast": fail_fast,
@@ -668,22 +668,21 @@ TEMPLATES: dict[str, Any] = {
 }
 
 
-def get_template(name: str):
+def get_recipe(name: str):
     """
-    Get template function by name.
+    Get recipe function by name.
 
     Args:
-        name: Template name (e.g., "happy_path")
+        name: Recipe name (e.g., "happy_path")
 
     Returns:
-        Template builder function
+        Recipe builder function
 
     Raises:
-        KeyError: If template name not found
+        KeyError: If recipe name not found
     """
-    if name not in TEMPLATES:
+    if name not in RECIPES:
         raise KeyError(
-            f"Unknown test realm template: {name}. "
-            f"Available: {list(TEMPLATES.keys())}"
+            f"Unknown test realm recipe: {name}. " f"Available: {list(RECIPES.keys())}"
         )
-    return TEMPLATES[name]
+    return RECIPES[name]

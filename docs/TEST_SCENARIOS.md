@@ -4,21 +4,21 @@ This document describes test scenario documents that exercise different aspects 
 
 ## Overview
 
-Test scenarios are inserted into the yggdrasil database as documents with `type="ygg_test_scenario"`. The `ScenarioDocWatcher` detects them and generates plans via predefined templates **or custom step definitions**.
+Test scenarios are inserted into the yggdrasil database as documents with `type="ygg_test_scenario"`. The `ScenarioDocWatcher` detects them and generates plans via predefined recipes **or custom step definitions**.
 
 **Two modes supported:**
 
-1. **Template-based**: Use predefined templates (easy, recommended for common patterns)
+1. **Recipe-based**: Use predefined recipes (easy, recommended for common patterns)
 2. **Custom steps**: Define steps directly in the document (flexible, for advanced testing)
 
 Each scenario below shows:
-- **Template** (if using template mode): Which predefined template to use
+- **Recipe** (if using recipe mode): Which predefined recipe to use
 - **Purpose**: What it tests
 - **Auto-run**: Whether the plan auto-executes or waits for approval
 - **Overrides**: Optional parameter customizations
 - **Expected behavior**: What should happen
 
-Available templates:
+Available recipes:
 - **happy_path**: All steps succeed (echo_start → brief_sleep(0.5s) → echo_end)
 - **random_fail**: Probabilistic failure (50% chance by default) - tests retry logic
 - **fail_fast**: First step always fails
@@ -44,7 +44,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:simple_success",
   "type": "ygg_test_scenario",
-  "template": "happy_path",
+  "recipe": "happy_path",
   "name": "Simple Success",
   "description": "Basic happy path: echo → sleep → echo, auto-runs immediately",
   "auto_run": true
@@ -69,7 +69,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:pending_approval",
   "type": "ygg_test_scenario",
-  "template": "happy_path",
+  "recipe": "happy_path",
   "name": "Pending Approval",
   "description": "Plan requires manual approval before execution",
   "auto_run": false
@@ -95,7 +95,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:long_running",
   "type": "ygg_test_scenario",
-  "template": "long_running",
+  "recipe": "long_running",
   "name": "Long Running (40s)",
   "description": "Tests that watchers remain responsive during 40-second execution",
   "auto_run": true,
@@ -120,7 +120,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:long_running_5s",
   "type": "ygg_test_scenario",
-  "template": "long_running",
+  "recipe": "long_running",
   "name": "Long Running (5s)",
   "description": "5-second sleep for faster testing of thread pool",
   "auto_run": true,
@@ -143,7 +143,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:fail_fast",
   "type": "ygg_test_scenario",
-  "template": "fail_fast",
+  "recipe": "fail_fast",
   "name": "Fail Fast",
   "description": "First step fails immediately; subsequent steps never execute",
   "auto_run": true
@@ -167,7 +167,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:fail_mid_plan",
   "type": "ygg_test_scenario",
-  "template": "fail_mid_plan",
+  "recipe": "fail_mid_plan",
   "name": "Fail Mid-Plan",
   "description": "Starts successfully, fails in the middle, last steps never execute",
   "auto_run": true
@@ -193,7 +193,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:artifact_write",
   "type": "ygg_test_scenario",
-  "template": "artifact_write",
+  "recipe": "artifact_write",
   "name": "Artifact Write",
   "description": "Creates output files and registers artifacts",
   "auto_run": true
@@ -219,7 +219,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:custom_sleep",
   "type": "ygg_test_scenario",
-  "template": "happy_path",
+  "recipe": "happy_path",
   "name": "Custom Sleep Duration",
   "description": "Happy path with longer sleep via overrides",
   "auto_run": true,
@@ -249,7 +249,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:quick_echo",
   "type": "ygg_test_scenario",
-  "template": "happy_path",
+  "recipe": "happy_path",
   "name": "Quick Echo",
   "description": "Minimal execution; should complete in <100ms",
   "auto_run": true,
@@ -279,7 +279,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:random_fail_50",
   "type": "ygg_test_scenario",
-  "template": "random_fail",
+  "recipe": "random_fail",
   "name": "Random Failure (50%)",
   "description": "50% chance of failure; ideal for testing retry mechanisms",
   "auto_run": true
@@ -298,7 +298,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:random_fail_90",
   "type": "ygg_test_scenario",
-  "template": "random_fail",
+  "recipe": "random_fail",
   "name": "Random Failure (90%)",
   "description": "90% failure rate; tests retry exhaustion",
   "auto_run": true,
@@ -315,7 +315,7 @@ Available steps (for custom mode):
 {
   "_id": "test_scenario:random_fail_10",
   "type": "ygg_test_scenario",
-  "template": "random_fail",
+  "recipe": "random_fail",
   "name": "Random Failure (10%)",
   "description": "10% failure rate; usually succeeds",
   "auto_run": true,
@@ -331,7 +331,7 @@ Available steps (for custom mode):
 
 ## Scenario 10: Custom Steps (Single Echo)
 
-**Purpose**: Test custom step definition without template.
+**Purpose**: Test custom step definition without recipe.
 
 **Insert as**:
 ```json
@@ -529,7 +529,7 @@ curl -X POST http://localhost:5984/yggdrasil \
   -d '{
     "_id": "test_scenario:simple_success",
     "type": "ygg_test_scenario",
-    "template": "happy_path",
+    "recipe": "happy_path",
     "name": "Simple Success",
     "auto_run": true
   }'
@@ -545,7 +545,7 @@ ydm = YggdrasilDBManager()
 scenario = {
     "_id": "test_scenario:simple_success",
     "type": "ygg_test_scenario",
-    "template": "happy_path",
+    "recipe": "happy_path",
     "name": "Simple Success",
     "auto_run": true
 }
@@ -565,14 +565,14 @@ scenarios = [
     {
         "_id": "test_scenario:simple_success",
         "type": "ygg_test_scenario",
-        "template": "happy_path",
+        "recipe": "happy_path",
         "name": "Simple Success",
         "auto_run": true
     },
     {
         "_id": "test_scenario:fail_fast",
         "type": "ygg_test_scenario",
-        "template": "fail_fast",
+        "recipe": "fail_fast",
         "name": "Fail Fast",
         "auto_run": true
     },
@@ -638,7 +638,7 @@ For **Scenario 2 (Pending Approval)**:
 ```bash
 curl -X POST http://localhost:5984/yggdrasil \
   -H "Content-Type: application/json" \
-  -d '{"_id":"test_scenario:pending_approval","type":"ygg_test_scenario","template":"happy_path","auto_run":false}'
+  -d '{"_id":"test_scenario:pending_approval","type":"ygg_test_scenario","recipe":"happy_path","auto_run":false}'
 ```
 
 2. **Verify plan is drafted**:
@@ -680,7 +680,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 
 ## Summary: Quick Reference
 
-| Scenario | Template/Custom | Auto-run | Duration | Expected Result |
+| Scenario | Recipe/Custom | Auto-run | Duration | Expected Result |
 |----------|----------------|----------|----------|-----------------|
 | Simple Success | happy_path | ✓ | ~0.5s | All steps succeed |
 | Pending Approval | happy_path | ✗ | manual | Draft, waits for approval |
@@ -708,7 +708,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 - Check ScenarioDocWatcher is running: `tail -f yggdrasil.log | grep ScenarioDocWatcher`
 - Verify `_id` field is set (must be unique)
 - Verify `type="ygg_test_scenario"` 
-- Verify EITHER `template` field OR `steps` array exists
+- Verify EITHER `recipe` field OR `steps` array exists
 - Check if plan was created with different ID: `curl http://localhost:5984/yggdrasil_plans/_all_docs | jq '.rows[] | select(.id | contains("test_scenario"))'`
 
 **Plan created but not executing:**
@@ -717,7 +717,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 - Check PlanWatcher is running: `tail -f yggdrasil.log | grep PlanWatcher`
 
 **Step failures with missing fn_ref:**
-- Ensure template exists in `lib/realms/test_realm/templates.py`
+- Ensure recipe exists in `lib/realms/test_realm/recipes.py`
 - Verify step function exists in `lib/realms/test_realm/steps.py`
 - Check error message for typos in override field names or fn_name
 

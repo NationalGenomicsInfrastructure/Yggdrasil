@@ -11,10 +11,10 @@ from typing import Any, ClassVar, cast
 from lib.core_utils.event_types import EventType
 from lib.core_utils.logging_utils import custom_logger
 from lib.handlers.base_handler import BaseHandler
-from lib.realms.test_realm.templates import (
-    TEMPLATES,
+from lib.realms.test_realm.recipes import (
+    RECIPES,
     data_fetch_plan_steps,
-    get_template,
+    get_recipe,
 )
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
@@ -25,13 +25,13 @@ class TestRealmHandler(BaseHandler):
     Handler for test scenario documents.
 
     Processes documents with type="ygg_test_scenario" from the yggdrasil database,
-    generating plans based on the specified template.
+    generating plans based on the specified recipe.
 
     Document schema:
         {
             "_id": "test_scenario:<unique_id>",
             "type": "ygg_test_scenario",
-            "template": "happy_path",  # One of TEMPLATES keys
+            "recipe": "happy_path",  # One of RECIPES keys
             "auto_run": true,          # Optional, default True
             "overrides": {             # Optional step param overrides
                 "step_id": {"param": "value"}
@@ -148,7 +148,7 @@ class TestRealmHandler(BaseHandler):
         1. data_fetch_plan: Fetches a CouchDB document *during planning* and
            bakes the result into the step params — proving the fetch happened
            at plan-generation time by making it visible in the persisted plan.
-        2. Template-based: Provide 'template' field (e.g., 'happy_path').
+        2. Recipe-based: Provide 'recipe' field (e.g., 'happy_path').
         3. Custom steps: Provide 'steps' array directly.
 
         Args:
@@ -174,11 +174,11 @@ class TestRealmHandler(BaseHandler):
                 f"Document _id: {doc.get('_id')}"
             )
 
-        template_name = doc.get("template")
+        recipe_name = doc.get("recipe")
         custom_steps = doc.get("steps")
 
         # --- Mode 1: Planning-time data fetch ---
-        if template_name == "data_fetch_plan":
+        if recipe_name == "data_fetch_plan":
             self._logger.info(
                 "Generating data_fetch_plan for scenario '%s': "
                 "fetching reference doc from CouchDB during planning",
@@ -190,33 +190,33 @@ class TestRealmHandler(BaseHandler):
                 "Planning-time data fetch: reference doc content baked into step params"
             )
             preview = {
-                "template": "data_fetch_plan",
+                "recipe": "data_fetch_plan",
                 "step_count": len(steps),
                 "step_names": [s.name for s in steps],
                 "planning_time_fetch": True,
                 "fetched_message": fetched_message,
             }
 
-        # --- Mode 2: Standard template-based ---
-        elif template_name:
-            if template_name not in TEMPLATES:
+        # --- Mode 2: Standard recipe-based ---
+        elif recipe_name:
+            if recipe_name not in RECIPES:
                 raise ValueError(
-                    f"Unknown template '{template_name}'. "
-                    f"Available: {list(TEMPLATES.keys())}"
+                    f"Unknown recipe '{recipe_name}'. "
+                    f"Available: {list(RECIPES.keys())}"
                 )
 
             overrides = doc.get("overrides", {})
 
             self._logger.info(
-                "Generating plan from template '%s' for scenario '%s'",
-                template_name,
+                "Generating plan from recipe '%s' for scenario '%s'",
+                recipe_name,
                 doc.get("_id"),
             )
-            template_fn = get_template(template_name)
-            steps = template_fn(overrides=overrides)
-            notes = f"Test scenario using template '{template_name}'"
+            recipe_fn = get_recipe(recipe_name)
+            steps = recipe_fn(overrides=overrides)
+            notes = f"Test scenario using recipe '{recipe_name}'"
             preview = {
-                "template": template_name,
+                "recipe": recipe_name,
                 "step_count": len(steps),
                 "step_names": [s.name for s in steps],
             }
@@ -230,14 +230,14 @@ class TestRealmHandler(BaseHandler):
             steps = self._parse_custom_steps(custom_steps)
             notes = f"Test scenario with {len(steps)} custom step(s)"
             preview = {
-                "template": None,
+                "recipe": None,
                 "step_count": len(steps),
                 "step_names": [s.name for s in steps],
             }
 
         else:
             raise ValueError(
-                f"Scenario document must have either 'template' or 'steps' field: {doc.get('_id')}"
+                f"Scenario document must have either 'recipe' or 'steps' field: {doc.get('_id')}"
             )
 
         # Build Plan
