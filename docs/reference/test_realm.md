@@ -2,6 +2,8 @@
 
 This document describes test scenario documents that exercise different aspects of the plan approval and execution pipeline.
 
+**_Disclaimer: Mainly used for internal dev/test purposes. Might contain mistakes or deprecated information_**
+
 ## Overview
 
 Test scenarios are inserted into the yggdrasil database as documents with `type="ygg_test_scenario"`. The `ScenarioDocWatcher` detects them and generates plans via predefined recipes **or custom step definitions**.
@@ -726,3 +728,5 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 - Each step must have `step_id` and `fn_name`
 - Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`
 - Check deps refer to existing step_id values
+
+For broader troubleshooting (CouchDB connectivity, config errors, realm discovery, DataAccess), see [troubleshooting.md](troubleshooting.md).
