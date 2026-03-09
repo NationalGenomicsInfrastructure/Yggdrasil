@@ -39,6 +39,10 @@ dev = [
     "setuptools-scm",
     "types-requests"
 ]
+docs = [
+  "mkdocs>=1.6.1,<2",
+  "mkdocs-material>=9.7.4",
+]
 
 [tool.ruff.lint]
 select = [
