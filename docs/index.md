@@ -1,4 +1,12 @@
-# Yggdrasil Documentation
+<figure markdown="span">
+
+  ![Yggdrasil logo](assets/ygg_logo-light_mode.png#only-light){ width="300", align=middle }
+  ![Yggdrasil logo](assets/ygg_logo-dark_mode.png#only-dark){ width="300", align=center }
+  <figcaption></figcaption>
+</figure>
+
+
+# Yggdrasil
 
 **Automate anything — traceable plans, reproducible runs.**
 
@@ -32,5 +40,4 @@ docs/
   realm_authoring/    write and register your own realm
   flow_api/           step decorator, planner, engine
   reference/          glossary, test scenarios, troubleshooting
-  design/prds/        design documents (stable, implemented features)
 ```
