@@ -13,6 +13,8 @@
 [![Codacy Badge](https://app.codacy.com/project/badge/Coverage/2fa79bea21b142d9a75d0951ec2803dd)](https://app.codacy.com/gh/glrs/Yggdrasil/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
 &nbsp;
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/2fa79bea21b142d9a75d0951ec2803dd)](https://app.codacy.com/gh/glrs/Yggdrasil/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+&nbsp;
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://nationalgenomicsinfrastructure.github.io/Yggdrasil/)
 
 > **Automate anything — traceable plans, reproducible runs.**
 
