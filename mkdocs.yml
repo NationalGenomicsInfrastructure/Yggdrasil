@@ -1,16 +1,41 @@
 site_name: Yggdrasil
-site_url: https://nationalgenomicsinfrastructure.github.io/Yggdrasil
+site_description: Automate anything with traceable plans and reproducible runs.
+site_url: https://nationalgenomicsinfrastructure.github.io/Yggdrasil/
+
 repo_url: https://github.com/NationalGenomicsInfrastructure/Yggdrasil
 repo_name: NationalGenomicsInfrastructure/Yggdrasil
 edit_uri: edit/dev/docs/
 
 theme:
   name: material
+  logo: assets/ygg_logo-dark_mode.png
+  favicon: assets/ygg_logo-dark_mode.png
   features:
-    - content.action.edit   # shows “Edit this page”
-    - navigation.instant    # instant loading of pages
+    - content.action.edit
+    - navigation.instant
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-sunny 
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
 
 docs_dir: docs
+site_dir: site
 
 nav:
   - Home: index.md
@@ -30,10 +55,14 @@ nav:
       - Test realm: reference/test_realm.md
       - Troubleshooting: reference/troubleshooting.md
 
+markdown_extensions:
+  - attr_list
+  - md_in_html
+
 exclude_docs: |
-  assets/**
-  design/**
-  diagrams/**
-  static/**
-  TECH_DEBT_LEDGER.md
-  GENSTAT_PLAN_CONTRACT.md
+  !.assets
+  /TECH_DEBT_LEDGER.md
+  /GENSTAT_PLAN_CONTRACT.md
+  /design/**
+  /diagrams/**
+  /assets/README.md
