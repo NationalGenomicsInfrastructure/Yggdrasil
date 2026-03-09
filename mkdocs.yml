@@ -1,0 +1,38 @@
+site_name: Yggdrasil
+repo_url: https://github.com/NationalGenomicsInfrastructure/Yggdrasil
+repo_name: NationalGenomicsInfrastructure/Yggdrasil
+edit_uri: edit/dev/docs/
+
+theme:
+  name: material
+  features:
+    - content.action.edit   # shows “Edit this page”
+    - navigation.instant    # instant loading of pages
+
+docs_dir: docs
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quickstart: getting_started/quickstart.md
+      - CLI: getting_started/cli.md
+      - Configuration: getting_started/configuration.md
+  - Architecture:
+      - Overview: architecture/overview.md
+  - Flow API:
+      - Overview: flow_api/overview.md
+  - Realm authoring:
+      - Guide: realm_authoring/guide.md
+      - Cookbook: realm_authoring/cookbook.md
+  - Reference:
+      - Glossary: reference/glossary.md
+      - Test realm: reference/test_realm.md
+      - Troubleshooting: reference/troubleshooting.md
+
+exclude_docs: |
+  assets/**
+  design/**
+  diagrams/**
+  static/**
+  TECH_DEBT_LEDGER.md
+  GENSTAT_PLAN_CONTRACT.md
