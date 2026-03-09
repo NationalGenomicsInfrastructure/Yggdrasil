@@ -1,4 +1,5 @@
 site_name: Yggdrasil
+site_author: National Genomics Infrastructure - maintained by Anastasios Glaros (@glrs)
 site_description: Automate anything with traceable plans and reproducible runs.
 site_url: https://nationalgenomicsinfrastructure.github.io/Yggdrasil/
 
@@ -12,7 +13,13 @@ theme:
   favicon: assets/ygg_logo-dark_mode.png
   features:
     - content.action.edit
+    - content.code.copy
     - navigation.instant
+    - navigation.instant.preview
+    - navigation.top
+    - toc.follow
+    - toc.integrate
+    #  - navigation.path    # Enables breadcrumbs
   palette:
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
@@ -55,9 +62,28 @@ nav:
       - Test realm: reference/test_realm.md
       - Troubleshooting: reference/troubleshooting.md
 
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/NationalGenomicsInfrastructure/Yggdrasil
+  analytics:
+    provider: google
+    property: G-Q6VQF8G4VX
+
 markdown_extensions:
   - attr_list
   - md_in_html
+  - admonition
+  - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
 
 exclude_docs: |
   !.assets
