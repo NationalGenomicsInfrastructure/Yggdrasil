@@ -40,11 +40,16 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 
 ## Configuration
 
-### Missing config key raises `KeyError` at startup
+### Missing or invalid config key
 
-**Symptom:** `KeyError: 'couchdb_database'` or similar in startup log.
+**Symptom:** A `RuntimeError` or `KeyError` appears in logs during daemon initialization — but not at the very first moment the process starts. Config errors surface in two phases:
 
-**Resolution:** Ensure `yggdrasil_workspace/common/configurations/main.json` contains all required keys. See [configuration.md](../getting_started/configuration.md) for the full schema.
+1. **During DB manager initialization** — a `RuntimeError` is raised if a required CouchDB endpoint block is missing from `external_systems.endpoints` in `main.json`.
+2. **During watcher initialization** — a `KeyError` is raised when a watcher backend config is missing required keys. This happens after realm discovery, when `WatcherManager` starts the backends.
+
+> **Note:** `ConfigLoader` returns `None` (silently) for any key that is absent from the config file. Mistakes that don't touch the two paths above will not surface until the code path that uses the value is actually exercised at runtime.
+
+**Resolution:** Ensure `yggdrasil_workspace/common/configurations/main.json` contains all required keys. See [configuration.md](../getting_started/configuration.md) for the full structure.
 
 ---
 

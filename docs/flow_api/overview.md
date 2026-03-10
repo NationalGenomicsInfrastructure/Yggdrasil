@@ -1,6 +1,6 @@
 # Flow API Overview
 
-`yggdrasil.flow` provides the `@step` decorator, planner protocol, and event emitters used by all realm handlers.
+`yggdrasil.flow` provides the `@step` decorator, the handler planner contract, and event emitters used by all realm handlers.
 
 ---
 
@@ -129,11 +129,20 @@ def run_processor(
 
 ---
 
-## Planner protocol (`yggdrasil.flow.planner`)
+## Handler planner contract
 
-Handlers subclass `BaseHandler` and implement `generate_plan_draft()`. Anything that implements that method is conceptually a planner, but `BaseHandler` is the supported extension point.
+A planner is a `BaseHandler` subclass — not just any object implementing `generate_plan_draft()`. The full contract `YggdrasilCore` enforces at registration time:
 
-`BaseHandler` provides a default `build_planning_context()` method that constructs a `PlanningContext` from a scope dict and event payload. Override it only if you need non-standard context setup.
+| Requirement | Kind | Description |
+|-------------|------|-------------|
+| `event_type` | class variable | `EventType` the handler subscribes to |
+| `handler_id` | class variable | Unique string identifier for this handler |
+| `derive_scope(doc)` | method | Extracts `{"kind": ..., "id": ...}` from the triggering document |
+| `async generate_plan_draft(payload)` | method | Returns a `PlanDraft` |
+
+`realm_id` is set on the handler instance by `YggdrasilCore` during realm registration — handlers must not set it themselves.
+
+`BaseHandler` provides a default `build_planning_context()` method that constructs a `PlanningContext` from the scope dict and event payload. Override it only if you need non-standard context setup.
 
 ---
 
