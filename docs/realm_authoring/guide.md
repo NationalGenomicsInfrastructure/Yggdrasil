@@ -14,7 +14,79 @@ This guide covers:
 
 ## Quick Start
 
-### 1. Create a RealmDescriptor Provider
+### 1. Define a Handler
+
+The handler is the core of any realm. It subscribes to an event type, extracts a scope from the incoming document, and generates a plan:
+
+```python
+# my_realm/handlers.py
+from typing import Any, ClassVar
+
+from lib.core_utils.event_types import EventType
+from yggdrasil.flow.base_handler import BaseHandler
+from yggdrasil.flow.model import Plan
+from yggdrasil.flow.planner import PlanDraft, PlanningContext
+
+
+class MyProjectHandler(BaseHandler):
+    event_type: ClassVar[EventType] = EventType.COUCHDB_DOC_CHANGED
+    handler_id: ClassVar[str] = "project_handler"  # Unique within realm
+
+    def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
+        return {"kind": "project", "id": doc.get("_id", "unknown")}
+
+    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+        doc = payload.get("doc", {})
+        ctx: PlanningContext = payload["planning_ctx"]
+
+        steps = [...]
+
+        plan = Plan(
+            plan_id=f"my_realm:{ctx.scope['id']}",
+            realm=self.realm_id or "my_realm",
+            scope=ctx.scope,
+            steps=steps,
+        )
+        return PlanDraft(
+            plan=plan,
+            auto_run=True,  # Or False for approval workflow
+            approvals_required=[],
+            notes="My plan notes",
+        )
+```
+
+### 2. Register the Realm
+
+Wire the handler into a `RealmDescriptor` and expose it via a `ygg.realm` entry point:
+
+```python
+# my_realm/__init__.py
+from yggdrasil.core.realm import RealmDescriptor
+
+from my_realm.handlers import MyProjectHandler
+
+
+def get_realm_descriptor() -> RealmDescriptor:
+    return RealmDescriptor(
+        realm_id="my_realm",
+        handler_classes=[MyProjectHandler],
+        watchspecs=[],  # No watcher yet — realm is registered but not triggerable
+    )
+```
+
+```toml
+# pyproject.toml
+[project.entry-points."ygg.realm"]
+my_realm = "my_realm:get_realm_descriptor"
+```
+
+> At this point the realm is registered and Yggdrasil knows about it, but no events will reach it yet — there are no watchers configured to trigger it. Continue to Step 3 to wire up event-driven triggering.
+
+> **Note:** The entry point name (left side) is just a discovery key. Only `RealmDescriptor.realm_id` is used for identity.
+
+### 3. Add a WatchSpec (event-driven triggering)
+
+To have a CouchDB change automatically trigger your handler, add a `WatchSpec` to the descriptor:
 
 ```python
 # my_realm/__init__.py
@@ -22,19 +94,17 @@ from typing import Any
 
 from lib.core_utils.event_types import EventType
 from lib.watchers.watchspec import WatchSpec
-from yggdrasil.core.realm.descriptor import RealmDescriptor
+from yggdrasil.core.realm import RealmDescriptor
 
 from my_realm.handlers import MyProjectHandler, MyDeliveryHandler
 
 
 def _build_scope(raw_event: Any) -> dict[str, str]:
-    """Extract scope from document."""
     doc = getattr(raw_event, "doc", None) or {}
     return {"kind": "project", "id": doc.get("_id", "unknown")}
 
 
 def _build_payload(raw_event: Any) -> dict[str, Any]:
-    """Build payload for handler."""
     doc = getattr(raw_event, "doc", None) or {}
     return {
         "doc": doc,
@@ -43,7 +113,6 @@ def _build_payload(raw_event: Any) -> dict[str, Any]:
 
 
 def _get_watchspecs() -> list[WatchSpec]:
-    """Callable for potential gating (returns [] when disabled)."""
     return [
         WatchSpec(
             backend="couchdb",
@@ -58,70 +127,14 @@ def _get_watchspecs() -> list[WatchSpec]:
 
 
 def get_realm_descriptor() -> RealmDescriptor:
-    """Entry point for ygg.realm discovery."""
     return RealmDescriptor(
-        realm_id="my_realm",  # Required, unique, explicit
-        handler_classes=[MyProjectHandler, MyDeliveryHandler],  # CLASSES, not instances
-        watchspecs=_get_watchspecs,  # Callable (or static list)
+        realm_id="my_realm",
+        handler_classes=[MyProjectHandler, MyDeliveryHandler],
+        watchspecs=_get_watchspecs,  # Callable enables dev-mode gating
     )
 ```
 
-### 2. Create Handler Classes
-
-```python
-# my_realm/handlers.py
-from typing import Any, ClassVar
-
-from lib.core_utils.event_types import EventType
-from yggdrasil.flow.base_handler import BaseHandler
-from yggdrasil.flow.model import Plan
-from yggdrasil.flow.planner import PlanDraft, PlanningContext
-
-
-class MyProjectHandler(BaseHandler):
-    """Handler for project documents."""
-    
-    # REQUIRED class attributes
-    event_type: ClassVar[EventType] = EventType.COUCHDB_DOC_CHANGED
-    handler_id: ClassVar[str] = "project_handler"  # Unique within realm
-    
-    def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
-        """Extract scope from document."""
-        return {"kind": "project", "id": doc.get("_id", "unknown")}
-    
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
-        """Generate execution plan from event payload."""
-        doc = payload.get("doc", {})
-        ctx = payload["planning_ctx"]
-        
-        # Build your steps here
-        steps = [...]
-        
-        plan = Plan(
-            plan_id=f"my_realm:{ctx.scope['id']}",
-            realm=self.realm_id or "my_realm",
-            scope=ctx.scope,
-            steps=steps,
-        )
-        
-        return PlanDraft(
-            plan=plan,
-            auto_run=True,  # Or False for approval workflow
-            approvals_required=[],
-            notes="My plan notes",
-        )
-```
-
-### 3. Register Entry Point
-
-```toml
-# pyproject.toml
-[project.entry-points."ygg.realm"]
-my_realm = "my_realm:get_realm_descriptor"
-```
-
-> **Note:** The entry point name (left side) is just a discovery key.
-> Only `RealmDescriptor.realm_id` is used for identity.
+> Passing `watchspecs` a callable (rather than a list) enables dev-mode gating. See [Dev-Mode Gating](#dev-mode-gating).
 
 ## Required Handler Attributes
 
@@ -251,7 +264,7 @@ handler_id 'missing_handler'. Registered handlers: ['project_handler']
 
 ## Handler-Only Realms
 
-Realms with handlers but no WatchSpecs are valid (for CLI/manual triggers):
+Realms with handlers but no WatchSpecs are valid — useful when events are injected programmatically or from other handlers/steps:
 
 ```python
 RealmDescriptor(
@@ -261,10 +274,9 @@ RealmDescriptor(
 )
 ```
 
-Events can be triggered manually via:
-- CLI commands (`yggdrasil run-doc <doc_id>`)
+Events can be triggered via:
 - Direct `handle_event()` calls
-- Other handlers/steps
+- Other handlers/steps emitting events internally
 
 ## Event Flow Summary
 
