@@ -88,6 +88,7 @@ markdown_extensions:
 exclude_docs: |
   !.assets
   /TECH_DEBT_LEDGER.md
+  /BACKLOG.md
   /GENSTAT_PLAN_CONTRACT.md
   /design/**
   /diagrams/**
