@@ -1,10 +1,9 @@
 import logging
-from typing import Optional
 
 from .config_loader import ConfigLoader
 
 
-def get_module_location(document: dict) -> Optional[str]:
+def get_module_location(document: dict) -> str | None:
     try:
         registry = ConfigLoader().load_config("module_registry.json")
         method = document["details"]["library_construction_method"]

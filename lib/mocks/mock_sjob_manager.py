@@ -1,10 +1,11 @@
 import asyncio
+import logging
 import random
 import string
 
 from lib.core_utils.logging_utils import custom_logger
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class MockSlurmJobManager:
@@ -19,10 +20,16 @@ class MockSlurmJobManager:
         "OUT_OF_ME+",
     ]
 
-    def __init__(self, polling_interval=1.0, command_timeout=8.0):
+    def __init__(
+        self,
+        polling_interval=1.0,
+        command_timeout=8.0,
+        logger: logging.Logger | None = None,
+    ):
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.polling_interval = polling_interval
         self.command_timeout = command_timeout
-        self.jobs = {}  # Keep track of mock jobs
+        self.jobs: dict[str, str] = {}  # Keep track of mock jobs
 
     async def submit_job(self, script_path):
         mock_job_id = "".join(random.choices(string.digits, k=4))
@@ -32,7 +39,7 @@ class MockSlurmJobManager:
         return mock_job_id
 
     async def monitor_job(self, job_id, sample):
-        logging.info(
+        self._logger.info(
             f"Monitoring job {job_id} with poll interval {self.polling_interval}..."
         )
         while True:
@@ -47,11 +54,11 @@ class MockSlurmJobManager:
         wait_time = random.uniform(5, 10)
         await asyncio.sleep(wait_time)
         self.jobs[job_id] = "COMPLETED"
-        logging.info(f"Mock job {job_id} done. Updated to COMPLETED.")
+        self._logger.info(f"Mock job {job_id} done. Updated to COMPLETED.")
 
     async def _job_status(self, job_id: str) -> str:
         if job_id not in self.jobs:
-            logging.info(
+            self._logger.info(
                 f"Detected unknown job {job_id}. Marking as PROCESSING and scheduling completion."
             )
             self.jobs[job_id] = "PROCESSING"
@@ -68,17 +75,17 @@ class MockSlurmJobManager:
             status (str): The status of the job.
             sample (object): The sample object (must have a post_process method and id attribute).
         """
-        logging.info("\n")
-        logging.debug(f"[{sample.id}] Job {job_id} status: {status}")
+        logger.info("\n")
+        logger.debug(f"[{sample.id}] Job {job_id} status: {status}")
         if status == "COMPLETED":
-            logging.info(f"[{sample.id}] Job completed successfully.")
+            logger.info(f"[{sample.id}] Job completed successfully.")
             sample.status = "processed"
             sample.post_process()
         elif status in ["FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_ME+"]:
             sample.status = "processing_failed"
-            logging.info(f"[{sample.id}] Job failed.")
+            logger.info(f"[{sample.id}] Job failed.")
         else:
-            logging.warning(f"[{sample.id}] Job ended with unexpacted status: {status}")
+            logger.warning(f"[{sample.id}] Job ended with unexpacted status: {status}")
             sample.status = "processing_failed"
 
     @staticmethod
@@ -91,14 +98,14 @@ class MockSlurmJobManager:
             status (str): The status of the job.
             sample (object): The sample object (must have a post_process method and id attribute).
         """
-        logging.info("\n")
-        logging.debug(f"[{sample.id}] Job {job_id} status: {status}")
+        logger.info("\n")
+        logger.debug(f"[{sample.id}] Job {job_id} status: {status}")
         if status == "COMPLETED":
-            logging.info(f"[{sample.id}] Job completed successfully.")
+            logger.info(f"[{sample.id}] Job completed successfully.")
             sample.status = "processed"
         elif status in ["FAILED", "CANCELLED", "CANCELLED+", "TIMEOUT", "OUT_OF_ME+"]:
             sample.status = "processing_failed"
-            logging.info(f"[{sample.id}] Job failed.")
+            logger.info(f"[{sample.id}] Job failed.")
         else:
-            logging.warning(f"[{sample.id}] Job ended with unexpacted status: {status}")
+            logger.warning(f"[{sample.id}] Job ended with unexpacted status: {status}")
             sample.status = "processing_failed"

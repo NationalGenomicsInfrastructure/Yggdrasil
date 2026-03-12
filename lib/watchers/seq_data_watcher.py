@@ -1,11 +1,14 @@
 import asyncio
 import logging
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, Optional, Set
+from typing import Any
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
 
 
@@ -19,11 +22,11 @@ class SeqDataDetector(FileSystemEventHandler):
     def __init__(
         self,
         instrument_name: str,
-        marker_files: Set[str],
-        emit_coroutine: Callable[[Any, Optional[str]], Coroutine[Any, Any, None]],
+        marker_files: set[str],
+        emit_coroutine: Callable[[Any, str | None], Coroutine[Any, Any, None]],
         async_loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
-        discovered_subfolders: Dict[str, Set[str]] = {},
+        discovered_subfolders: dict[str, set[str]] = {},
     ):
         """
         Args:
@@ -101,11 +104,11 @@ class SeqDataWatcher(AbstractWatcher):
     def __init__(
         self,
         on_event: Callable[[YggdrasilEvent], None],
-        config: Dict[str, Any],
-        event_type: str = "flowcell_ready",
+        config: dict[str, Any],
+        event_type: EventType = EventType.FLOWCELL_READY,
         name: str = "SeqDataWatcher",
         recursive: bool = True,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
     ):
         """
         Args:
@@ -126,9 +129,9 @@ class SeqDataWatcher(AbstractWatcher):
         # self._discovered_subfolders: Dict[str, Set[str]] = {}
 
         # For storing the loop in start()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
-        self._logger = logger or logging.getLogger(f"FileSystemWatcher-{self.name}")
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     async def start(self):
         """

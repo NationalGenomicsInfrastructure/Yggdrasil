@@ -1,14 +1,14 @@
 import asyncio
+import logging
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 from lib.base.abstract_project import AbstractProject
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 from lib.realms.tenx.lab_sample import TenXLabSample
 from lib.realms.tenx.run_sample import TenXRunSample
-
-logging = custom_logger(__name__.split(".")[-1])
 
 
 class TenXProject(AbstractProject):
@@ -18,7 +18,12 @@ class TenXProject(AbstractProject):
 
     config: Mapping[str, Any] = ConfigLoader().load_config("10x_config.json")
 
-    def __init__(self, doc: Dict[str, Any], yggdrasil_db_manager: Any) -> None:
+    def __init__(
+        self,
+        doc: dict[str, Any],
+        yggdrasil_db_manager: Any,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """
         Initialize a TenXProject instance.
 
@@ -26,7 +31,8 @@ class TenXProject(AbstractProject):
             doc (Dict[str, Any]): Document containing project metadata.
             yggdrasil_db_manager (Any): Yggdrasil database manager instance.
         """
-        super().__init__(doc, yggdrasil_db_manager)
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        super().__init__(doc, yggdrasil_db_manager, logger=self._logger)
         self.submission_policy.realm_supports_auto = False  # Not as easy as SS3. Decide based on all(sample.auto_submit for sample in self.samples), when ready.
 
         # Already defined in the parent class
@@ -39,25 +45,41 @@ class TenXProject(AbstractProject):
         if self.proceed:
             self.initialize_project_in_db()
             # Extract metadata from project document
-            self.project_info: Dict[str, Any] = self._extract_project_info()
+            self.project_info: dict[str, Any] = self._extract_project_info()
 
             if not self.determine_organism():
                 # TODO: Send this message as a notification (e.g. on Slack)
-                logging.error(
+                self._logger.error(
                     "Project organism could not be determined. Handle manually!"
                 )
                 self.proceed = False
                 return
 
-            self.project_dir: Optional[Path] = self.ensure_project_directory()
+            self.project_dir: Path | None = self.ensure_project_directory()
             self.project_info["project_dir"] = self.project_dir
-            self.samples: List[TenXRunSample] = []
+            self.samples: list[TenXRunSample] = []
             self.case_type: str = self.project_info.get("case_type", "unknown")
-            logging.info(f"Case type: {self.case_type}")
+            self._logger.info(f"Case type: {self.case_type}")
 
             self.status: str = "initialized"
 
-    def _extract_project_info(self) -> Dict[str, Any]:
+    # Experimental #
+    async def launch_template(self) -> None:
+        if not self.doc:
+            self._logger.warning("TenxRealm: no project document bound; skipping.")
+            return
+
+        # Build the same payload your handler expects
+        payload = {
+            "doc": self.doc,  # or "document" if that’s what you use—be consistent
+            "reason": f"project.status={getattr(self, 'project_status', '') or 'unknown'}",
+        }
+        from lib.realms.tenx.handler import handle_project_change
+
+        # Offload the sync handler so we don’t block the event loop
+        await asyncio.to_thread(handle_project_change, payload)
+
+    def _extract_project_info(self) -> dict[str, Any]:
         """
         Extracts relevant project information from the document.
 
@@ -66,7 +88,7 @@ class TenXProject(AbstractProject):
         """
         try:
             details = self.doc.get("details", {})
-            project_info: Dict[str, Any] = {
+            project_info: dict[str, Any] = {
                 "project_name": self.doc.get("project_name", ""),
                 "project_id": self.doc.get("project_id", "Unknown_Project"),
                 "customer_reference": self.doc.get("customer_project_reference", ""),
@@ -106,7 +128,9 @@ class TenXProject(AbstractProject):
 
             return project_info
         except Exception as e:
-            logging.error(f"Error occurred while extracting project information: {e}")
+            self._logger.error(
+                f"Error occurred while extracting project information: {e}"
+            )
             return {}
 
     def determine_organism(self) -> bool:
@@ -133,7 +157,7 @@ class TenXProject(AbstractProject):
             self.project_info["organism"] = organism
             return True
         # If neither field is usable, log an error
-        logging.error(
+        self._logger.error(
             f"Organism '{organism}' not specified or unsupported for project "
             f"'{self.project_info.get('project_name', 'Unknown_Project')}'."
         )
@@ -169,12 +193,14 @@ class TenXProject(AbstractProject):
         ]
 
         if missing_keys:
-            logging.warning(f"Missing required project information: {missing_keys}.")
+            self._logger.warning(
+                f"Missing required project information: {missing_keys}."
+            )
             return False
 
         return True
 
-    def _is_field(self, field_path: str, data: Dict[str, Any]) -> bool:
+    def _is_field(self, field_path: str, data: dict[str, Any]) -> bool:
         """Checks if the document contains all required fields.
 
         Args:
@@ -192,7 +218,7 @@ class TenXProject(AbstractProject):
                 return False
         return True
 
-    def ensure_project_directory(self) -> Optional[Path]:
+    def ensure_project_directory(self) -> Path | None:
         """Ensures that the project directory exists. Creates it if necessary.
 
         Returns:
@@ -207,7 +233,7 @@ class TenXProject(AbstractProject):
             project_dir.mkdir(parents=True, exist_ok=True)
             return project_dir
         except Exception as e:
-            logging.error(f"Failed to create project directory: {e}")
+            self._logger.error(f"Failed to create project directory: {e}")
             return None
 
     def get_default_feature(self, library_prep_id: str) -> str:
@@ -227,7 +253,7 @@ class TenXProject(AbstractProject):
         else:
             return "unknown"
 
-    def identify_feature_old_case(self, sample_info: Dict[str, Any]) -> Tuple[str, str]:
+    def identify_feature_old_case(self, sample_info: dict[str, Any]) -> tuple[str, str]:
         """Identify feature and original sample ID for old format cases.
 
         Args:
@@ -247,7 +273,7 @@ class TenXProject(AbstractProject):
         default_original_sample_id = customer_name or "unknown_sample_id"
         return "unknown", default_original_sample_id
 
-    def identify_feature_new_case(self, sample_id: str) -> Tuple[str, str]:
+    def identify_feature_new_case(self, sample_id: str) -> tuple[str, str]:
         """Identify feature and original sample ID for new format cases.
 
         Args:
@@ -262,7 +288,7 @@ class TenXProject(AbstractProject):
         default_original_sample_id = sample_id[:-1] or "unknown_sample_id"
         return feature, default_original_sample_id
 
-    def filter_aborted_samples(self, sample_data: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_aborted_samples(self, sample_data: dict[str, Any]) -> dict[str, Any]:
         """Filter out aborted samples from the sample data.
 
         Args:
@@ -279,8 +305,8 @@ class TenXProject(AbstractProject):
         }
 
     def identify_feature_and_original_id_old(
-        self, sample_id: str, sample_info: Dict[str, Any]
-    ) -> Tuple[str, str]:
+        self, sample_id: str, sample_info: dict[str, Any]
+    ) -> tuple[str, str]:
         """Identify feature and original sample ID for old format samples.
 
         Args:
@@ -301,7 +327,7 @@ class TenXProject(AbstractProject):
             original_sample_id = sample_id
             return feature, original_sample_id
 
-    def identify_feature_and_original_id_new(self, sample_id: str) -> Tuple[str, str]:
+    def identify_feature_and_original_id_new(self, sample_id: str) -> tuple[str, str]:
         """Identify feature and original sample ID for new format samples.
 
         Args:
@@ -321,8 +347,8 @@ class TenXProject(AbstractProject):
             return feature, original_sample_id
 
     def create_lab_samples(
-        self, sample_data: Dict[str, Any]
-    ) -> Dict[str, Tuple[TenXLabSample, str]]:
+        self, sample_data: dict[str, Any]
+    ) -> dict[str, tuple[TenXLabSample, str]]:
         """Create lab samples from the sample data.
 
         Args:
@@ -350,8 +376,8 @@ class TenXProject(AbstractProject):
         return lab_samples
 
     def group_lab_samples(
-        self, lab_samples: Dict[str, Tuple[TenXLabSample, str]]
-    ) -> Dict[str, List[TenXLabSample]]:
+        self, lab_samples: dict[str, tuple[TenXLabSample, str]]
+    ) -> dict[str, list[TenXLabSample]]:
         """Group lab samples by original sample ID.
 
         Args:
@@ -360,14 +386,14 @@ class TenXProject(AbstractProject):
         Returns:
             Dict[str, List[TenXLabSample]]: A dictionary grouping lab samples by original sample ID.
         """
-        groups: Dict[str, list[TenXLabSample]] = {}
+        groups: dict[str, list[TenXLabSample]] = {}
         for lab_sample, original_sample_id in lab_samples.values():
             groups.setdefault(original_sample_id, []).append(lab_sample)
         return groups
 
     def create_run_samples(
-        self, grouped_lab_samples: Dict[str, List[TenXLabSample]]
-    ) -> List[TenXRunSample]:
+        self, grouped_lab_samples: dict[str, list[TenXLabSample]]
+    ) -> list[TenXRunSample]:
         """Create run samples from grouped lab samples.
 
         Args:
@@ -389,7 +415,7 @@ class TenXProject(AbstractProject):
             run_samples.append(run_sample)
         return run_samples
 
-    def extract_samples(self) -> List[TenXRunSample]:
+    def extract_samples(self) -> list[TenXRunSample]:
         """Extract and prepare samples for processing.
 
         Returns:
@@ -409,18 +435,18 @@ class TenXProject(AbstractProject):
     async def launch(self):
         pass
         # """Launch the TenX Realm to handle its samples."""
-        # logging.info(f"Processing TenX project {self.project_info['project_name']}")
+        # self._logger.info(f"Processing TenX project {self.project_info['project_name']}")
         # self.status = "processing"
 
         # self.samples = self.extract_samples()
         # if not self.samples:
-        #     logging.warning("No samples found for processing. Returning...")
+        #     self._logger.warning("No samples found for processing. Returning...")
         #     return
 
         # self.add_samples_to_project_in_db()
 
-        # logging.info(f"Considered samples: {[sample.id for sample in self.samples]}")
-        # logging.info(f"Sample features: {[sample.features for sample in self.samples]}")
+        # self._logger.info(f"Considered samples: {[sample.id for sample in self.samples]}")
+        # self._logger.info(f"Sample features: {[sample.features for sample in self.samples]}")
 
         # # Pre-process each sample asynchronously
         # pre_tasks = [sample.pre_process() for sample in self.samples]
@@ -432,11 +458,11 @@ class TenXProject(AbstractProject):
         # ]
 
         # if not pre_processed_samples:
-        #     logging.warning("No samples passed pre-processing. Exiting...")
+        #     self._logger.warning("No samples passed pre-processing. Exiting...")
         #     return
 
-        # logging.info("\n")
-        # logging.info(
+        # self._logger.info("\n")
+        # self._logger.info(
         #     f"Samples that passed pre-processing:"
         #     f"{[sample.id for sample in pre_processed_samples]}"
         # )
@@ -449,13 +475,13 @@ class TenXProject(AbstractProject):
         # processed_samples = [
         #     sample for sample in pre_processed_samples if sample.status == "completed"
         # ]
-        # logging.info("\n")
-        # logging.info(
+        # self._logger.info("\n")
+        # self._logger.info(
         #     f"Samples that finished successfully: "
         #     f"{[sample.id for sample in processed_samples]}\n"
         # )
 
-        # # logging.info(
+        # # self._logger.info(
         # #     f"All samples processed for project {self.project_info['project_name']}"
         # # )
         # self.finalize_project()
@@ -470,10 +496,10 @@ class TenXProject(AbstractProject):
         """
         Finalize the project by handling post-processing steps (e.g., report generation).
         """
-        logging.info(f"Finalizing project {self.project_info['project_name']}")
+        self._logger.info(f"Finalizing project {self.project_info['project_name']}")
         # Placeholder for any project-level finalization steps, like report generation, cleanup, etc.
         self.status = "completed"
-        logging.info(
+        self._logger.info(
             f"Project {self.project_info['project_name']} has been successfully finalized."
         )
 
@@ -492,10 +518,14 @@ class TenXProject(AbstractProject):
         )
 
     async def do_pre_process_samples(self):
-        logging.info("TenX realm: Pre-processing samples in parallel.")
+        self._logger.info("TenX realm: Pre-processing samples in parallel.")
 
-        logging.info(f"Considered samples: {[sample.id for sample in self.samples]}")
-        logging.info(f"Sample features: {[sample.features for sample in self.samples]}")
+        self._logger.info(
+            f"Considered samples: {[sample.id for sample in self.samples]}"
+        )
+        self._logger.info(
+            f"Sample features: {[sample.features for sample in self.samples]}"
+        )
 
         tasks = [sample.pre_process() for sample in self.samples]
         await asyncio.gather(*tasks)
@@ -505,12 +535,13 @@ class TenXProject(AbstractProject):
             sample for sample in self.samples if sample.status == "pre_processed"
         ]
         if not self.samples:
-            logging.warning("No samples passed pre-processing.")
+            self._logger.warning("No samples passed pre-processing.")
         else:
-            logging.info(
+            self._logger.info(
                 f"Samples that passed pre-processing: {[sample.id for sample in self.samples]}"
             )
 
     async def do_finalize_project(self):
         """ """
+        self.finalize_project()
         self.finalize_project()

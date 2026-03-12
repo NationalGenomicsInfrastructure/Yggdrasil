@@ -1,11 +1,11 @@
 import glob
+import logging
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
-
-logging = custom_logger(__name__.split(".")[-1])
 
 
 class TenXLabSample:
@@ -17,8 +17,9 @@ class TenXLabSample:
         self,
         lab_sample_id: str,
         feature: str,
-        sample_data: Dict[str, Any],
-        project_info: Dict[str, Any],
+        sample_data: dict[str, Any],
+        project_info: dict[str, Any],
+        logger: logging.Logger | None = None,
     ) -> None:
         """
         Initialize a LabSample instance.
@@ -29,27 +30,28 @@ class TenXLabSample:
             sample_data (Dict[str, Any]): Dictionary containing sample-specific data.
             project_info (Dict[str, Any]): Dictionary containing project-specific information.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.lab_sample_id: str = lab_sample_id
         self.feature: str = feature
-        self.sample_data: Dict[str, Any] = sample_data
-        self.project_info: Dict[str, Any] = project_info
+        self.sample_data: dict[str, Any] = sample_data
+        self.project_info: dict[str, Any] = project_info
 
         self.organism: str = self.project_info.get("organism", "")
         self.lims_id: str = sample_data.get("sample_id", "")
-        self.flowcell_ids: List[str] = self._get_all_flowcells()
-        self.fastq_dirs: Optional[Dict[str, List[str]]] = self.locate_fastq_dirs()
-        self.reference_genome: Optional[str] = self.get_reference_genome()
+        self.flowcell_ids: list[str] = self._get_all_flowcells()
+        self.fastq_dirs: dict[str, list[str]] | None = self.locate_fastq_dirs()
+        self.reference_genome: str | None = self.get_reference_genome()
 
-        # logging.debug(f"Reference genome for sample {self.lab_sample_id}: {self.reference_genome}")
+        # self._logger.debug(f"Reference genome for sample {self.lab_sample_id}: {self.reference_genome}")
 
-    def _get_all_flowcells(self) -> List[str]:
+    def _get_all_flowcells(self) -> list[str]:
         """
         Collect all flowcell IDs associated with the sample.
 
         Returns:
             List[str]: A list of flowcell IDs for the sample.
         """
-        flowcell_ids: List[str] = []
+        flowcell_ids: list[str] = []
         try:
             library_prep = self.sample_data.get("library_prep", {})
             # if 'library_prep' in self.sample_data:
@@ -57,26 +59,26 @@ class TenXLabSample:
                 flowcell_ids.extend(prep_info.get("sequenced_fc", []))
 
             if not flowcell_ids:
-                logging.warning(
+                self._logger.warning(
                     f"No valid flowcells found for sample {self.lab_sample_id}."
                 )
             return flowcell_ids
         except Exception as e:
-            logging.error(
+            self._logger.error(
                 f"Error while fetching flowcell IDs for sample '{self.lab_sample_id}': {e}",
                 exc_info=True,
             )
             # return None
             return []
 
-    def locate_fastq_dirs(self) -> Optional[Dict[str, List[str]]]:
+    def locate_fastq_dirs(self) -> dict[str, list[str]] | None:
         """Locate the parent directories of the FASTQ files for each flowcell.
 
         Returns:
             Optional[Dict[str, List[str]]]: A dictionary mapping flowcell IDs to their
                 respective parent directories.
         """
-        fastq_dirs: Dict[str, List[str]] = {}
+        fastq_dirs: dict[str, list[str]] = {}
         for flowcell_id in self.flowcell_ids:
             pattern = Path(
                 self.config["seq_root_dir"],
@@ -90,19 +92,19 @@ class TenXLabSample:
             if matched_dirs:
                 fastq_dirs[flowcell_id] = matched_dirs
             else:
-                logging.warning(
+                self._logger.warning(
                     f"No FASTQ directory found for flowcell {flowcell_id} in sample {self.lab_sample_id}"
                 )
 
         if not fastq_dirs:
-            logging.warning(
+            self._logger.warning(
                 f"No FASTQ directories found for sample {self.lab_sample_id}."
             )
             return None
 
         return fastq_dirs
 
-    def get_reference_genome(self) -> Optional[str]:
+    def get_reference_genome(self) -> str | None:
         """Get the reference genome path for the sample based on the feature and organism.
 
         Returns:
@@ -114,22 +116,25 @@ class TenXLabSample:
         ref_key = feature_to_ref_key.get(self.feature)
 
         if not ref_key:
-            logging.error(
+            self._logger.error(
                 f"Feature '{self.feature}' is not recognized for reference genome mapping."
             )
             return None
 
         refs_map = reference_mapping.get(ref_key)
         if not refs_map:
-            logging.error(f"No reference genomes found for reference key '{ref_key}'")
+            self._logger.error(
+                f"No reference genomes found for reference key '{ref_key}'"
+            )
             return None
 
         ref_genome = refs_map.get(self.organism)
         if not ref_genome:
-            logging.error(
+            self._logger.error(
                 f"No reference genome found for feature '{self.feature}' "
                 f"(mapped to '{ref_key}') and organism '{self.organism}'"
             )
             return None
 
+        return ref_genome
         return ref_genome

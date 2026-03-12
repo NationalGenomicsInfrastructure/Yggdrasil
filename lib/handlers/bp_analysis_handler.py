@@ -4,9 +4,10 @@ import asyncio
 
 # import contextvars
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
+from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from lib.handlers.base_handler import BaseHandler
 
@@ -21,11 +22,11 @@ class BestPracticeAnalysisHandler(BaseHandler):
     or synchronously (run_now).
     """
 
-    def __init__(self):
+    def __init__(self, logger: logging.Logger | None = None):
         self.ydm = YggdrasilDBManager()
-        self.logger = logging.getLogger("BPA-Handler")
+        self.logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
-    async def handle_task(self, payload: Dict[str, Any]) -> None:
+    async def handle_task(self, payload: dict[str, Any]) -> None:
         """
         Core coroutine invoked by both __call__ (via asyncio.create_task) and run_now.
         """
@@ -73,7 +74,7 @@ class BestPracticeAnalysisHandler(BaseHandler):
                 "Error running realm for project %s", project_id, exc_info=True
             )
 
-    def __call__(self, payload: Dict[str, Any]) -> None:
+    def __call__(self, payload: dict[str, Any]) -> None:
         """
         Schedule the async handler under the running loop.
         """

@@ -1,16 +1,17 @@
 import json
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
-from ibm_cloud_sdk_core.api_exception import ApiException
 from requests import Response
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
+from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 
-logging = custom_logger(__name__.split(".")[-1])
+# logger = custom_logger(__name__)
 
 
 class ProjectDBManager(CouchDBHandler):
@@ -18,14 +19,35 @@ class ProjectDBManager(CouchDBHandler):
     Manages interactions with the 'projects' database, such as:
 
       - Asynchronously fetching document changes (`fetch_changes` / `get_changes`).
-      - Retrieving documents by ID.
 
     Inherits from `CouchDBHandler` to reuse the CouchDB connection.
     It is specialized for Yggdrasil needs (e.g., module registry lookups).
     """
 
-    def __init__(self) -> None:
-        super().__init__("projects")
+    def __init__(
+        self,
+        *,
+        endpoint: str = DEFAULT_ENDPOINT,
+        url: str | None = None,
+        user_env: str | None = None,
+        pass_env: str | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        params = resolve_couchdb_params(
+            endpoint=endpoint,
+            url=url,
+            user_env=user_env,
+            pass_env=pass_env,
+        )
+
+        super().__init__(
+            "projects",
+            url=params.url,
+            user_env=params.user_env,
+            pass_env=params.pass_env,
+            logger=self._logger,
+        )
         self.module_registry = ConfigLoader().load_config("module_registry.json")
 
     async def fetch_changes(self) -> AsyncGenerator[tuple[dict[str, Any], str], None]:
@@ -57,10 +79,10 @@ class ProjectDBManager(CouchDBHandler):
                         else:
                             # The majority of the tasks will not have a module configured.
                             # If you log this, expect to see many messages!
-                            # logging.warning(f"No module configured for task type '{method}'.")
+                            # self._logger.warning(f"No module configured for task type '{method}'.")
                             pass
                 except Exception as e:  # noqa: F841
-                    # logging.error(f"Error processing change: {e}")
+                    # self._logger.error(f"Error processing change: {e}")
                     pass
 
     async def get_changes(
@@ -106,43 +128,18 @@ class ProjectDBManager(CouchDBHandler):
                 if last_processed_seq is not None:
                     Ygg.save_last_processed_seq(last_processed_seq)
                 else:
-                    logging.warning(
+                    self._logger.warning(
                         "Received `None` for last_processed_seq. Skipping save."
                     )
 
                 if doc is not None:
                     yield doc
                 else:
-                    logging.warning(f"Document with ID {change['id']} is None.")
+                    self._logger.warning(f"Document with ID {change['id']} is None.")
             except Exception as e:
-                logging.warning(f"Error processing change: {e}")
-                logging.debug(f"Data causing the error: {change}")
-
-    def fetch_document_by_id(self, doc_id) -> dict[str, Any] | None:
-        """Fetches a document from the database by its ID.
-
-        Args:
-            doc_id (str): The ID of the document to fetch.
-
-        Returns:
-            Optional[Dict[str, Any]]: The retrieved document, or None if not found.
-        """
-        try:
-            document = self.server.get_document(
-                db=self.db_name, doc_id=doc_id
-            ).get_result()
-            if isinstance(document, dict):
-                return document
-            logging.warning("Unexpected non-dict response when fetching %s", doc_id)
-            return None
-        except ApiException as e:
-            if e.code == 404:
-                logging.error(f"Document '{doc_id}' not found in the database.")
-                return None
-            logging.error(
-                f"Cloudant API error fetching '{doc_id}': {e.code} {e.message}"
-            )
-            return None
-        except Exception as e:
-            logging.error(f"Error while accessing database: {e}")
-            return None
+                self._logger.warning(f"Error processing change: {e}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")
+                self._logger.debug(f"Data causing the error: {change}")

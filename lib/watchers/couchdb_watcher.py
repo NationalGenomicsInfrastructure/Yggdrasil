@@ -1,12 +1,30 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, Callable, Optional
+import warnings
+from collections.abc import AsyncIterable, Callable
+from typing import Any
 
+from lib.core_utils.event_types import EventType
+from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
 
 
 class CouchDBWatcher(AbstractWatcher):
     """
+    DEPRECATED: Use CouchDBBackend with WatcherManager instead.
+
+    This class is maintained for backward compatibility but will be
+    removed in a future version. Migrate to WatchSpec-based watching:
+
+        WatchSpec(
+            backend="couchdb",
+            connection="<connection_name>",
+            event_type=EventType.COUCHDB_DOC_CHANGED,
+            filter_expr={...},
+            ...
+        )
+
+    Legacy behavior:
     A concrete watcher that polls a CouchDB 'fetch_changes' asynchronous generator
     and emits YggdrasilEvent objects for each change detected.
 
@@ -27,10 +45,10 @@ class CouchDBWatcher(AbstractWatcher):
         self,
         on_event: Callable[[YggdrasilEvent], None],
         changes_fetcher: Callable[[], AsyncIterable[tuple[Any, Any]]],
-        event_type: str = "document_change",
+        event_type: EventType = EventType.COUCHDB_DOC_CHANGED,
         poll_interval: float = 5,
         name: str = "CouchDBWatcher",
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
     ):
         """
         Args:
@@ -41,17 +59,24 @@ class CouchDBWatcher(AbstractWatcher):
             name: Identifier for logging purposes.
             logger: Optional logger instance. Defaults to named logger.
         """
+        warnings.warn(
+            "CouchDBWatcher is deprecated. Use CouchDBBackend with WatcherManager "
+            "and WatchSpec instead. See realm authoring guide for migration.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(on_event, event_type, name)
         self.changes_fetcher = changes_fetcher
         self.poll_interval = poll_interval
         self.name = name
-        self._logger = logger or logging.getLogger(self.name)
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
 
     async def start(self):
         """
         Start polling the CouchDB changes feed via 'changes_fetcher' in
-        a loop. For each (doc_data, module_loc) yielded, emit a 'document_change'
-        event. If '_running' is set to False, polling stops gracefully.
+        a loop. For each (doc_data, module_loc) yielded, emit a
+        COUCHDB_DOC_CHANGED event. If '_running' is set to False, polling
+        stops gracefully.
         """
         if self._running:
             return

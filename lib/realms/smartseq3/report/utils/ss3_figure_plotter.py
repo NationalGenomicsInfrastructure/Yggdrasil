@@ -1,3 +1,4 @@
+import logging
 from io import BytesIO
 
 import matplotlib.pyplot as plt
@@ -6,11 +7,17 @@ import pandas as pd
 from lib.core_utils.logging_utils import custom_logger
 from lib.realms.smartseq3.report.utils.bivariate_plate_map import BivariatePlateMap
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class SS3FigurePlotter:
-    def __init__(self, platename, data, outdir):
+    def __init__(
+        self,
+        platename,
+        data,
+        outdir,
+        logger: logging.Logger | None = None,
+    ):
         """
         Initialize the SS3Plotter with necessary data and output configurations.
 
@@ -19,6 +26,7 @@ class SS3FigurePlotter:
             outdir (str): Directory path where the plots will be saved.
             platename (str): Name of the plate or sample used in plot titles or filenames.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.data = data
         self.outdir = outdir
         self.platename = platename
@@ -70,9 +78,9 @@ class SS3FigurePlotter:
         plot = plate_map.generate_plot()
 
         if plot:
-            logging.info(f"Generated bivariate plate map for {self.platename}.")
+            self._logger.info(f"Generated bivariate plate map for {self.platename}.")
         else:
-            logging.error(
+            self._logger.error(
                 f"Failed to generate bivariate plate map for {self.platename}."
             )
 
@@ -162,4 +170,5 @@ class SS3FigurePlotter:
         else:
             # Save the plot to a file
             plt.savefig(f"{self.outdir}/{self.platename}_{fig_num}.pdf")
+            plt.close()
             plt.close()

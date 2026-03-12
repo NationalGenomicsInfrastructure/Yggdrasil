@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 import asyncio
 import logging
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
 

@@ -1,11 +1,12 @@
 import datetime
 import json
+import logging
 
 from reportlab.lib.enums import TA_JUSTIFY
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import (
+from reportlab.platypus import (  # , Image
     ListFlowable,
     ListItem,
     PageBreak,
@@ -13,7 +14,7 @@ from reportlab.platypus import (
     SimpleDocTemplate,
     Spacer,
     Table,
-)  # , Image
+)
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.realms.smartseq3.report.utils.report_utils import (
@@ -24,7 +25,7 @@ from lib.realms.smartseq3.report.utils.report_utils import (
 from lib.realms.smartseq3.report.utils.ss3_data_collector import SS3DataCollector
 from lib.realms.smartseq3.report.utils.ss3_figure_plotter import SS3FigurePlotter
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class Smartseq3ReportGenerator:
@@ -39,13 +40,14 @@ class Smartseq3ReportGenerator:
         data_collector (SS3DataCollector): Collects data for the report.
     """
 
-    def __init__(self, sample):
+    def __init__(self, sample, logger: logging.Logger | None = None):
         """
         Initialize the Smartseq3ReportGenerator with sample information.
 
         Args:
             sample (object): The sample object containing sample data.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.sample = sample
 
         self.style = self._create_report_style()
@@ -79,15 +81,15 @@ class Smartseq3ReportGenerator:
         self.stats = self.data_collector.collect_stats()
 
         if self.stats is None or self.stats.empty:
-            logging.error("No statistics found. Check manually why that is.")
+            self._logger.error("No statistics found. Check manually why that is.")
             return False
         else:
-            logging.info("Statistics collected.")
-            # logging.debug(self.stats)
+            self._logger.info("Statistics collected.")
+            # self._logger.debug(self.stats)
 
         result = check_high_nan_percentage(self.stats, 10)
         if result:
-            logging.warning(
+            self._logger.warning(
                 f"High number of NaNs detected ({result}%). Double check the given Barcode Set."
             )
             return False
@@ -115,10 +117,10 @@ class Smartseq3ReportGenerator:
         self.uvc_plot = plotter.umi_tagged_vs_count(return_fig=True)
 
         if self.biv_plot and self.rvf_plot and self.uvc_plot:
-            logging.info("Graphs created.")
+            self._logger.info("Graphs created.")
             return True
         else:
-            logging.error("Failed to create graphs.")
+            self._logger.error("Failed to create graphs.")
             return False
 
     def render(self, format="PDF"):
@@ -204,7 +206,7 @@ class Smartseq3ReportGenerator:
 
         report_elements = self._build_report_elements(settings, overview_data)
         doc.build(report_elements)
-        logging.info(f"Created Report at: {self.file_handler.report_fpath}")
+        self._logger.info(f"Created Report at: {self.file_handler.report_fpath}")
 
     def _build_report_elements(self, settings, overview_data):
         """

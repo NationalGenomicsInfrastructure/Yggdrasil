@@ -1,3 +1,5 @@
+import logging
+
 import loompy as lp
 import numpy as np
 import pandas as pd
@@ -6,7 +8,7 @@ from pandas.errors import EmptyDataError
 from lib.core_utils.logging_utils import custom_logger
 from lib.realms.smartseq3.utils.ss3_utils import SS3Utils
 
-logging = custom_logger(__name__.split(".")[-1])
+logger = custom_logger(__name__)
 
 
 class SS3DataCollector:
@@ -33,7 +35,12 @@ class SS3DataCollector:
         save_data(data, path): Saves the DataFrame to a CSV file.
     """
 
-    def __init__(self, file_handler, sample):
+    def __init__(
+        self,
+        file_handler,
+        sample,
+        logger: logging.Logger | None = None,
+    ):
         """
         Initialize the data collector with references to the file handler and sample instance.
 
@@ -41,6 +48,7 @@ class SS3DataCollector:
             file_handler (SampleFileHandler): Instance of SampleFileHandler for file operations.
             sample (SS3Sample): Instance of SS3Sample containing sample information and metadata.
         """
+        self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.sample = sample
         self.file_handler = file_handler
         self.meta = self.sample.metadata
@@ -49,7 +57,7 @@ class SS3DataCollector:
     # def collect_stats(self):
     #     barcode_set = self.meta.get('barcode_set')
     #     if not barcode_set:
-    #         logging.error("Missing barcode_set in metadata. Unable to extract well IDs.")
+    #         self._logger.error("Missing barcode_set in metadata. Unable to extract well IDs.")
     #         # TODO: (FUTURE) Develope an exception handling strategy and raise an exception here (FUTURE)
     #         return None  # Or raise an exception, depending on your error handling strategy
 
@@ -92,29 +100,31 @@ class SS3DataCollector:
         """
         barcode_set = self.meta.get("barcode")
         if not barcode_set:
-            logging.error("Missing barcode in metadata. Unable to extract well IDs.")
+            self._logger.error(
+                "Missing barcode in metadata. Unable to extract well IDs."
+            )
             return None
 
         barcode_lookup = self.config.get("barcode_lookup_path")
         if not barcode_lookup:
-            logging.error("Missing barcode lookup path in config.")
+            self._logger.error("Missing barcode lookup path in config.")
             return None
 
         barcode_well_ids = SS3Utils.extract_well_ids(barcode_set, barcode_lookup)
         if barcode_well_ids is None:
-            logging.error("Well IDs extraction failed.")
+            self._logger.error("Well IDs extraction failed.")
             return None
 
         stat_files = self.file_handler.get_stat_files()
         stats = self._aggr_stats(stat_files, barcode_well_ids)
         if stats is None:
-            logging.error("Aggregating stats failed.")
+            self._logger.error("Aggregating stats failed.")
             return None
 
         counts_loom_file = self.file_handler.get_counts_loom_file()
         counts = self._aggr_umis_from_loom(counts_loom_file["umicount_inex"])
         if counts is None:
-            logging.error("Aggregating UMI counts from loom failed.")
+            self._logger.error("Aggregating UMI counts from loom failed.")
             return None
 
         if (
@@ -122,12 +132,14 @@ class SS3DataCollector:
         ):  # and stats.index.equals(counts.index):
             stats = pd.concat([stats, counts], axis=1)
             if stats.empty:
-                logging.error("Concatenated stats are empty.")
+                self._logger.error("Concatenated stats are empty.")
                 return None
         else:
-            logging.error("Stats and counts have incompatible indices or are empty.")
-            logging.debug(f"Stats Index:\n{stats.index}")
-            logging.debug(f"Counts Index:\n{counts.index}")
+            self._logger.error(
+                "Stats and counts have incompatible indices or are empty."
+            )
+            self._logger.debug(f"Stats Index:\n{stats.index}")
+            self._logger.debug(f"Counts Index:\n{counts.index}")
             return None
 
         # Save new stats to files
@@ -169,13 +181,15 @@ class SS3DataCollector:
             try:
                 stats = pd.read_table(file_path)
             except EmptyDataError:
-                logging.error(f"File is empty or unreadable: {file_path}")
+                self._logger.error(f"File is empty or unreadable: {file_path}")
                 return None
             except ValueError as e:
-                logging.error(f"Error processing file {file_path}: {e}")
+                self._logger.error(f"Error processing file {file_path}: {e}")
                 return None
             except Exception as e:
-                logging.error(f"Unexpected error while reading file {file_path}: {e}")
+                self._logger.error(
+                    f"Unexpected error while reading file {file_path}: {e}"
+                )
                 return None
 
             if file_type == "readspercell":
@@ -223,7 +237,7 @@ class SS3DataCollector:
                     data, stats, how="left", left_index=True, right_index=True
                 )
             except Exception as e:
-                logging.error(f"Error occurred during merge operation: {e}")
+                self._logger.error(f"Error occurred during merge operation: {e}")
                 return None
 
         return data
@@ -275,7 +289,7 @@ class SS3DataCollector:
         try:
             with lp.connect(loom_file_path, validate=False) as umi_loom:
                 # if not hasattr(umi_loom.ca, 'cell_names') or len(umi_loom.ca.cell_names) == 0:
-                #     logging.warning(f"Loom file missing expected data: {loom_file_path}")
+                #     self._logger.warning(f"Loom file missing expected data: {loom_file_path}")
                 #     return pd.DataFrame()  # or return None
 
                 # Get cell barcodes
@@ -292,7 +306,7 @@ class SS3DataCollector:
                         np.asarray(umi_loom[:, cell_idx])
                     )
         except Exception as e:
-            logging.error(f"Error processing loom file {loom_file_path}: {e}")
+            self._logger.error(f"Error processing loom file {loom_file_path}: {e}")
             return None
 
         # NOTE: With only casting "UMI_genes_detected" to int the data is identical to the old method
@@ -361,9 +375,9 @@ class SS3DataCollector:
                     if "zUMIs version" in line:
                         return line.split()[-1].strip()
         except FileNotFoundError:
-            logging.error(f"zUMIs log file not found: {zumis_log_fpath}")
+            self._logger.error(f"zUMIs log file not found: {zumis_log_fpath}")
         except Exception as e:
-            logging.error(f"Error reading zUMIs log file: {e}")
+            self._logger.error(f"Error reading zUMIs log file: {e}")
 
         return "--"
 

@@ -19,7 +19,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     @patch("lib.module_utils.ngi_report_generator.subprocess.run")
     def test_generate_ngi_report_success(self, mock_subprocess_run, mock_configs):
         # Setup configs
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Setup subprocess.run to return success
         mock_subprocess_run.return_value = MagicMock(
@@ -48,7 +48,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     @patch("lib.module_utils.ngi_report_generator.configs")
     def test_generate_ngi_report_missing_activate_env_cmd(self, mock_configs):
         # Configs return None for activate_ngi_cmd
-        mock_configs.get.return_value = None
+        mock_configs.get.return_value = {}
 
         result = generate_ngi_report(
             self.project_path, self.project_id, self.user_name, self.sample_list
@@ -61,7 +61,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_nonzero_returncode(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Simulate subprocess.run returning non-zero exit code
         mock_subprocess_run.return_value = MagicMock(
@@ -80,7 +80,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_subprocess_error(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Simulate subprocess.run raising SubprocessError
         mock_subprocess_run.side_effect = subprocess.SubprocessError(
@@ -96,7 +96,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     @patch("lib.module_utils.ngi_report_generator.configs")
     @patch("lib.module_utils.ngi_report_generator.subprocess.run")
     def test_generate_ngi_report_exception(self, mock_subprocess_run, mock_configs):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Simulate subprocess.run raising a general Exception
         mock_subprocess_run.side_effect = Exception("Unexpected error")
@@ -112,7 +112,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_empty_sample_list(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Setup subprocess.run to return success
         mock_subprocess_run.return_value = MagicMock(
@@ -146,7 +146,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_special_characters(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Setup subprocess.run to return success
         mock_subprocess_run.return_value = MagicMock(
@@ -186,7 +186,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_long_sample_list(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Create a long list of samples
         long_sample_list = [f"sample{i}" for i in range(1000)]
@@ -232,7 +232,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_unicode_characters(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Use Unicode characters in inputs
         unicode_project_path = "/path/to/项目"
@@ -273,7 +273,7 @@ class TestGenerateNgiReport(unittest.TestCase):
     def test_generate_ngi_report_input_injection(
         self, mock_subprocess_run, mock_configs
     ):
-        mock_configs.get.return_value = self.activate_env_cmd
+        mock_configs.get.return_value = {"activate_ngi_cmd": self.activate_env_cmd}
 
         # Attempt to inject additional commands via inputs
         malicious_user_name = "user_name'; rm -rf /; echo '"

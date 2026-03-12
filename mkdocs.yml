@@ -1,0 +1,95 @@
+site_name: Yggdrasil
+site_author: National Genomics Infrastructure - maintained by Anastasios Glaros (@glrs)
+site_description: Automate anything with traceable plans and reproducible runs.
+site_url: https://nationalgenomicsinfrastructure.github.io/Yggdrasil/
+
+repo_url: https://github.com/NationalGenomicsInfrastructure/Yggdrasil
+repo_name: NationalGenomicsInfrastructure/Yggdrasil
+edit_uri: edit/dev/docs/
+
+theme:
+  name: material
+  logo: assets/ygg_logo-dark_mode.png
+  favicon: assets/ygg_logo-dark_mode.png
+  features:
+    - content.action.edit
+    - content.code.copy
+    - navigation.instant
+    - navigation.instant.preview
+    - navigation.top
+    - toc.follow
+    - toc.integrate
+    #  - navigation.path    # Enables breadcrumbs
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-sunny 
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+
+docs_dir: docs
+site_dir: site
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quickstart: getting_started/quickstart.md
+      - CLI: getting_started/cli.md
+      - Configuration: getting_started/configuration.md
+  - Architecture:
+      - Overview: architecture/overview.md
+  - Flow API:
+      - Overview: flow_api/overview.md
+  - Realm authoring:
+      - Guide: realm_authoring/guide.md
+      - Cookbook: realm_authoring/cookbook.md
+  - Reference:
+      - Glossary: reference/glossary.md
+      - Test realm: reference/test_realm.md
+      - Troubleshooting: reference/troubleshooting.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/NationalGenomicsInfrastructure/Yggdrasil
+  analytics:
+    provider: google
+    property: G-Q6VQF8G4VX
+
+markdown_extensions:
+  - attr_list
+  - md_in_html
+  - admonition
+  - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+
+exclude_docs: |
+  !.assets
+  /TECH_DEBT_LEDGER.md
+  /BACKLOG.md
+  /GENSTAT_PLAN_CONTRACT.md
+  /design/**
+  /diagrams/**
+  /assets/README.md

@@ -8,6 +8,18 @@ from lib.watchers.couchdb_watcher import CouchDBWatcher
 
 
 class TestCouchDBWatcher(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Set up class-level resources."""
+        # Store original event loop policy
+        cls.original_event_loop_policy = asyncio.get_event_loop_policy()
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up class-level resources and reset event loop state."""
+        # Reset to default event loop policy for subsequent tests
+        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
     def setUp(self):
         # Create a fresh event loop for each test
         self.loop = asyncio.new_event_loop()
@@ -47,7 +59,7 @@ class TestCouchDBWatcher(unittest.TestCase):
                 self.log_list.append(record.getMessage())
 
         # Attach the handler
-        self.logger = logging.getLogger("ProjectDBTest")
+        self.logger = self.watcher._logger
         self.logger.setLevel(logging.DEBUG)
         self.handler = CaptureHandler(self.log_output)
         self.logger.addHandler(self.handler)
