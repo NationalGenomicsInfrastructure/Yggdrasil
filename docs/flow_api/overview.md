@@ -155,7 +155,8 @@ A planner is a `BaseHandler` subclass — not just any object implementing `gene
    - Creates `<plan_dir>/<step_id>/` workdir
    - Computes fingerprint from params + input file digests
    - Checks `success.fingerprint` — **skips** if unchanged (cache hit)
-   - Dynamically imports `fn_ref` and calls it
+   - Resolves `fn_ref`; **raises `ValueError`** immediately if the callable is not `@step`-decorated (guard against silent loss of lifecycle events)
+   - Calls the resolved function with the constructed `StepContext` and coerced params
    - On success: writes `success.fingerprint`, emits `step.succeeded`
    - On failure: emits `step.failed`, aborts remaining steps
 

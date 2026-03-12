@@ -16,7 +16,7 @@ from yggdrasil.core.engine import (
 )
 from yggdrasil.flow.events.emitter import EventEmitter
 from yggdrasil.flow.model import Artifact, Plan, StepResult, StepSpec
-from yggdrasil.flow.step import StepContext
+from yggdrasil.flow.step import StepContext, step
 
 
 class TestUtilityFunctions(unittest.TestCase):
@@ -559,6 +559,7 @@ class TestEngine(unittest.TestCase):
         """Test running a plan with a single step."""
 
         # Create a test step function
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
@@ -591,6 +592,7 @@ class TestEngine(unittest.TestCase):
     def test_run_multiple_step_plan(self):
         """Test running a plan with multiple steps."""
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
@@ -619,6 +621,7 @@ class TestEngine(unittest.TestCase):
         """Test that step receives correct parameters."""
         received_params = {}
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             received_params.update(kwargs)
             return StepResult()
@@ -650,6 +653,7 @@ class TestEngine(unittest.TestCase):
     def test_cache_skip_on_matching_fingerprint(self):
         """Test that step is skipped when fingerprint matches cache."""
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
@@ -681,6 +685,7 @@ class TestEngine(unittest.TestCase):
         """Test that cache is invalidated when params change."""
         execution_count = [0]
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             execution_count[0] += 1
             return StepResult()
@@ -721,6 +726,7 @@ class TestEngine(unittest.TestCase):
     def test_fingerprint_file_creation(self):
         """Test that success.fingerprint file is created."""
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             return StepResult()
 
@@ -751,6 +757,7 @@ class TestEngine(unittest.TestCase):
         """Test that step receives properly configured StepContext."""
         received_context = {}
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             received_context["realm"] = ctx.realm
             received_context["plan_id"] = ctx.plan_id
@@ -783,6 +790,7 @@ class TestEngine(unittest.TestCase):
         """Test that step context uses engine's emitter."""
         received_emitter = {}
 
+        @step
         def test_step(ctx: StepContext, **kwargs) -> StepResult:
             received_emitter["emitter"] = ctx.emitter
             return StepResult()
@@ -823,11 +831,45 @@ class TestEngine(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.engine.run(plan)
 
+    def test_run_raises_for_undecorated_step(self):
+        """Engine must reject plain (non-@step) callables to prevent silent loss of lifecycle events."""
+
+        def plain_fn(ctx: StepContext, **kwargs) -> StepResult:
+            return StepResult()
+
+        # plain_fn has no _step_name — it is NOT decorated with @step
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=plain_fn):
+            plan = Plan(
+                plan_id="plan_undecorated",
+                realm="test",
+                scope={},
+                steps=[
+                    StepSpec(
+                        step_id="s_plain",
+                        name="plain_step",
+                        fn_ref="some.module:plain_fn",
+                        params={},
+                    )
+                ],
+            )
+
+            with self.assertRaises(ValueError) as cm:
+                self.engine.run(plan)
+
+        err = str(cm.exception)
+        self.assertIn("s_plain", err)
+        self.assertIn("some.module:plain_fn", err)
+        self.assertIn("@step", err)
+
     def test_run_logs_warning_for_non_stepresult_return(self):
         """Test that engine logs warning for incorrect return type."""
 
         def bad_step(ctx: StepContext, **kwargs):
             return "not a StepResult"
+
+        bad_step._step_name = (
+            "bad_step"  # satisfies guard; NOT @step so return hits engine warning
+        )
 
         with patch("yggdrasil.core.engine.resolve_callable", return_value=bad_step):
             with patch.object(self.engine, "_logger") as mock_logger:
@@ -850,6 +892,7 @@ class TestEngine(unittest.TestCase):
     def test_complete_workflow_execution(self):
         """Test complete workflow with artifacts and metrics."""
 
+        @step
         def step1(ctx: StepContext, **kwargs) -> StepResult:
             output = ctx.workdir / "step1_output.txt"
             output.write_text("step1 result", encoding="utf-8")
@@ -858,6 +901,7 @@ class TestEngine(unittest.TestCase):
                 metrics={"processed": 100},
             )
 
+        @step
         def step2(ctx: StepContext, input_path: str, **kwargs) -> StepResult:
             output = ctx.workdir / "step2_output.txt"
             output.write_text("step2 result", encoding="utf-8")
@@ -924,6 +968,7 @@ class TestEngineTypingCoercion(unittest.TestCase):
         """Test that string parameters are coerced to Path objects."""
         received_params = {}
 
+        @step
         def step_fn(ctx: StepContext, input_path: Path, **kwargs) -> StepResult:
             received_params["input_path"] = input_path
             return StepResult(artifacts=[])
@@ -956,6 +1001,7 @@ class TestEngineTypingCoercion(unittest.TestCase):
         """Test that non-Path parameters are not modified."""
         received_params = {}
 
+        @step
         def step_fn(ctx: StepContext, count: int, name: str, **kwargs) -> StepResult:
             received_params["count"] = count
             received_params["name"] = name
@@ -989,6 +1035,7 @@ class TestEngineTypingCoercion(unittest.TestCase):
         """Test that mixed parameter types are handled correctly."""
         received_params = {}
 
+        @step
         def step_fn(
             ctx: StepContext, input_file: Path, output_dir: Path, count: int, **kwargs
         ) -> StepResult:
@@ -1030,6 +1077,7 @@ class TestEngineTypingCoercion(unittest.TestCase):
         """Test that Path objects in params are preserved."""
         received_params = {}
 
+        @step
         def step_fn(ctx: StepContext, file_path: Path, **kwargs) -> StepResult:
             received_params["file_path"] = file_path
             return StepResult(artifacts=[])
@@ -1064,10 +1112,13 @@ class TestEngineTypingCoercion(unittest.TestCase):
     def test_fingerprint_includes_path_params(self):
         """Test that fingerprints include path parameters correctly."""
 
+        @step
         def step_fn(ctx: StepContext, input_path: Path, **kwargs) -> StepResult:
             return StepResult(artifacts=[])
 
-        step_fn._input_keys = {"input_path"}
+        step_fn._input_keys = (
+            "input_path",
+        )  # override @step default to drive fingerprinting
 
         # First execution
         plan1 = Plan(
@@ -1126,6 +1177,7 @@ class TestEngineTypingCoercion(unittest.TestCase):
         """Test that functions without type annotations work correctly."""
         received_params = {}
 
+        @step
         def step_fn(ctx, **kwargs):  # No type annotations
             received_params["params"] = kwargs
             return StepResult(artifacts=[])
@@ -1159,6 +1211,7 @@ class TestEngineTypingCoercion(unittest.TestCase):
 
         received_params = {}
 
+        @step
         def step_fn(
             ctx: StepContext, config_path: Path | None = None, **kwargs
         ) -> StepResult:
