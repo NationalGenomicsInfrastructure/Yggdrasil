@@ -161,6 +161,12 @@ class Engine:
             step_dir.mkdir(parents=True, exist_ok=True)
 
             fn = resolve_callable(spec.fn_ref)
+            if not hasattr(fn, "_step_name"):
+                raise ValueError(
+                    f"Undecorated step function detected for step '{spec.step_id}' "
+                    f"(fn_ref='{spec.fn_ref}'). "
+                    f"Decorate it with '@step' from 'yggdrasil.flow.step'."
+                )
             _lint_missing_inputs(spec, fn)
 
             run_id = _new_run_id()
