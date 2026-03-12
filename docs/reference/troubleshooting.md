@@ -113,9 +113,8 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 
 ---
 
-## (TODO) Step execution failures
+## Step execution failures
 
-"""
 ### `ModuleNotFoundError` or `AttributeError` for `fn_ref`
 
 **Symptom:** Step fails with `cannot import name 'run_foo' from 'my_realm.steps'`
@@ -124,7 +123,25 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 - The `fn_ref` in your `StepSpec` must be a valid dotted Python path to a `@step`-decorated function
 - The function must exist and be importable in the daemon's Python environment
 - Check for typos in the module path
-"""
+
+### `ValueError` — undecorated step function
+
+**Symptom:** Plan execution raises:
+```
+ValueError: Undecorated step function detected for step '<step_id>' (fn_ref='<fn_ref>'). Decorate it with '@step' from 'yggdrasil.flow.step'.
+```
+
+**Explanation:** The Engine validates every resolved callable before execution. If `fn_ref` resolves to a plain function missing the `@step` decorator, the plan is aborted immediately. This prevents silent loss of lifecycle events (`step.started`, `step.succeeded`, `step.failed`) — which `@step` is responsible for emitting.
+
+**Resolution:** Decorate the function with `@step`:
+```python
+from yggdrasil.flow.step import step
+from yggdrasil.flow.model import StepContext, StepResult
+
+@step                     # required
+def my_step(ctx: StepContext, **params) -> StepResult:
+    ...
+```
 
 ---
 
