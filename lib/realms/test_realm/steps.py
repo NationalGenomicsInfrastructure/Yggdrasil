@@ -11,6 +11,11 @@ These steps are designed for testing the Yggdrasil execution pipeline:
 NOTE: These steps are synchronous (def, not async def) because the
 Engine.run() method is synchronous. Using async def would return
 unawaited coroutines.
+
+All step functions are decorated with @step so that the Engine emits
+step.started, step.succeeded (with metrics/artifacts), and step.failed
+lifecycle events automatically. Exceptions still bubble up so the Engine
+stops the plan on failure.
 """
 
 import random
@@ -19,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from yggdrasil.flow.model import StepResult
-from yggdrasil.flow.step import StepContext
+from yggdrasil.flow.step import StepContext, step
 
 
 class _SimpleRef:
@@ -36,6 +41,7 @@ class _SimpleRef:
         return scope_dir / self.key_val
 
 
+@step
 def step_echo(ctx: StepContext, message: str = "Hello from test realm") -> StepResult:
     """
     Simple echo step that emits a message and succeeds.
@@ -51,6 +57,7 @@ def step_echo(ctx: StepContext, message: str = "Hello from test realm") -> StepR
     return StepResult(metrics={"echoed_message": message})
 
 
+@step
 def step_sleep(ctx: StepContext, duration_sec: float = 1.0) -> StepResult:
     """
     Sleep step for simulating long-running operations.
@@ -79,6 +86,7 @@ def step_sleep(ctx: StepContext, duration_sec: float = 1.0) -> StepResult:
     return StepResult(metrics={"slept_seconds": duration_sec})
 
 
+@step
 def step_fail(
     ctx: StepContext, error_message: str = "Intentional failure"
 ) -> StepResult:
@@ -96,6 +104,7 @@ def step_fail(
     raise RuntimeError(error_message)
 
 
+@step
 def step_write_file(
     ctx: StepContext,
     filename: str = "test_output.txt",
@@ -129,6 +138,7 @@ def step_write_file(
     )
 
 
+@step
 def step_random_fail(
     ctx: StepContext,
     failure_probability: float = 0.5,
@@ -167,6 +177,7 @@ def step_random_fail(
     )
 
 
+@step
 def step_fetch_from_db(
     ctx: StepContext,
     connection: str = "yggdrasil_db",
@@ -208,6 +219,7 @@ def step_fetch_from_db(
     return StepResult(metrics={"status": "found", "doc_id": doc_id, "doc": doc})
 
 
+@step
 def step_expect_denied(
     ctx: StepContext,
     connection: str = "projects_db",
@@ -262,6 +274,7 @@ def step_expect_denied(
         )
 
 
+@step
 def step_exercise_all_fetch_methods(
     ctx: StepContext,
     connection: str = "yggdrasil_db",
@@ -341,6 +354,7 @@ def step_exercise_all_fetch_methods(
     return StepResult(metrics={"all_fetch_methods": results})
 
 
+@step
 def step_verify_limit_clamping(
     ctx: StepContext,
     connection: str = "yggdrasil_db_clamped",
@@ -408,6 +422,49 @@ def step_verify_limit_clamping(
     )
 
 
+@step
+def step_emit_metadata(
+    ctx: StepContext,
+    scenario: dict | None = None,
+    ref_doc: dict | None = None,
+) -> StepResult:
+    """
+    Emit structured metadata that was baked into the plan during generate_plan_draft.
+
+    Used by two patterns:
+
+    **metadata_harvest** — ``scenario`` carries domain fields harvested from the
+    triggering document (e.g. input_path, mode, priority, sample_id, flags).
+    The handler extracted these at plan-generation time and baked them as a
+    structured dict into ``StepSpec.params``.  This step emits them so they
+    are visible in the execution record.
+
+    **data_fetch_plan** — ``ref_doc`` carries the structured result of an async
+    CouchDB fetch performed during planning (doc_id, message, value, missing).
+    Emitting it here proves in the event log that the data was resolved before
+    execution started.
+
+    Args:
+        ctx: Step execution context.
+        scenario: Domain metadata dict harvested from the triggering document.
+        ref_doc: Structured result of a plan-time CouchDB fetch.
+
+    Returns:
+        StepResult with whichever of scenario/ref_doc was provided in metrics.
+    """
+    metrics: dict[str, Any] = {}
+
+    if scenario is not None:
+        ctx.emit("step.metadata_harvested", **scenario)
+        metrics["scenario"] = scenario
+
+    if ref_doc is not None:
+        ctx.emit("step.ref_doc_echoed", **ref_doc)
+        metrics["ref_doc"] = ref_doc
+
+    return StepResult(metrics=metrics)
+
+
 # ---------------------------------------------------------------------------
 # Step registry for fn_ref resolution
 # ---------------------------------------------------------------------------
@@ -422,6 +479,7 @@ STEPS: dict[str, Any] = {
     "step_expect_denied": step_expect_denied,
     "step_exercise_all_fetch_methods": step_exercise_all_fetch_methods,
     "step_verify_limit_clamping": step_verify_limit_clamping,
+    "step_emit_metadata": step_emit_metadata,
 }
 
 

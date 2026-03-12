@@ -278,7 +278,7 @@ def long_running(
             step_id="long_sleep",
             name="Long Sleep",
             fn_name="step_sleep",
-            params={"duration_sec": 30.0},  # Default 30s, override for shorter tests
+            params={"duration_sec": 30.0},  # Default 30s, override to change duration
             deps=["echo_start"],
         ),
         _make_step(
@@ -362,39 +362,113 @@ def artifact_write(
 # ---------------------------------------------------------------------------
 
 
-def data_fetch_plan_steps(fetched_message: str) -> list[StepSpec]:
+def data_fetch_plan_steps(ref_dict: dict) -> list[StepSpec]:
     """
     Generate steps for the data_fetch_plan scenario.
 
     This function is NOT in the RECIPES registry because it requires the
-    already-fetched message to be passed in at plan-generation time. The handler
-    fetches the reference document during generate_plan_draft() and then calls
-    this function so the fetched content is baked into the step params.
+    already-fetched reference data to be passed in at plan-generation time.
+    The handler performs an async CouchDB fetch during ``generate_plan_draft``
+    and then calls this function so the result is baked into the step params
+    as a **structured dict** — not a formatted string.
 
     The resulting plan therefore carries observable proof that the CouchDB
-    fetch happened at planning time: the echo_fetched step's message param
-    contains the value from the reference document.
+    fetch happened at planning time: ``echo_fetched.params["ref_doc"]``
+    contains the structured doc snapshot with ``doc_id``, ``message``,
+    ``value``, and ``missing`` (or ``error``/``error_type`` on failure).
 
     Args:
-        fetched_message: The content retrieved from CouchDB during planning.
-            Baked verbatim into the echo_fetched step's message param.
+        ref_dict: Structured result from the plan-time CouchDB fetch.
+            Shape on success:  ``{"doc_id": "...", "message": "...", "value": 13, "missing": False}``
+            Shape when absent: ``{"doc_id": "...", "missing": True}``
+            Shape on error:    ``{"doc_id": "...", "error": "...", "error_type": "..."}``
 
     Returns:
-        List of StepSpec with fetched data embedded in params
+        List of StepSpec with fetched data embedded in params as a structured dict.
     """
+    doc_id = ref_dict.get("doc_id", "?")
+    is_error = "error" in ref_dict
+    is_missing = ref_dict.get("missing", False)
+
+    if is_error:
+        confirm_message = (
+            f"Plan-time fetch of {doc_id!r} failed — error baked into plan params"
+        )
+    elif is_missing:
+        confirm_message = (
+            f"Plan-time fetch of {doc_id!r}: doc not found — recorded in plan params"
+        )
+    else:
+        confirm_message = (
+            f"Plan-time fetch of {doc_id!r} succeeded — ref_doc baked into plan params"
+        )
+
     return [
         _make_step(
             step_id="echo_fetched",
             name="Echo Plan-Time Fetch",
-            fn_name="step_echo",
-            params={"message": fetched_message},
+            fn_name="step_emit_metadata",
+            params={"ref_doc": ref_dict},
         ),
         _make_step(
             step_id="echo_confirm",
             name="Confirm Plan-Time Fetch",
             fn_name="step_echo",
-            params={"message": "Plan-time CouchDB fetch baked into this plan!"},
+            params={"message": confirm_message},
             deps=["echo_fetched"],
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Recipe: metadata_harvest  (planning-time — called from handler, not registry)
+# ---------------------------------------------------------------------------
+
+
+def metadata_harvest_steps(scenario: dict) -> list[StepSpec]:
+    """
+    Generate steps for the metadata_harvest scenario.
+
+    This function is NOT in the RECIPES registry because it requires metadata
+    extracted from the triggering document to be passed in at plan-generation
+    time.  The handler harvests domain fields (``input_path``, ``mode``,
+    ``priority``, ``sample_id``, ``flags``) from the scenario doc during
+    ``generate_plan_draft`` and calls this function so the metadata is baked
+    as a **structured dict** into ``StepSpec.params``.
+
+    This demonstrates the "real realm" pattern: handlers map domain-document
+    fields into step params rather than baking them as opaque strings.  The
+    resulting plan record documents exactly what metadata drove the run.
+
+    Args:
+        scenario: Dict of domain metadata fields harvested from the scenario
+            document (e.g. ``input_path``, ``mode``, ``priority``,
+            ``sample_id``, ``flags``).
+
+    Returns:
+        List of StepSpec with harvested metadata embedded in params as a
+        structured dict.
+    """
+    return [
+        _make_step(
+            step_id="emit_metadata",
+            name="Emit Harvested Metadata",
+            fn_name="step_emit_metadata",
+            params={"scenario": scenario},
+        ),
+        _make_step(
+            step_id="echo_confirm",
+            name="Confirm Metadata Harvested",
+            fn_name="step_echo",
+            params={
+                "message": (
+                    f"Metadata harvest complete — "
+                    f"sample_id={scenario.get('sample_id', '?')!r}, "
+                    f"mode={scenario.get('mode', '?')!r}, "
+                    f"priority={scenario.get('priority', '?')}"
+                )
+            },
+            deps=["emit_metadata"],
         ),
     ]
 

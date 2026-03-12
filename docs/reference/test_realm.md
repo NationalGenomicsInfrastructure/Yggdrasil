@@ -21,19 +21,39 @@ Each scenario below shows:
 - **Expected behavior**: What should happen
 
 Available recipes:
+
+Standard recipes (selected via `"recipe"` field, in RECIPES registry):
 - **happy_path**: All steps succeed (echo_start → brief_sleep(0.5s) → echo_end)
 - **random_fail**: Probabilistic failure (50% chance by default) - tests retry logic
 - **fail_fast**: First step always fails
 - **fail_mid_plan**: Succeeds initially (echo → sleep), then fails mid-execution
 - **long_running**: Extended sleep (30s default) for testing responsiveness
 - **artifact_write**: Creates files and registers artifacts
+- **data_fetch_exec**: Fetches a CouchDB doc at *execution time* inside the step
+- **data_access_denied**: Verifies DataAccess correctly rejects unauthorized connections
+- **data_fetch_all_methods**: Exercises every CouchDBReadClient read method
+- **data_verify_limit_clamping**: Confirms `find()` results are clamped by `policy.max_limit`
+
+Planning-time recipes (handler processes the doc before building steps; not in RECIPES registry):
+- **data_fetch_plan**: Async-fetches a CouchDB doc *during planning*; bakes the result as a structured `ref_doc` dict into step params.
+- **metadata_harvest**: Extracts domain fields (`input_path`, `mode`, `priority`, `sample_id`, `flags`) from the scenario doc; bakes them as a structured `scenario` dict into step params.
 
 Available steps (for custom mode):
+
+> All test realm steps are decorated with `@step`, so lifecycle events (`step.started`,
+> `step.succeeded`, `step.failed`) are emitted automatically by the decorator. Exceptions
+> still bubble up so the Engine stops the plan on failure.
+
 - **step_echo**: Echo message (params: `message`)
 - **step_sleep**: Configurable sleep with progress events (params: `duration_sec`)
 - **step_fail**: Always fails (params: `error_message`)
 - **step_random_fail**: Probabilistic failure (params: `failure_probability`, `success_message`, `failure_message`)
 - **step_write_file**: Write file to workdir (params: `filename`, `content`)
+- **step_fetch_from_db**: Fetch a CouchDB document at execution time (params: `connection`, `doc_id`)
+- **step_expect_denied**: Assert that DataAccess correctly rejects a restricted connection (params: `connection`)
+- **step_exercise_all_fetch_methods**: Exercise every CouchDBReadClient read method in one step (params: `connection`, `doc_id`, `selector_type`)
+- **step_verify_limit_clamping**: Assert that `find()` results are clamped to `policy.max_limit` (params: `connection`, `selector_type`, `request_limit`, `expected_max`)
+- **step_emit_metadata**: Emit structured metadata baked into the plan at planning time (params: `scenario` dict and/or `ref_doc` dict)
 
 ---
 
@@ -521,6 +541,94 @@ Available steps (for custom mode):
 
 ---
 
+## Scenario 15: Metadata Harvest (Planning-Time)
+
+**Purpose**: Demonstrate the real-realm pattern — handler harvests domain fields from the triggering document and bakes them as a structured dict into `StepSpec.params` at plan-generation time.
+
+**Key distinction from overrides**: The handler *reads and maps* fields from the doc into a clean `scenario` dict; the plan record contains structured data, not a formatted string.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:metadata_harvest",
+  "type": "ygg_test_scenario",
+  "recipe": "metadata_harvest",
+  "name": "Metadata Harvest Demo",
+  "description": "Harvest domain fields at plan-generation time and bake into step params",
+  "auto_run": true,
+  "input_path": "/data/sequencing/run_20260312/sample_001.fastq.gz",
+  "mode": "full_analysis",
+  "priority": 2,
+  "sample_id": "SAMPLE-001",
+  "flags": ["paired_end", "quality_filter"]
+}
+```
+
+**Expected**:
+- Handler extracts `input_path`, `mode`, `priority`, `sample_id`, `flags` from the doc
+- These are baked as `params={"scenario": {...}}` into the first step of the plan
+- Inspecting the plan record in `yggdrasil_plans` shows the structured `scenario` dict
+- `emit_metadata` step emits `step.metadata_harvested` event with the harvested fields
+- `echo_confirm` step logs a friendly summary (sample_id, mode, priority)
+
+**Verify plan params after insertion**:
+```bash
+curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:metadata_harvest | \
+  jq '.steps[] | select(.step_id == "emit_metadata") | .params.scenario'
+# Expected output:
+# {
+#   "input_path": "/data/sequencing/run_20260312/sample_001.fastq.gz",
+#   "mode": "full_analysis",
+#   "priority": 2,
+#   "sample_id": "SAMPLE-001",
+#   "flags": ["paired_end", "quality_filter"]
+# }
+```
+
+---
+
+## Scenario 16: Plan-Time Data Fetch (Structured Dict)
+
+**Purpose**: Demonstrate plan-time CouchDB fetch where the result is baked into step params as a **structured dict** (`ref_doc`), not a formatted string. The plan record is self-documenting: it contains the exact doc snapshot that drove the run.
+
+**Requires**: A document `data_access_test:reference_doc` in the `yggdrasil` database, and `yggdrasil_db` listed as an allowed connection for `test_realm` in the DataAccess config.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_fetch_plan_structured",
+  "type": "ygg_test_scenario",
+  "recipe": "data_fetch_plan",
+  "name": "Plan-Time Fetch (Structured)",
+  "description": "Fetch reference doc during planning; result baked as structured dict in plan params",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- Handler calls `await ctx.data.couchdb("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_draft`
+- Result is a structured dict: `{"doc_id": "...", "message": "...", "value": 13, "missing": false}`
+- Dict is baked into `echo_fetched.params["ref_doc"]` — visible in the persisted plan record
+- `echo_fetched` step emits `step.ref_doc_echoed` event with the dict fields
+- `echo_confirm` step logs a friendly message stating fetch succeeded
+- If the doc is missing: `ref_doc = {"doc_id": "...", "missing": true}` — plan still created
+- If DataAccessError: `ref_doc = {"doc_id": "...", "error": "...", "error_type": "..."}` — plan still created
+
+**Verify plan params after insertion**:
+```bash
+curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:data_fetch_plan_structured | \
+  jq '.steps[] | select(.step_id == "echo_fetched") | .params.ref_doc'
+# Expected output (success case):
+# {
+#   "doc_id": "data_access_test:reference_doc",
+#   "message": "Reference document for DataAccess testing",
+#   "value": 13,
+#   "missing": false
+# }
+```
+
+---
+
 ## How to Insert Scenarios
 
 ### Via `curl` (local CouchDB):
@@ -701,6 +809,8 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 | Isolated Random | Custom steps | ✓ | <50ms | Pure random 50/50 outcome |
 | Parallel Chaos | Custom steps | ✓ | <1s | 3 parallel random (34% all succeed) |
 | Artifact with Chaos | Custom steps | ✓ | <1s | Artifact + 50% failure |
+| Metadata Harvest | metadata_harvest | ✓ | <50ms | Domain fields baked as structured dict in plan params |
+| Plan-Time Fetch (Structured) | data_fetch_plan | ✓ | <1s | CouchDB ref doc baked as structured dict in plan params |
 
 ---
 
@@ -726,7 +836,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 **Custom steps not working:**
 - Verify `steps` is an array of dicts
 - Each step must have `step_id` and `fn_name`
-- Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`
+- Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`, `step_fetch_from_db`, `step_expect_denied`, `step_exercise_all_fetch_methods`, `step_verify_limit_clamping`, `step_emit_metadata`
 - Check deps refer to existing step_id values
 
 For broader troubleshooting (CouchDB connectivity, config errors, realm discovery, DataAccess), see [troubleshooting.md](troubleshooting.md).
