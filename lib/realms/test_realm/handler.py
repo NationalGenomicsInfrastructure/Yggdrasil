@@ -10,15 +10,15 @@ from typing import Any, ClassVar, cast
 
 from lib.core_utils.event_types import EventType
 from lib.core_utils.logging_utils import custom_logger
-from lib.handlers.base_handler import BaseHandler
 from lib.realms.test_realm.recipes import (
     RECIPES,
     data_fetch_plan_steps,
     get_recipe,
     metadata_harvest_steps,
 )
+from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.model import Plan
-from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
+from yggdrasil.flow.planner import PlanDraft, PlanningContext
 
 
 class TestRealmHandler(BaseHandler):
