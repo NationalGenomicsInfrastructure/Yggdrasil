@@ -178,6 +178,7 @@ def run_pipeline(ctx: StepContext, config_file: str, threads: int = 4) -> StepRe
 | `run_mode` | `str` | `"auto"` or `"manual"` |
 | `fingerprint` | `str` | SHA-256 fingerprint for this run |
 | `run_id` | `str` | Unique run ID |
+| `data` | `DataAccess` | Injected DataAccess object for CouchDB reads (use blocking API: `ctx.data.couchdb(conn).get_blocking(id)`) |
 
 ---
 
@@ -248,34 +249,128 @@ from my_realm.recipes import standard_pipeline
 steps = standard_pipeline(item_id=doc["_id"], config=doc["config"])
 ```
 
+**Metadata harvest pattern** — when domain metadata from the triggering doc should be baked into plan params as a structured dict (so the plan record is self-documenting):
+
+```python
+# my_realm/recipes.py
+
+def analysis_pipeline(scenario: dict) -> list[StepSpec]:
+    """Recipe that carries harvested doc metadata as a structured dict."""
+    return [
+        StepSpec(
+            step_id="run_analysis",
+            fn_ref=f"{_PREFIX}.run_analysis",
+            params={"scenario": scenario},   # structured dict, not a string
+        ),
+        StepSpec(
+            step_id="report",
+            fn_ref=f"{_PREFIX}.run_reporter",
+            params={"sample_id": scenario["sample_id"]},
+            deps=["run_analysis"],
+        ),
+    ]
+```
+
+```python
+# my_realm/handler.py
+
+async def generate_plan_draft(self, payload):
+    doc = payload["doc"]
+    ctx = payload["planning_ctx"]
+
+    # Harvest domain fields — map doc structure into a clean dict
+    scenario = {
+        "input_path": doc["input_path"],
+        "mode": doc.get("mode", "default"),
+        "priority": doc.get("priority", 0),
+        "sample_id": doc["sample_id"],
+        "flags": doc.get("flags", []),
+    }
+
+    steps = analysis_pipeline(scenario=scenario)
+    preview = {"scenario": scenario, "step_count": len(steps)}
+    ...
+```
+
+The step receives the structured dict through `params` and can access individual fields:
+
+```python
+@step
+def run_analysis(ctx: StepContext, scenario: dict) -> StepResult:
+    input_path = scenario["input_path"]
+    mode = scenario["mode"]
+    # ...
+```
+
+**When to use:** Any time a real domain document (a sequencing run, a delivery record, an order) drives plan generation. Map the fields explicitly rather than passing the whole doc or building a formatted string.
+
 ---
 
 ## Pattern 8: Plan-time data fetch
 
-To embed data fetched from CouchDB directly into step params (so the plan record shows what was fetched):
+To embed data fetched from CouchDB directly into step params as a **structured dict** (so the plan record shows exactly what was fetched and is queryable):
 
 ```python
 async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
     ctx: PlanningContext = payload["planning_ctx"]
 
-    # Fetch at planning time — result baked into the plan
+    # Fetch at planning time — use the async API (handler runs in async context)
     client = ctx.data.couchdb("config_db")
-    ref_doc = await client.get("config:pipeline_defaults")
-    config_path = ref_doc["default_config"] if ref_doc else "/fallback/defaults.yaml"
+    doc = await client.get("config:pipeline_defaults")
+
+    # Build a structured dict — not a formatted string
+    if doc is None:
+        ref = {"doc_id": "config:pipeline_defaults", "missing": True}
+    else:
+        ref = {
+            "doc_id": doc["_id"],
+            "config_path": doc.get("default_config", "/fallback/defaults.yaml"),
+            "version": doc.get("version"),
+            "missing": False,
+        }
 
     steps = [
         StepSpec(
             step_id="process",
             fn_ref="my_realm.steps.run_processor",
-            params={"config": config_path},   # baked in
+            params={"ref_doc": ref},    # structured dict baked into plan params
         ),
     ]
+    preview = {"ref_doc": ref}          # keep preview structured too
     ...
 ```
 
-**When to use:** When the step itself doesn't need live data access, but the plan record should document what configuration was resolved at plan-generation time.
+The step receives the dict through its `params` and can access fields directly:
 
-**Alternative:** Fetch at *execution time* inside the step using the blocking API (steps are sync): `client = ctx.data.couchdb(connection)` then `doc = client.get_blocking(doc_id)` (or `find_blocking`, etc.). This makes the fetch visible via step events/metrics, not baked into plan params.
+```python
+@step   # required — emits step.started / step.succeeded / step.failed
+def run_processor(ctx: StepContext, ref_doc: dict) -> StepResult:
+    if ref_doc.get("missing"):
+        raise RuntimeError("Reference config not found in database")
+    config_path = ref_doc["config_path"]
+    # ...
+```
+
+**When to use:** When the step itself doesn't need live data access, but the plan record should document exactly what configuration was resolved at plan-generation time.  Using a structured dict (rather than a formatted string) keeps the plan record queryable and makes it clear what fields were inspected.
+
+**Alternative — fetch at *execution time* inside the step:** Steps are synchronous (`def`, not `async def`), so use the blocking variants of the DataAccess API:
+
+```python
+@step
+def run_processor(ctx: StepContext, item_id: str) -> StepResult:
+    # Blocking fetch — safe inside a synchronous step
+    client = ctx.data.couchdb("config_db")
+    doc = client.get_blocking("config:pipeline_defaults")    # sync
+    # or: client.find_blocking(selector)
+    # or: client.require_blocking(doc_id)          — raises if not found
+    # or: client.find_one_blocking(selector)
+    # or: client.fetch_by_field_blocking(field, value)
+    # or: client.require_one_blocking(selector)    — raises if not found
+    config_path = doc["default_config"] if doc else "/fallback/defaults.yaml"
+    # ...
+```
+
+The fetch is visible via step events and metrics (not baked into plan params), which is appropriate when live data is needed at run time.
 
 ---
 
