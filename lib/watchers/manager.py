@@ -121,6 +121,7 @@ class WatcherManager:
         on_event: Callable[[YggdrasilEvent], None] | None = None,
         checkpoint_store: CheckpointStore | None = None,
         logger: logging.Logger | None = None,
+        watcher_policy: dict[str, Any] | None = None,
     ):
         """
         Initialize the WatcherManager.
@@ -161,6 +162,7 @@ class WatcherManager:
         self._on_event = on_event
         self.checkpoint_store = checkpoint_store or CouchDBCheckpointStore()
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        self._watcher_policy_override = watcher_policy
 
         self._watcher_groups: dict[tuple[str, str], WatcherBackendGroup] = {}
         # BoundWatchSpecs grouped by backend group key
@@ -375,6 +377,35 @@ class WatcherManager:
     # Backend Instantiation
     # -------------------------------------------------------------------------
 
+    def _resolve_watcher_policy(self) -> dict[str, Any]:
+        """Load global watcher retry policy from ``main.json["watchers"]``.
+
+        Reads the optional top-level ``watchers`` key from the full main.json
+        config and returns a dict with defaults applied for any missing keys.
+        Falls back to all defaults if the config cannot be loaded (e.g. in tests).
+
+        Returns:
+            Dict with keys:
+            - ``max_observation_retries`` (int, default 3)
+            - ``observation_retry_delay_s`` (float, default 1.0)
+        """
+        if self._watcher_policy_override is not None:
+            raw: dict[str, Any] = self._watcher_policy_override
+        else:
+            try:
+                from lib.core_utils.config_loader import ConfigLoader
+
+                raw = ConfigLoader().load_config("main.json").get("watchers", {}) or {}
+            except Exception:
+                raw = {}
+
+        return {
+            "max_observation_retries": int(raw.get("max_observation_retries", 3)),
+            "observation_retry_delay_s": float(
+                raw.get("observation_retry_delay_s", 1.0)
+            ),
+        }
+
     def _instantiate_watcher_backends(self) -> None:
         """
         Instantiate WatcherBackend for each group.
@@ -387,6 +418,8 @@ class WatcherManager:
             KeyError: If connection config is invalid
             RuntimeError: If env var resolution fails
         """
+        policy = self._resolve_watcher_policy()
+
         for key, group in self._watcher_groups.items():
             if group.backend_instance is not None:
                 continue
@@ -409,6 +442,19 @@ class WatcherManager:
                     f"endpoint says '{endpoint_backend}'"
                 )
 
+            # Merge global watcher policy on top of connection config.
+            # Policy keys are unlikely to collide with connection-specific keys;
+            # warn if they do to surface misconfiguration early.
+            for policy_key in policy:
+                if policy_key in config:
+                    self._logger.warning(
+                        "Watcher policy key '%s' shadows a connection config key "
+                        "for connection '%s'; policy value wins.",
+                        policy_key,
+                        group.connection,
+                    )
+            config = {**config, **policy}
+
             # Stable backend_key: {backend}:{connection}
             backend_key = f"{group.backend_type}:{group.connection}"
 
@@ -428,8 +474,8 @@ class WatcherManager:
         """
         Start all registered watcher backends.
 
-        Phase 1: Starts backends only (no consumption).
-        Phase 2 will add event consumption tasks.
+        Instantiates backends (if not already done), starts them concurrently,
+        then spawns one consumer task per registered backend group.
 
         Contract:
         - Instantiates backends if not already done
