@@ -10,6 +10,7 @@ are replaced with MagicMock instances. These are false positives and can be igno
 The tests run correctly despite these warnings.
 """
 
+import os
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -58,6 +59,13 @@ class TestPlanDBManager(unittest.TestCase):
         )
         self.client_factory_patcher.start()
 
+        # Provide env vars required by CouchDBHandler.__init__
+        self.env_patcher = patch.dict(
+            os.environ,
+            {"MOCK_COUCH_USER": "mock_user", "MOCK_COUCH_PASS": "mock_pass"},
+        )
+        self.env_patcher.start()
+
         # Create manager instance (will use mocked client factory)
         self.manager = PlanDBManager()
 
@@ -80,6 +88,7 @@ class TestPlanDBManager(unittest.TestCase):
         """Clean up patches."""
         self.config_patcher.stop()
         self.client_factory_patcher.stop()
+        self.env_patcher.stop()
 
     # ==========================================
     # save_plan Tests

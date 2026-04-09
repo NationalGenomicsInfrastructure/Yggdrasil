@@ -543,6 +543,80 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class TestWatcherManagerPolicyConfig(unittest.TestCase):
+    """Tests for _resolve_watcher_policy and watcher_policy injection."""
+
+    def setUp(self):
+        WatcherManager._backend_registry.clear()
+        WatcherManager.register_backend("mock", MockWatcherBackend)
+        self.config = {
+            "endpoints": {
+                "mock_endpoint": {"backend": "mock", "url": "mock://", "auth": {}}
+            },
+            "connections": {
+                "conn1": {"endpoint": "mock_endpoint", "resource": {"db": "test"}}
+            },
+        }
+        self.store = InMemoryCheckpointStore()
+
+    def test_default_policy_values(self):
+        """Baseline defaults when no watcher_policy is injected."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+        )
+        policy = manager._resolve_watcher_policy()
+        self.assertEqual(policy["max_observation_retries"], 3)
+        self.assertAlmostEqual(policy["observation_retry_delay_s"], 1.0)
+
+    def test_injected_policy_overrides_defaults(self):
+        """watcher_policy kwarg bypasses ConfigLoader and overrides defaults."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            watcher_policy={
+                "max_observation_retries": 7,
+                "observation_retry_delay_s": 0.5,
+            },
+        )
+        policy = manager._resolve_watcher_policy()
+        self.assertEqual(policy["max_observation_retries"], 7)
+        self.assertAlmostEqual(policy["observation_retry_delay_s"], 0.5)
+
+    def test_partial_policy_uses_defaults_for_missing_keys(self):
+        """Partially-specified watcher_policy falls back to defaults for absent keys."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            watcher_policy={"max_observation_retries": 5},
+        )
+        policy = manager._resolve_watcher_policy()
+        self.assertEqual(policy["max_observation_retries"], 5)
+        self.assertAlmostEqual(policy["observation_retry_delay_s"], 1.0)  # default
+
+    def test_policy_merged_into_backend_config(self):
+        """Policy values appear in each backend's config after instantiation."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            watcher_policy={
+                "max_observation_retries": 10,
+                "observation_retry_delay_s": 2.0,
+            },
+        )
+        manager.add_watcher_group("mock", "conn1")
+        manager._instantiate_watcher_backends()
+
+        group = manager._watcher_groups[("mock", "conn1")]
+        self.assertIsNotNone(group.backend_instance)
+        assert group.backend_instance is not None
+        self.assertEqual(
+            group.backend_instance.config.get("max_observation_retries"), 10
+        )
+        self.assertAlmostEqual(
+            group.backend_instance.config.get("observation_retry_delay_s"), 2.0
+        )
+
+
 if __name__ == "__main__":
-    unittest.main()
     unittest.main()
