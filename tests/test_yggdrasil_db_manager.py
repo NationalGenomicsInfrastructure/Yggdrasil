@@ -5,9 +5,10 @@ from unittest.mock import ANY, MagicMock, patch
 
 # Mock IBM Cloud SDK modules before importing the module under test
 class MockApiException(Exception):
-    def __init__(self, message, code=None):
+    def __init__(self, message="", code=None):
         super().__init__(message)
         self.code = code
+        self.status_code = code
         self.message = message
 
 

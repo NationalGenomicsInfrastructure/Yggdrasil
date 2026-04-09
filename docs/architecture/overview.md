@@ -38,6 +38,31 @@ Yggdrasil is an event-driven orchestration framework. It watches external system
 - Evaluates `filter_expr` (JSON Logic) on each raw event to decide whether to forward it
 - Calls `build_scope()` and `build_payload()` to construct a `YggdrasilEvent` and route it to core
 
+### CouchDB backend behavior
+
+`lib/watchers/backends/couchdb.py`
+
+The CouchDB backend polls the `_changes` feed using a raw HTTP GET request (not the IBM CloudantV1 SDK).
+
+**Feed mode** — the backend starts in `feed=normal`. Once a batch is fully caught up (`pending == 0`), it switches to `feed=longpoll` to reduce polling overhead. It reverts to `feed=normal` whenever `pending > 0`.
+
+**Internal document filtering** — `_design/*` and `_local/*` documents are silently skipped. No event is emitted; the checkpoint still advances past them.
+
+**Checkpoint timing** — checkpoints advance per-row, immediately after each row is processed or intentionally skipped. On an abrupt restart, at most one event (the last emitted before shutdown) may be replayed. Downstream handlers are expected to be idempotent.
+
+**404 on a non-deleted row** — treated as a recoverable skip: no event is emitted, a `WARNING` is logged, and the checkpoint advances. The row is not retried.
+
+**Retry configuration** — transient document fetch failures (5xx, 429, network errors) are retried. The defaults can be overridden in `main.json`:
+
+```json
+"watchers": {
+  "max_observation_retries": 3,
+  "observation_retry_delay_s": 1.0
+}
+```
+
+If this block is absent, defaults are `max_observation_retries=3` and `observation_retry_delay_s=1.0`. `_changes` poll failures are retried indefinitely (no cap) to keep the daemon alive when CouchDB is temporarily unavailable.
+
 ### YggdrasilCore
 
 `lib/core_utils/yggdrasil_core.py`
@@ -73,7 +98,23 @@ Executes a `Plan` (list of `StepSpec`):
 
 ### PlanWatcher
 
+`lib/watchers/plan_watcher.py`
+
 Monitors the `yggdrasil_plans` database. When a plan document transitions to `status="approved"` and `run_token > executed_run_token`, the PlanWatcher picks it up and dispatches it to the Engine.
+
+PlanWatcher uses `ChangesFetcher` for continuous polling with `include_docs=True`, which triggers a separate `fetch_document_by_id()` call per change row so eligibility checks have the full document body available.
+
+### ChangesFetcher
+
+`lib/couchdb/changes_fetcher.py`
+
+Continuous `_changes` feed poller used by PlanWatcher. Key behaviours:
+
+- Polls via raw HTTP GET (`fetch_changes_raw`) — **not** the IBM CloudantV1 SDK — matching the proven `CouchDBBackend` transport
+- Switches between `feed=normal` (catching up, `pending > 0`) and `feed=longpoll` (caught up, `pending == 0`) to reduce overhead once current
+- Fetches full document bodies separately via `fetch_document_by_id()` when `include_docs=True`
+- Filters `_design/*` and `_local/*` documents before yielding
+- Handles transient network and server errors with exponential backoff; never permanently aborts on connection resets
 
 ---
 
@@ -141,7 +182,7 @@ Trigger events control *which handler runs*. Step events record *what happened d
 | `yggdrasil/core/` | Engine, `RealmDescriptor`, core registry |
 | `lib/core_utils/` | `YggdrasilCore`, `YggSession`, config loader, logging |
 | `lib/watchers/` | `WatcherManager`, `WatchSpec`, backends (CouchDB, filesystem) |
-| `lib/couchdb/` | Low-level CouchDB connection, document managers |
+| `lib/couchdb/` | CouchDB connection handler, document managers, `ChangesFetcher` (continuous poller), typed models (`couchdb_models.py`) |
 | `lib/realms/` | Internal realm implementations and `test_realm` (dev-only) |
 | `tests/` | Full test suite (1700+ tests) |
 

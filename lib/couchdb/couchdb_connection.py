@@ -18,10 +18,12 @@ import os
 import threading
 from typing import Any
 
+import requests
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant import CouchDbSessionAuthenticator, cloudant_v1
 
 from lib.core_utils.logging_utils import custom_logger
+from lib.couchdb.couchdb_models import ChangesBatch, ChangesRow
 
 logger = custom_logger(__name__)
 
@@ -94,6 +96,7 @@ class CouchDBClientFactory:
                 authenticator=CouchDbSessionAuthenticator(user, password)
             )
             client.set_service_url(url)
+            client.enable_retries(max_retries=3, retry_interval=5.0)
 
             # Verify connection (fail fast)
             if verify_connection:
@@ -178,11 +181,18 @@ class CouchDBHandler:
             pass_env=pass_env,
         )
 
+        # Store URL and credentials for raw HTTP requests (validated by factory above)
+        self._url: str = url.rstrip("/")
+        self._auth: tuple[str, str] = (
+            os.environ[user_env],
+            os.environ[pass_env],
+        )
+
         # Verify database exists (fail fast)
         try:
             self.server.get_database_information(db=db_name)
         except ApiException as e:
-            if e.code == 404:
+            if e.status_code == 404:
                 raise ConnectionError(f"Database {db_name} does not exist") from e
             raise
 
@@ -207,7 +217,7 @@ class CouchDBHandler:
             )
             return None
         except ApiException as e:
-            if e.code == 404:
+            if e.status_code == 404:
                 self._logger.debug(
                     "Document '%s' not found in database '%s'",
                     doc_id,
@@ -218,7 +228,7 @@ class CouchDBHandler:
                 "Cloudant API error fetching '%s' from %s: %s %s",
                 doc_id,
                 self.db_name,
-                e.code,
+                e.status_code,
                 e.message,
             )
             raise
@@ -266,7 +276,7 @@ class CouchDBHandler:
             self._logger.error(
                 "Cloudant API error in find_documents on '%s': %s %s",
                 self.db_name,
-                e.code,
+                e.status_code,
                 e.message,
             )
             raise
@@ -276,92 +286,122 @@ class CouchDBHandler:
             )
             raise
 
-    def post_changes(
+    def fetch_changes_raw(
         self,
         *,
         since: str | int | None = None,
-        include_docs: bool = True,
-        limit: int = 100,
-        feed: str | None = None,
-        timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
-        """
-        Fetch changes from the database's _changes feed.
+        feed: str = "normal",
+        limit: int | None = None,
+        timeout_ms: int = 30_000,
+    ) -> ChangesBatch:
+        """Fetch one ``_changes`` batch via a raw HTTP GET request.
 
-        This is a wrapper around the CloudantV1 post_changes API,
-        providing a simpler interface for watcher backends.
+        Uses ``requests`` directly (not the IBM SDK) so that exception types are
+        predictable and classifiable by :func:`is_transient_poll_error`.
 
         Args:
-            since: Sequence token to start from (default: "0" for all changes)
-                   Accepts int for convenience; normalized to str for SDK.
-            include_docs: Include full documents in response (default: True)
-            limit: Maximum number of changes to return (default: 100)
-            feed: CouchDB feed mode (e.g. "normal", "longpoll", "continuous")
-            timeout_ms: Optional request timeout in milliseconds
+            since:      Resume token.  ``None`` is sent as ``"0"`` (from the start).
+            feed:       CouchDB feed mode — ``"normal"`` or ``"longpoll"``.
+            limit:      Maximum rows to return.  ``None`` omits the parameter.
+            timeout_ms: CouchDB-internal timeout for longpoll.  A socket-level timeout
+                        of ``timeout_ms / 1000 + 5`` is applied to the HTTP request,
+                        giving CouchDB time to respond before the socket closes.
 
         Returns:
-            Dict with 'results' (list of changes) and 'last_seq' (checkpoint)
+            Parsed :class:`ChangesBatch`.
 
         Raises:
-            ApiException: If the CouchDB API call fails
-            TypeError: If response is not a dict (unexpected SDK behavior)
+            requests.exceptions.Timeout:         Socket/read timeout.
+            requests.exceptions.ConnectionError: Network-level failure.
+            requests.exceptions.HTTPError:       Non-2xx HTTP response (after
+                                                 ``raise_for_status()``).
+            ValueError / KeyError:               Malformed JSON response.
         """
-        # Normalize since to str (SDK expects str | None)
-        if since is None:
-            since_str: str | None = None  # Let SDK use default
-        else:
-            since_str = str(since)
-
-        request: dict[str, Any] = {
-            "db": self.db_name,
-            "since": since_str,
-            "include_docs": include_docs,
-            "limit": limit,
+        url = f"{self._url}/{self.db_name}/_changes"
+        params: dict[str, Any] = {
+            "feed": feed,
+            "since": since if since is not None else "0",
+            "include_docs": "false",
         }
-        if feed is not None:
-            request["feed"] = feed
-        if timeout_ms is not None:
-            request["timeout"] = timeout_ms
+        if limit is not None:
+            params["limit"] = limit
+        if feed == "longpoll":
+            # Pass CouchDB's own timeout so it returns before the socket closes
+            params["timeout"] = timeout_ms
 
-        response = self.server.post_changes(**request)
-        result = response.get_result()
-        if isinstance(result, dict):
-            return result
-        # Unexpected SDK response - fail explicitly
-        raise TypeError(
-            f"post_changes returned non-dict result: {type(result).__name__}"
+        socket_timeout = timeout_ms / 1000 + 5  # 5 s margin beyond CouchDB timeout
+        response = requests.get(
+            url,
+            params=params,
+            auth=self._auth,
+            timeout=socket_timeout,
+        )
+        response.raise_for_status()
+
+        data: dict[str, Any] = response.json()
+        rows: list[ChangesRow] = []
+        for r in data.get("results", []):
+            changes_list = r.get("changes")
+            rev = changes_list[0]["rev"] if changes_list else None
+            rows.append(
+                ChangesRow(
+                    id=r["id"],
+                    seq=r["seq"],
+                    deleted=r.get("deleted", False),
+                    rev=rev,
+                )
+            )
+        return ChangesBatch(
+            rows=rows,
+            last_seq=data.get("last_seq"),
+            pending=int(data.get("pending", 0)),
         )
 
-    def fetch_changes_batch(
-        self,
-        *,
-        since: str | None = None,
-        include_docs: bool = True,
-        limit: int = 100,
-        feed: str = "normal",
-        timeout_ms: int | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """Fetch one _changes batch and return ``(results, last_seq)``.
 
-        This is intentionally a single-request helper. It performs no polling,
-        retries, sleeping, or checkpointing.
-        """
-        result = self.post_changes(
-            since=since,
-            include_docs=include_docs,
-            limit=limit,
-            feed=feed,
-            timeout_ms=timeout_ms,
-        )
+def is_transient_poll_error(exc: Exception) -> bool:
+    """Return True for transient ``_changes`` polling failures (requests-based).
 
-        raw_results = result.get("results", []) if isinstance(result, dict) else []
-        if isinstance(raw_results, list):
-            results: list[dict[str, Any]] = [
-                item for item in raw_results if isinstance(item, dict)
-            ]
-        else:
-            results = []
+    Used **only** for errors raised by :meth:`CouchDBHandler.fetch_changes_raw`,
+    which uses the ``requests`` library directly.
 
-        last_seq = result.get("last_seq") if isinstance(result, dict) else None
-        last_seq_str = str(last_seq) if last_seq is not None else None
-        return results, last_seq_str
+    Classification:
+    - ``requests.Timeout`` / ``ConnectionError`` → transient (network)
+    - HTTP 5xx → transient (server-side)
+    - HTTP 4xx (other), parse errors → permanent
+    """
+    if isinstance(
+        exc, requests.exceptions.Timeout | requests.exceptions.ConnectionError
+    ):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        return status is not None and status >= 500
+    return False
+
+
+def is_transient_doc_fetch_error(exc: Exception) -> bool:
+    """Return True for transient document fetch failures (IBM SDK-based).
+
+    Used **only** for errors raised by :meth:`CouchDBHandler.fetch_document_by_id`,
+    which uses the IBM CloudantV1 SDK.
+
+    Note: 404 is *not* raised by ``fetch_document_by_id`` — it returns ``None`` instead.
+    So this function will never be called for a 404.
+
+    Classification:
+    - ``ApiException`` with 5xx or 429 → transient
+    - ``ApiException`` with 4xx other → permanent
+    - ``requests.Timeout`` / ``ConnectionError`` → transient (defensive; SDK may surface these)
+    - Other exceptions → permanent
+    """
+    # Duck-type check: any exception with an integer status_code is treated as
+    # an API-style error (covers real ApiException and test mocks alike).
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status >= 500 or status == 429
+    # Defensive: IBM SDK may surface network failures as requests exceptions in some versions
+    if isinstance(
+        exc, requests.exceptions.Timeout | requests.exceptions.ConnectionError
+    ):
+        return True
+    return False

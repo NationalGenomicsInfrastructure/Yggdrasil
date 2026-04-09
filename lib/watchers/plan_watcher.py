@@ -191,11 +191,6 @@ class PlanWatcher(AbstractWatcher):
         doc_id = change.get("id", "")
         doc = change.get("doc")
 
-        # Skip design documents
-        if doc_id.startswith("_design/"):
-            self._logger.debug("Skipping design document: %s", doc_id)
-            return
-
         # Skip deleted documents
         if change.get("deleted"):
             self._logger.debug("Skipping deleted document: %s", doc_id)
@@ -337,9 +332,4 @@ class PlanWatcher(AbstractWatcher):
             }
             await self.emit(payload, source="PlanWatcher:recovery")
 
-        return filtered_plans
-        return filtered_plans
-        return filtered_plans
-        return filtered_plans
-        return filtered_plans
         return filtered_plans
