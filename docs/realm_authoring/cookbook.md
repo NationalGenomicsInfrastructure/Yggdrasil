@@ -136,8 +136,9 @@ The plan is stored in `yggdrasil_plans` with `status="draft"`. It executes only 
 Steps receive a `StepContext` providing workdir, emitter, scope, and realm. Decorate with `@step`:
 
 ```python
-from yggdrasil.flow.step import step
-from yggdrasil.flow.model import StepContext, StepResult
+from yggdrasil.flow.step import step, StepContext
+from yggdrasil.flow.model import StepResult
+from yggdrasil.flow.artifacts import SimpleArtifactRef
 
 
 @step
@@ -156,9 +157,11 @@ def run_pipeline(ctx: StepContext, config_file: str, threads: int = 4) -> StepRe
     if result.returncode != 0:
         raise RuntimeError(f"my_tool failed: {result.stderr.decode()}")
 
-    # Register output directory as artifact
+    # Register output directory as artifact.
+    # record_artifact() requires an ArtifactRefProtocol object, not a plain string.
+    # Use SimpleArtifactRef(key_name, folder) for the common case.
     outs_dir = ctx.workdir / ctx.scope["id"] / "output"
-    ctx.record_artifact("pipeline_output", path=outs_dir)
+    ctx.record_artifact(SimpleArtifactRef("pipeline_output", "output"), path=outs_dir)
 
     return StepResult(metrics={"returncode": result.returncode})
 ```
