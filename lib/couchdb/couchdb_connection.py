@@ -270,6 +270,14 @@ class CouchDBHandler:
                     "Unexpected non-dict response from post_find on '%s'", self.db_name
                 )
                 return []
+            warning = result.get("warning")
+            if warning:
+                self._logger.warning(
+                    "CouchDB Mango query on '%s' may be doing a full collection scan "
+                    "(no matching index): %s",
+                    self.db_name,
+                    warning,
+                )
             docs = result.get("docs", [])
             return docs if isinstance(docs, list) else []
         except ApiException as e:

@@ -150,6 +150,16 @@ class CouchDBBackend(WatcherBackend):
         )
         self._start_seq = str(config.get("start_seq", self.DEFAULT_START_SEQ))
         self._limit: int | None = config.get("limit", self.DEFAULT_LIMIT)
+        _LOW_LIMIT_THRESHOLD = 5
+        if self._limit is not None and self._limit < _LOW_LIMIT_THRESHOLD:
+            self._logger.warning(
+                "Backend '%s' has a very low poll limit (%d). "
+                "Recovery after downtime will require many sequential poll cycles. "
+                "Consider raising 'limit' to at least %d in the connection config.",
+                backend_key,
+                self._limit,
+                _LOW_LIMIT_THRESHOLD,
+            )
         self._longpoll_timeout_ms = int(
             config.get("longpoll_timeout_ms", self.DEFAULT_LONGPOLL_TIMEOUT_MS)
         )
