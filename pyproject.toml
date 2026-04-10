@@ -86,7 +86,7 @@ build-backend = "setuptools.build_meta"
 packages = ["yggdrasil", "lib"]
 
 [tool.setuptools.package-data]
-yggdrasil = ["assets/*"]
+yggdrasil = ["assets/*", "py.typed"]
 
 [tool.setuptools_scm]
 version_scheme = "post-release"
