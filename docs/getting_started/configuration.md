@@ -65,7 +65,6 @@ Two key files:
             "resource": { "db": "projects" },
             "watch": {
                 "poll_interval": 3,
-                "include_docs": true,
                 "limit": 100,
                 "start_seq": "0"
             }
@@ -91,7 +90,7 @@ Two key files:
 
 | Key | Purpose |
 |---|---|
-| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `include_docs`, `limit`, `start_seq`. |
+| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq`. A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
 | `data_access` | Used by `DataAccess` for realm data queries. Configures `realm_allowlist` (which realms may use this connection) and `max_limit` (max documents per query). |
 
 **`defaults`** provides fallback values for connections that omit optional fields (e.g. `start_seq`).
