@@ -504,19 +504,18 @@ class YggdrasilCore:
         """
         Initialize WatcherManager with validated WatchSpecs.
 
-        Config resolution:
-            WatcherManager loads main.json["external_systems"] when
-            config=None. We pass on_event so fan-out delivers events
-            to handle_event().
+        ``config`` and ``watcher_policy`` are extracted from ``self.config`` and
+        passed explicitly. WatcherManager performs no config loading of its own.
         """
         from lib.watchers.manager import WatcherManager
 
         self._logger.info("Setting up WatcherManager...")
 
         self.watcher_manager = WatcherManager(
-            config=None,  # WatcherManager self-loads from main.json
+            config=self.config.get("external_systems", {}),
             on_event=self.handle_event,
             logger=self._logger,
+            watcher_policy=self.config.get("watchers", {}),
         )
 
         for bound_spec in bound_specs:
