@@ -122,9 +122,9 @@ class TestWatcherManagerGrouping(unittest.TestCase):
             checkpoint_store=self.store,
         )
 
-    def test_add_watcher_group_creates_group(self):
-        """Test add_watcher_group creates a new group."""
-        group = self.manager.add_watcher_group(
+    def test_ensure_watcher_group_creates_group(self):
+        """Test _ensure_watcher_group creates a new group."""
+        group = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
@@ -132,13 +132,13 @@ class TestWatcherManagerGrouping(unittest.TestCase):
         self.assertEqual(group.backend_type, "couchdb")
         self.assertEqual(group.connection, "projects_db")
 
-    def test_add_watcher_group_deduplicates(self):
-        """Test add_watcher_group returns existing group on duplicate."""
-        group1 = self.manager.add_watcher_group(
+    def test_ensure_watcher_group_deduplicates(self):
+        """Test _ensure_watcher_group returns existing group on duplicate."""
+        group1 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
-        group2 = self.manager.add_watcher_group(
+        group2 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
@@ -148,11 +148,11 @@ class TestWatcherManagerGrouping(unittest.TestCase):
 
     def test_different_connections_create_separate_groups(self):
         """Test different connections create separate groups."""
-        group1 = self.manager.add_watcher_group(
+        group1 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
-        group2 = self.manager.add_watcher_group(
+        group2 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="yggdrasil_db",
         )
@@ -313,7 +313,7 @@ class TestWatcherManagerBackendTypeValidation(unittest.TestCase):
         }
 
         manager = WatcherManager(config=config, checkpoint_store=self.store)
-        manager.add_watcher_group(backend_type="couchdb", connection="test_conn")
+        manager._ensure_watcher_group(backend_type="couchdb", connection="test_conn")
 
         # Should raise on instantiation due to backend type mismatch
         with self.assertRaises(ValueError) as ctx:
@@ -358,8 +358,8 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
-            manager.add_watcher_group("mock", "conn2")
+            manager._ensure_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn2")
 
             await manager.start()
 
@@ -381,7 +381,7 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn1")
 
             await manager.start()
             self.assertTrue(manager.is_running)
@@ -402,8 +402,8 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
-            manager.add_watcher_group("mock", "conn2")
+            manager._ensure_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn2")
 
             await manager.start()
             await manager.stop()
@@ -465,8 +465,8 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "good_conn")
-            manager.add_watcher_group("failing", "bad_conn")
+            manager._ensure_watcher_group("mock", "good_conn")
+            manager._ensure_watcher_group("failing", "bad_conn")
 
             # Should not raise, but log error
             await manager.start()
@@ -517,7 +517,7 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn1")
 
             await manager.start()
             self.assertTrue(manager.is_running)
@@ -534,7 +534,7 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn1")
 
             await manager.start()
             await manager.stop()
@@ -604,7 +604,7 @@ class TestWatcherManagerPolicyConfig(unittest.TestCase):
                 "observation_retry_delay_s": 2.0,
             },
         )
-        manager.add_watcher_group("mock", "conn1")
+        manager._ensure_watcher_group("mock", "conn1")
         manager._instantiate_watcher_backends()
 
         group = manager._watcher_groups[("mock", "conn1")]

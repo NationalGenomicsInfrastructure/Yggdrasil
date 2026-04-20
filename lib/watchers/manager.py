@@ -5,7 +5,7 @@ Responsibilities:
 - Instantiate backend instances (one per unique resource)
 - Start/stop backends concurrently
 - Validate backend type consistency
-- Collect WatchSpecs from realms
+- Register BoundWatchSpecs and deduplicate backend groups
 - Fan-out raw events to matching WatchSpecs with filter evaluation
 - Transform raw events into domain-level YggdrasilEvents
 """
@@ -68,7 +68,7 @@ class WatcherManager:
     Orchestrates watcher backend lifecycle.
 
     The WatcherManager is responsible for:
-    - Collecting watcher groups from WatchSpecs (Phase 2)
+    - Accepting BoundWatchSpecs via add_watchspec() and deduplicating backend groups internally
     - Deduplicating backends (one per unique resource)
     - Resolving connection configuration from endpoints + connections
     - Instantiating and managing backend lifecycle
@@ -97,8 +97,8 @@ class WatcherManager:
         config = load_config()
         manager = WatcherManager(config)
 
-        # Add watcher groups (typically done by realm discovery in Phase 2)
-        manager.add_watcher_group("couchdb", "projects_db")
+        # Register BoundWatchSpecs (typically done during realm setup)
+        manager.add_watchspec(bound_spec)
 
         # Start all backends
         await manager.start()
@@ -223,19 +223,19 @@ class WatcherManager:
         return dict(cls._backend_registry)
 
     # -------------------------------------------------------------------------
-    # Watcher Group Management
+    # Backend Group Management (internal)
     # -------------------------------------------------------------------------
 
-    def add_watcher_group(
+    def _ensure_watcher_group(
         self,
         backend_type: str,
         connection: str,
     ) -> WatcherBackendGroup:
         """
-        Add a watcher backend group if not already present.
+        Ensure a watcher backend group exists for (backend_type, connection),
+        creating it if needed. Returns the existing group on duplicate.
 
-        Returns existing group if duplicate (deduplication).
-        The connection fully identifies the resource via config.
+        Called internally by add_watchspec().
 
         Args:
             backend_type: Backend type identifier (e.g., "couchdb")
@@ -255,7 +255,7 @@ class WatcherManager:
             connection=connection,
         )
         self._watcher_groups[key] = group
-        self._logger.info("Added watcher group: %s", key)
+        self._logger.info("Created watcher backend group: %s", key)
         return group
 
     def get_watcher_groups(self) -> dict[tuple[str, str], WatcherBackendGroup]:
@@ -280,7 +280,7 @@ class WatcherManager:
         key = bound_spec.backend_group_key
 
         # Ensure backend group exists (dedup)
-        self.add_watcher_group(
+        self._ensure_watcher_group(
             backend_type=bound_spec.spec.backend,
             connection=bound_spec.spec.connection,
         )
@@ -692,7 +692,7 @@ class WatcherManager:
         self._logger.info("WatcherManager stopping...")
         self._running = False
 
-        # Cancel consumer tasks (Phase 2)
+        # Cancel consumer tasks
         for task in self._consumer_tasks:
             task.cancel()
 
