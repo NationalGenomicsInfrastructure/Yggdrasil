@@ -16,6 +16,7 @@ from lib.couchdb.project_db_manager import ProjectDBManager
 from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
 from lib.watchers.abstract_watcher import YggdrasilEvent
+from lib.watchers.manager import WatcherManager
 from lib.watchers.plan_watcher import PlanWatcher
 from lib.watchers.watchspec import BoundWatchSpec
 from yggdrasil.core.engine import Engine
@@ -215,16 +216,14 @@ class YggdrasilCore:
         Flow:
             1. Discover realms via ygg.realm entry points
             2. Register legacy ygg.handler entry points (backward compat)
-            3. Register internal test realm (dev mode)
-            4. Validate realm_id uniqueness
-            5. Instantiate and register handlers from each realm
-            6. Collect and validate watchspecs
-            7. Wire watchspecs into WatcherManager
+            3. Validate realm_id uniqueness
+            4. Instantiate and register handlers from each realm
+            5. Collect and validate watchspecs
+            6. Wire watchspecs into WatcherManager
         """
         self._logger.info("Discovering realms...")
 
         # 1. Discover realms via ygg.realm entry points
-        #    (Includes test_realm when registered as entry point)
         descriptors = discover_realms()
 
         # 2. Legacy ygg.handler support (backward compat)
@@ -235,21 +234,21 @@ class YggdrasilCore:
             self._logger.warning("No realms discovered.")
             return
 
-        # 4. Validate realm_id uniqueness
+        # 3. Validate realm_id uniqueness
         self._validate_realm_id_uniqueness(descriptors)
 
-        # 5. Register handlers from each realm
+        # 4. Register handlers from each realm
         all_bound_specs: list[BoundWatchSpec] = []
 
         for descriptor in descriptors:
             self._realm_registry[descriptor.realm_id] = descriptor
             self._register_realm_handlers(descriptor)
 
-            # 6. Collect watchspecs
+            # 5. Collect watchspecs
             bound_specs = self._collect_realm_watchspecs(descriptor)
             all_bound_specs.extend(bound_specs)
 
-        # 7. Validate watchspec bindings
+        # 6. Validate watchspec bindings
         if all_bound_specs:
             self._validate_watchspec_bindings(all_bound_specs)
             self._setup_watcher_manager(all_bound_specs)
@@ -504,19 +503,16 @@ class YggdrasilCore:
         """
         Initialize WatcherManager with validated WatchSpecs.
 
-        Config resolution:
-            WatcherManager loads main.json["external_systems"] when
-            config=None. We pass on_event so fan-out delivers events
-            to handle_event().
+        ``config`` and ``watcher_policy`` are extracted from ``self.config`` and
+        passed explicitly. WatcherManager performs no config loading of its own.
         """
-        from lib.watchers.manager import WatcherManager
-
         self._logger.info("Setting up WatcherManager...")
 
         self.watcher_manager = WatcherManager(
-            config=None,  # WatcherManager self-loads from main.json
+            config=self.config.get("external_systems", {}),
             on_event=self.handle_event,
             logger=self._logger,
+            watcher_policy=self.config.get("watchers", {}),
         )
 
         for bound_spec in bound_specs:
@@ -1436,13 +1432,14 @@ class YggdrasilCore:
         """
         Watchers call this to deliver events.
 
-        Routing logic (Phase 2):
+        Routing logic:
             1. If payload contains 'realm_id', filter to that realm's handlers
             2. If payload contains 'target_handlers', filter to those handler_ids
             3. Otherwise, broadcast to all handlers subscribed to event_type
 
-        After filtering, each handler generates a PlanDraft (async), which
-        is persisted to the database.  PlanWatcher handles execution.
+        After filtering, each handler generates a PlanDraft asynchronously and
+        persists it. PlanWatcher later observes approved/runnable plans and
+        triggers execution.
         """
         self._logger.info(
             "Received event '%s' from '%s'", event.event_type, event.source
