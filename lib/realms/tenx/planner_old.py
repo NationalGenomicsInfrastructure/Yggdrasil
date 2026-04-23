@@ -23,7 +23,7 @@ class TenxPlanner(Planner):
       - return a PlanDraft (auto_run can be flipped by doc)
     """
 
-    def generate(self, ctx: PlanningContext) -> PlanDraft:
+    def generate(self, ctx: PlanningContext) -> list[PlanDraft]:
         realm, scope = ctx.realm, ctx.scope
         proj_id = scope["id"]
         base = Path(ctx.scope_dir) / realm / proj_id
@@ -94,10 +94,12 @@ class TenxPlanner(Planner):
         # Approval gate (document-driven; change in ops db will re-trigger handler)
         require_approval = bool(tenx.get("require_approval", False))
 
-        return PlanDraft(
-            plan=plan,
-            auto_run=not require_approval,
-            approvals_required=["tenx_lead"] if require_approval else [],
-            notes=f"Assay={assay}; steps={len(steps)}",
-            preview={"assay": assay, "steps": [s.name for s in steps]},
-        )
+        return [
+            PlanDraft(
+                plan=plan,
+                auto_run=not require_approval,
+                approvals_required=["tenx_lead"] if require_approval else [],
+                notes=f"Assay={assay}; steps={len(steps)}",
+                preview={"assay": assay, "steps": [s.name for s in steps]},
+            )
+        ]

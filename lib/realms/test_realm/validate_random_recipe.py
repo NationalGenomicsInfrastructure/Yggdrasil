@@ -53,7 +53,8 @@ payload = {"doc": scenario_doc, "planning_ctx": ctx}
 # Generate plan draft
 print("Testing random_fail recipe...")
 try:
-    draft = handler.run_now(payload)
+    drafts = handler.run_now(payload)
+    draft = drafts[0]
     print("✓ Plan generated successfully!")
     print(f"  Plan ID: {draft.plan.plan_id}")
     print(f"  Steps: {len(draft.plan.steps)}")

@@ -231,7 +231,7 @@ class TestPlanningContextGuard(unittest.TestCase):
             def derive_scope(self, doc):
                 return {"kind": "project", "id": doc.get("id", "x")}
 
-            async def generate_plan_draft(self, payload):  # noqa: D102
+            async def generate_plan_drafts(self, payload):  # noqa: D102
                 ...
 
         handler = _Handler()
@@ -266,7 +266,7 @@ class TestPlanningContextGuard(unittest.TestCase):
             def derive_scope(self, doc):
                 return {}
 
-            async def generate_plan_draft(self, payload): ...
+            async def generate_plan_drafts(self, payload): ...
 
         handler = _Handler()
         handler.realm_id = "demux"

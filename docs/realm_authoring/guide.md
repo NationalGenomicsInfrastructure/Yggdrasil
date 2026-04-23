@@ -35,7 +35,7 @@ class MyProjectHandler(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "project", "id": doc.get("_id", "unknown")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         doc = payload.get("doc", {})
         ctx: PlanningContext = payload["planning_ctx"]
 
@@ -47,12 +47,12 @@ class MyProjectHandler(BaseHandler):
             scope=ctx.scope,
             steps=steps,
         )
-        return PlanDraft(
+        return [PlanDraft(
             plan=plan,
             auto_run=True,  # Or False for approval workflow
             approvals_required=[],
             notes="My plan notes",
-        )
+        )]
 ```
 
 ### 2. Register the Realm
@@ -148,7 +148,7 @@ def get_realm_descriptor() -> RealmDescriptor:
 | Method | Required | Description |
 |--------|----------|-------------|
 | `derive_scope(doc)` | Yes | Extract `{"kind": ..., "id": ...}` from document |
-| `generate_plan_draft(payload)` | Yes | Async method returning `PlanDraft` |
+| `generate_plan_drafts(payload)` | Yes | Async method returning `list[PlanDraft]` |
 | `run_now(payload)` | Inherited | Blocking entrypoint for CLI mode |
 
 ### Instance Attributes Set by Core
@@ -302,7 +302,7 @@ Events can be triggered via:
 │  3. filter_expr evaluated → match/skip                              │
 │  4. build_scope() + build_payload() → YggdrasilEvent                │
 │  5. YggdrasilCore.handle_event() routes to subscribed handlers      │
-│  6. Handler.generate_plan_draft() → PlanDraft                       │
+│  6. Handler.generate_plan_drafts() → list[PlanDraft]               │
 │  7. Plan persisted to yggdrasil_plans database                      │
 │  8. PlanWatcher detects eligible plan → Engine executes             │
 └─────────────────────────────────────────────────────────────────────┘

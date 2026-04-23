@@ -7,7 +7,7 @@
 
 ## Changelog
 
-- v0.2: Updated based on detailed planning session. Key changes: corrected injection point (BaseHandler lazy property + `build_planning_context`), split `require_one` into two methods, dropped `default_timeout_s` from v1 scope, added config-loading-once constraint, documented `generate_plan_draft` signature stays unchanged.
+- v0.2: Updated based on detailed planning session. Key changes: corrected injection point (BaseHandler lazy property + `build_planning_context`), split `require_one` into two methods, dropped `default_timeout_s` from v1 scope, added config-loading-once constraint, documented `generate_plan_drafts` signature.
 
 ## 1. Problem / Motivation
 Some realms need to read additional data sources beyond the triggering watched document:
@@ -50,7 +50,7 @@ Add an optional `data` field to:
 
 **Injection into PlanningContext**: `BaseHandler` owns a lazy `_data_access` property that constructs `DataAccess(self.realm_id)` once on first access. Realm authors MUST construct `PlanningContext` via `BaseHandler.build_planning_context(...)`, which always injects `data=self._data_access`. Direct `PlanningContext(...)` construction without `data` raises a `RuntimeError` at instantiation time.
 
-**Important**: `generate_plan_draft`'s abstract signature is NOT changed. No core restructuring required.
+**Important**: `generate_plan_drafts`'s abstract signature has been updated to return `list[PlanDraft]`. No other core restructuring was required.
 
 **Injection into StepContext**: `Engine.run()` constructs `DataAccess(plan.realm)` and passes it when building `StepContext`.
 

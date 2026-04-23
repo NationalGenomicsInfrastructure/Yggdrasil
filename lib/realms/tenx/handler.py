@@ -34,7 +34,8 @@ def handle_project_change(payload: dict[str, Any]) -> None:
         data=DataAccess("tenx"),
     )
 
-    draft = TenxPlanner().generate(ctx)
+    drafts = TenxPlanner().generate(ctx)
+    draft = drafts[0]
 
     # Persist draft for visibility/approval
     ops = OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))

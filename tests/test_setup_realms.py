@@ -31,7 +31,7 @@ class _ProjectHandlerA(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "project", "id": doc.get("project_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -45,7 +45,7 @@ class _ProjectHandlerB(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "project", "id": doc.get("project_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -59,7 +59,7 @@ class _FlowcellHandler(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "flowcell", "id": doc.get("flowcell_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -73,7 +73,7 @@ class _CouchDBDocHandler(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "doc", "id": doc.get("_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -248,7 +248,7 @@ class TestSetupRealms(unittest.TestCase):
             def derive_scope(self, doc):
                 return {}
 
-            async def generate_plan_draft(self, payload):
+            async def generate_plan_drafts(self, payload):
                 raise NotImplementedError
 
             def __call__(self, payload):
@@ -278,7 +278,7 @@ class TestSetupRealms(unittest.TestCase):
             def derive_scope(self, doc):
                 return {}
 
-            async def generate_plan_draft(self, payload):
+            async def generate_plan_drafts(self, payload):
                 raise NotImplementedError
 
             def __call__(self, payload):

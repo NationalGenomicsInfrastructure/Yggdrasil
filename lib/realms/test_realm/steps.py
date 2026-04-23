@@ -429,7 +429,7 @@ def step_emit_metadata(
     ref_doc: dict | None = None,
 ) -> StepResult:
     """
-    Emit structured metadata that was baked into the plan during generate_plan_draft.
+    Emit structured metadata that was baked into the plan during generate_plan_drafts.
 
     Used by two patterns:
 

@@ -82,7 +82,7 @@ Each realm provides one or more handler classes. A handler:
 
 1. Declares the `EventType` it handles (class attribute)
 2. Implements `derive_scope(doc)` — extracts a scope dict `{"kind": ..., "id": ...}`
-3. Implements `generate_plan_draft(payload)` — returns a `PlanDraft` containing the execution plan
+3. Implements `generate_plan_drafts(payload)` — returns a `list[PlanDraft]` containing the execution plan(s)
 
 Handlers **generate plans; they do not execute them**. Execution is decoupled: the core schedules it asynchronously, and the Engine runs plans sequentially.
 
@@ -152,7 +152,7 @@ At startup, `YggdrasilCore` calls each discovered `get_realm_descriptor()`, coll
 3. WatcherManager evaluates filter_expr (JSON Logic)
 4. WatcherManager calls build_scope() + build_payload()  →  YggdrasilEvent
 5. YggdrasilCore routes event to subscribed handlers
-6. Handler.generate_plan_draft(payload)  →  PlanDraft
+6. Handler.generate_plan_drafts(payload)  →  list[PlanDraft]
 7. Core persists PlanDraft as plan document in yggdrasil_plans DB
 8. PlanWatcher detects plan with status="approved"
 9. Engine.run(plan)  →  steps run in workdirs, events emitted

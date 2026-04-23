@@ -173,7 +173,7 @@ Examples:
                 doc_id=args.doc_id,
                 force_overwrite=args.force,
             )
-            if result is None:
+            if not result:
                 # Plan creation failed or aborted
                 raise SystemExit(1)
         else:  # --run-once

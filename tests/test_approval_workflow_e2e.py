@@ -90,7 +90,7 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         )
 
         # Mock handler to return our draft
-        mock_handler.generate_plan_draft = AsyncMock(return_value=draft)
+        mock_handler.generate_plan_drafts = AsyncMock(return_value=[draft])
 
         # Import after patching
         from lib.core_utils.yggdrasil_core import YggdrasilCore

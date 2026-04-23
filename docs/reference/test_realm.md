@@ -606,7 +606,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:metadata_har
 ```
 
 **Expected**:
-- Handler calls `await ctx.data.couchdb("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_draft`
+- Handler calls `await ctx.data.couchdb("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_drafts`
 - Result is a structured dict: `{"doc_id": "...", "message": "...", "value": 13, "missing": false}`
 - Dict is baked into `echo_fetched.params["ref_doc"]` — visible in the persisted plan record
 - `echo_fetched` step emits `step.ref_doc_echoed` event with the dict fields

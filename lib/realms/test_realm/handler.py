@@ -160,7 +160,7 @@ class TestRealmHandler(BaseHandler):
                 "error_type": type(exc).__name__,
             }
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         """
         Generate a PlanDraft from the scenario document.
 
@@ -184,7 +184,7 @@ class TestRealmHandler(BaseHandler):
                 - planning_ctx: PlanningContext from YggdrasilCore
 
         Returns:
-            PlanDraft with plan, auto_run flag, and notes
+            list[PlanDraft] with one draft containing plan, auto_run flag, and notes
 
         Raises:
             ValueError: If document type is not 'ygg_test_scenario'
@@ -298,10 +298,12 @@ class TestRealmHandler(BaseHandler):
 
         auto_run = doc.get("auto_run", True)
 
-        return PlanDraft(
-            plan=plan,
-            auto_run=auto_run,
-            approvals_required=[],
-            notes=notes,
-            preview=preview,
-        )
+        return [
+            PlanDraft(
+                plan=plan,
+                auto_run=auto_run,
+                approvals_required=[],
+                notes=notes,
+                preview=preview,
+            )
+        ]

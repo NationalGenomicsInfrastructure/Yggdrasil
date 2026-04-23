@@ -11,16 +11,16 @@ A small dict identifying what a run pertains to: `{"kind": ..., "id": ...}`. Eve
 ```
 
 ### Plan
-A frozen, ordered list of `StepSpec`s to execute, identified by `plan_id`. Created by a handler's `generate_plan_draft()` and persisted in `yggdrasil_plans`.
+A frozen, ordered list of `StepSpec`s to execute, identified by `plan_id`. Created by a handler's `generate_plan_drafts()` and persisted in `yggdrasil_plans`.
 
 ### StepSpec
 One step instance inside a `Plan`. Declares the function reference (`fn_ref`), static parameters (`params`), step dependencies (`deps`), and optional input paths used for fingerprinting.
 
 ### PlanDraft
-Returned by a handler's `generate_plan_draft()`. Wraps a `Plan` with an `auto_run` flag (`True` = execute immediately; `False` = hold for approval), a list of required approvers (future), and human-readable notes.
+One element of the list returned by a handler's `generate_plan_drafts()`. Wraps a `Plan` with an `auto_run` flag (`True` = execute immediately; `False` = hold for approval), a list of required approvers (future), and human-readable notes.
 
 ### PlanningContext
-Passed to `generate_plan_draft()`. Carries: `realm`, `scope`, `scope_dir`, `emitter`, `source_doc` (the triggering document), `reason`, optional `realm_config`, and a `DataAccess` instance.
+Passed to `generate_plan_drafts()`. Carries: `realm`, `scope`, `scope_dir`, `emitter`, `source_doc` (the triggering document), `reason`, optional `realm_config`, and a `DataAccess` instance.
 
 ### StepContext (`ctx`)
 Passed to every `@step` function. Provides: `realm`, `scope`, `plan_id`, `step_id`, `step_name`, `workdir`, `scope_dir`, `emitter`, `fingerprint`, `run_id`, and `data` (DataAccess).
@@ -45,7 +45,7 @@ A Python package that extends Yggdrasil with handlers and WatchSpecs. Registered
 Declares a realm: a unique `realm_id`, a list of handler classes, and WatchSpecs (static list or callable). Returned by the realm's `get_realm_descriptor()` function.
 
 ### BaseHandler
-Abstract base class for all realm handlers. Subclasses declare `event_type` and `handler_id` class attributes and implement `derive_scope(doc)` and `generate_plan_draft(payload)`.
+Abstract base class for all realm handlers. Subclasses declare `event_type` and `handler_id` class attributes and implement `derive_scope(doc)` and `generate_plan_drafts(payload)`.
 
 ### WatchSpec
 A frozen, declarative watcher intent: watch a named `connection` (from config) for backend events, apply an optional `filter_expr` (JSON Logic predicate), and — on match — emit a `YggdrasilEvent` of a given `EventType` to subscribed handlers.
