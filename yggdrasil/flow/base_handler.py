@@ -18,7 +18,7 @@ class BaseHandler(ABC):
     All handlers must implement:
       - handler_id: stable identifier within the realm (REQUIRED)
       - event_type: which EventType this handler subscribes to
-      - generate_plan_draft: async method that returns a PlanDraft
+      - generate_plan_drafts: async method that returns a list[PlanDraft]
       - derive_scope: extract scope from document
 
     Handler provisioning (v1):
@@ -27,10 +27,10 @@ class BaseHandler(ABC):
       - Factories/DI are deferred to future versions
 
     YggdrasilCore will:
-      - Call generate_plan_draft() to get a PlanDraft
-      - Persist the plan to database
+      - Call generate_plan_drafts() to get a list[PlanDraft]
+      - Persist each plan to database
       - Check for approval requests
-      - Pass plan to Engine for execution
+      - Pass plans to Engine for execution
     """
 
     # Realm authors MUST set these class variables
@@ -125,23 +125,25 @@ class BaseHandler(ABC):
         ...
 
     @abstractmethod
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         """
-        Generate a PlanDraft from the trigger payload.
+        Generate PlanDrafts from the trigger payload.
 
         Returns:
-            PlanDraft: Contains plan + auto_run flag + approvals_required + notes.
+            list[PlanDraft]: One or more drafts. Single-plan handlers return a
+            one-element list. Fan-out handlers (e.g. demux) return one draft per
+            independent plan (lane, samplesheet entry, etc.).
 
         This replaces the old handle_task pattern. Handlers now only generate plans;
         YggdrasilCore handles persistence, approval routing, and engine execution.
         """
         ...
 
-    def run_now(self, payload: dict[str, Any]) -> PlanDraft:
+    def run_now(self, payload: dict[str, Any]) -> list[PlanDraft]:
         """
         Blocking, one-off entrypoint for CLI mode.
 
-        Runs generate_plan_draft() to completion and returns the draft.
+        Runs generate_plan_drafts() to completion and returns the list of drafts.
         Must be called from a synchronous context (no running event loop).
 
         Raises:
@@ -151,10 +153,10 @@ class BaseHandler(ABC):
             asyncio.get_running_loop()
         except RuntimeError:
             # No running loop - safe to use asyncio.run()
-            return asyncio.run(self.generate_plan_draft(payload))
+            return asyncio.run(self.generate_plan_drafts(payload))
 
         # If we get here, there IS a running loop - raise explicit error
         raise RuntimeError(
             "run_now() cannot be called from within an async context. "
-            "Use 'await handler.generate_plan_draft(payload)' instead."
+            "Use 'await handler.generate_plan_drafts(payload)' instead."
         )

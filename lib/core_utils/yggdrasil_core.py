@@ -951,7 +951,7 @@ class YggdrasilCore:
         doc_id: str,
         *,
         force_overwrite: bool = False,
-    ) -> str | None:
+    ) -> list[str]:
         """
         Create and persist a plan from a project document (no execution).
 
@@ -963,24 +963,25 @@ class YggdrasilCore:
             force_overwrite: If True, overwrite existing plan without prompting
 
         Returns:
-            str: Plan document ID if successful, None otherwise
+            list[str]: Plan document IDs of all persisted plans. Empty list on failure.
         """
         self._logger.info("create_plan_from_doc: fetching project %s", doc_id)
         doc = self.pdm.fetch_document_by_id(doc_id)
         if not doc:
             self._logger.error("No project with ID %s", doc_id)
-            return None
+            return []
 
         handlers = self.subscriptions.get(EventType.PROJECT_CHANGE) or []
         if not handlers:
             self._logger.error(
                 "No handlers registered for %s", EventType.PROJECT_CHANGE.name
             )
-            return None
+            return []
 
-        plan_doc_id: str | None = None
+        persisted_ids: list[str] = []
 
-        # Process with first matching handler (typical case: one handler per event)
+        # Process with first matching handler (typical case: one handler per event;
+        # multi-plan fan-out is within a single handler, not across handlers)
         for handler in handlers:
             try:
                 # Derive scope
@@ -1005,37 +1006,37 @@ class YggdrasilCore:
                     "planning_ctx": ctx,
                 }
 
-                # Generate plan draft FIRST (to get actual plan_doc_id)
+                # Generate plan drafts
                 self._logger.info(
-                    "Generating plan draft via %s", handler.class_qualified_name()
+                    "Generating plan drafts via %s", handler.class_qualified_name()
                 )
-                draft = handler.run_now(payload)
+                drafts = handler.run_now(payload)
 
-                # Get the actual plan_doc_id from the draft (single source of truth)
-                actual_plan_doc_id = draft.plan.plan_id
+                # Check overwrite and persist each draft individually
+                for draft in drafts:
+                    _, should_continue = self._check_plan_overwrite(
+                        draft.plan.plan_id, force_overwrite
+                    )
+                    if not should_continue:
+                        continue  # Skip conflicting draft; check remaining
 
-                # Check for existing plan using the ACTUAL plan_doc_id
-                _, should_continue = self._check_plan_overwrite(
-                    actual_plan_doc_id, force_overwrite
-                )
-                if not should_continue:
-                    return None
+                    # Force draft status for plan-only mode
+                    draft.auto_run = False
 
-                # Force draft status for plan-only mode
-                draft.auto_run = False
+                    # Persist with daemon origin (for later daemon execution)
+                    plan_doc_id = self._persist_plan_draft(
+                        draft,
+                        realm_id,
+                        execution_authority="daemon",
+                        execution_owner=None,
+                    )
+                    self._logger.info(
+                        "✓ Plan '%s' created (status=draft, authority=daemon). "
+                        "Awaiting approval via Genstat.",
+                        plan_doc_id,
+                    )
+                    persisted_ids.append(plan_doc_id)
 
-                # Persist with daemon origin (for later daemon execution)
-                plan_doc_id = self._persist_plan_draft(
-                    draft,
-                    realm_id,
-                    execution_authority="daemon",
-                    execution_owner=None,
-                )
-                self._logger.info(
-                    "✓ Plan '%s' created (status=draft, authority=daemon). "
-                    "Awaiting approval via Genstat.",
-                    plan_doc_id,
-                )
                 break  # Only process first handler
 
             except Exception as e:
@@ -1045,7 +1046,7 @@ class YggdrasilCore:
                     e,
                 )
 
-        return plan_doc_id
+        return persisted_ids
 
     def run_once_with_watcher(
         self,
@@ -1101,15 +1102,14 @@ class YggdrasilCore:
         pending_plan_ids: list[str] = []
 
         for handler in handlers:
-            plan_doc_id = self._create_run_once_plan_for_handler(
+            plan_ids = self._create_run_once_plan_for_handler(
                 handler=handler,
                 doc=doc,
                 doc_id=doc_id,
                 execution_owner=execution_owner,
                 force_overwrite=force_overwrite,
             )
-            if plan_doc_id:
-                pending_plan_ids.append(plan_doc_id)
+            pending_plan_ids.extend(plan_ids)
             # Continue to next handler even if one fails
 
         if not pending_plan_ids:
@@ -1152,22 +1152,22 @@ class YggdrasilCore:
         doc_id: str,
         execution_owner: str,
         force_overwrite: bool,
-    ) -> str | None:
+    ) -> list[str]:
         """
-        Create a single plan for one handler in run-once mode.
+        Create plans for one handler in run-once mode.
 
-        IMPORTANT: Overwrite check uses the actual plan_doc_id from the draft,
+        IMPORTANT: Overwrite check uses the actual plan_doc_id from each draft,
         NOT a scope-derived ID, to avoid divergence from persisted _id.
 
         Args:
-            handler: The handler to generate the plan
+            handler: The handler to generate the plans
             doc: Source document
             doc_id: Document ID (fallback for reason string)
             execution_owner: Unique session token
             force_overwrite: Whether to overwrite existing plans
 
         Returns:
-            str: Plan document ID if successful, None otherwise
+            list[str]: Plan document IDs of persisted plans. Empty list on failure.
         """
         try:
             if not (
@@ -1177,7 +1177,7 @@ class YggdrasilCore:
                     "Handler %s lacks derive_scope; skipping.",
                     handler.class_qualified_name(),
                 )
-                return None
+                return []
 
             scope = handler.derive_scope(doc)
             realm_id = getattr(handler, "realm_id", "unknown_realm")
@@ -1191,39 +1191,39 @@ class YggdrasilCore:
                 "planning_ctx": ctx,
             }
 
-            # Generate plan draft FIRST (to get actual plan_doc_id)
+            # Generate plan drafts
             self._logger.info(
-                "Generating plan draft via %s", handler.class_qualified_name()
+                "Generating plan drafts via %s", handler.class_qualified_name()
             )
-            draft = handler.run_now(payload)
+            drafts = handler.run_now(payload)
 
-            # Get the actual plan_doc_id from the draft (single source of truth)
-            plan_doc_id = draft.plan.plan_id
+            persisted_ids: list[str] = []
+            for draft in drafts:
+                # Check overwrite per draft (each has its own plan_doc_id)
+                _, should_continue = self._check_plan_overwrite(
+                    draft.plan.plan_id, force_overwrite
+                )
+                if not should_continue:
+                    continue  # Skip conflicting draft; check remaining
 
-            # Check for existing plan using the ACTUAL plan_doc_id
-            _, should_continue = self._check_plan_overwrite(
-                plan_doc_id, force_overwrite
-            )
-            if not should_continue:
-                return None
-
-            # Persist with run_once origin and our owner token
-            # NOTE: auto_run determines status (approved/draft), but we do NOT
-            # branch on it for execution - watcher handles all execution
-            persisted_id = self._persist_plan_draft(
-                draft,
-                realm_id,
-                execution_authority="run_once",
-                execution_owner=execution_owner,
-            )
-            self._logger.info(
-                "Plan '%s' created (realm=%s, status=%s, owner=%s)",
-                persisted_id,
-                realm_id,
-                "approved" if draft.auto_run else "draft",
-                execution_owner,
-            )
-            return persisted_id
+                # Persist with run_once origin and our owner token
+                # NOTE: auto_run determines status (approved/draft), but we do NOT
+                # branch on it for execution - watcher handles all execution
+                persisted_id = self._persist_plan_draft(
+                    draft,
+                    realm_id,
+                    execution_authority="run_once",
+                    execution_owner=execution_owner,
+                )
+                self._logger.info(
+                    "Plan '%s' created (realm=%s, status=%s, owner=%s)",
+                    persisted_id,
+                    realm_id,
+                    "approved" if draft.auto_run else "draft",
+                    execution_owner,
+                )
+                persisted_ids.append(persisted_id)
+            return persisted_ids
 
         except Exception as e:
             self._logger.exception(
@@ -1231,7 +1231,7 @@ class YggdrasilCore:
                 handler.class_qualified_name(),
                 e,
             )
-            return None
+            return []
 
     async def _run_once_watcher_loop(
         self,
@@ -1560,29 +1560,30 @@ class YggdrasilCore:
             payload: Event payload with planning_ctx
         """
         try:
-            # Step 1: Generate plan draft
+            # Step 1: Generate plan drafts
             self._logger.info(
-                "Generating plan draft via %s", handler.class_qualified_name()
+                "Generating plan drafts via %s", handler.class_qualified_name()
             )
-            draft = await handler.generate_plan_draft(payload)
+            drafts = await handler.generate_plan_drafts(payload)
 
-            # Step 2: Persist plan to database
+            # Step 2: Persist each plan to database
             # PlanWatcher will detect eligible plans and trigger execution
             realm_id = getattr(handler, "realm_id", "unknown_realm")
-            plan_doc_id = self._persist_plan_draft(draft, realm_id)
+            for draft in drafts:
+                plan_doc_id = self._persist_plan_draft(draft, realm_id)
 
-            if draft.auto_run:
-                self._logger.info(
-                    "Plan '%s' persisted (status=approved, auto_run=True). ",
-                    plan_doc_id,
-                )
-            else:
-                self._logger.info(
-                    "Plan '%s' persisted (status=draft). "
-                    "Awaiting for approval (approvals_required=%s).",
-                    plan_doc_id,
-                    draft.approvals_required,
-                )
+                if draft.auto_run:
+                    self._logger.info(
+                        "Plan '%s' persisted (status=approved, auto_run=True). ",
+                        plan_doc_id,
+                    )
+                else:
+                    self._logger.info(
+                        "Plan '%s' persisted (status=draft). "
+                        "Awaiting for approval (approvals_required=%s).",
+                        plan_doc_id,
+                        draft.approvals_required,
+                    )
 
             # NOTE: No inline execution here. PlanWatcher handles all execution
             # in daemon mode, ensuring single execution path and proper tracking.

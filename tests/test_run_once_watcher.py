@@ -258,7 +258,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         mock_draft = MagicMock()
         mock_draft.plan = mock_plan
         mock_draft.auto_run = True
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         from lib.core_utils.event_types import EventType
 
@@ -318,7 +318,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         mock_draft = MagicMock()
         mock_draft.plan = mock_plan
         mock_draft.auto_run = True
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         from lib.core_utils.event_types import EventType
 
@@ -386,7 +386,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         mock_draft = MagicMock()
         mock_draft.plan = mock_plan
         mock_draft.auto_run = True
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         from lib.core_utils.event_types import EventType
 
@@ -479,7 +479,7 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
     def test_returns_none_when_handler_lacks_derive_scope(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
-        """Test that method returns None if handler doesn't have derive_scope."""
+        """Test that method returns empty list if handler doesn't have derive_scope."""
         core = YggdrasilCore(self.mock_config)
         core.plan_dbm = (
             self.mock_plan_dbm
@@ -498,7 +498,7 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
             force_overwrite=False,
         )
 
-        self.assertIsNone(result)
+        self.assertEqual(result, [])
 
     @patch("lib.core_utils.yggdrasil_core.PlanDBManager")
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
@@ -529,7 +529,7 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
         mock_draft.auto_run = True
         mock_draft.preview = {}
         mock_draft.notes = None
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         self.mock_plan_dbm.get_plan_summary.return_value = None
         self.mock_plan_dbm.save_plan.return_value = "pln_test_12345"
@@ -542,7 +542,7 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
             force_overwrite=False,
         )
 
-        self.assertEqual(result, "pln_test_12345")
+        self.assertEqual(result, ["pln_test_12345"])
 
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
     @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
@@ -567,7 +567,7 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
         mock_draft = MagicMock()
         mock_draft.plan = mock_plan
         mock_draft.auto_run = True
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         self.mock_plan_dbm.get_plan_summary.return_value = None
         self.mock_plan_dbm.save_plan.return_value = "pln_test_12345"
