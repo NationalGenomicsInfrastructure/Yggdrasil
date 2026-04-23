@@ -86,7 +86,7 @@ WatchSpec(
 When one handler needs to dispatch to different plan shapes based on document content:
 
 ```python
-async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
     doc = payload["doc"]
     ctx: PlanningContext = payload["planning_ctx"]
 
@@ -105,7 +105,7 @@ async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
         scope=ctx.scope,
         steps=steps,
     )
-    return PlanDraft(plan=plan, auto_run=True, approvals_required=[], notes="")
+    return [PlanDraft(plan=plan, auto_run=True, approvals_required=[], notes="")]
 ```
 
 ---
@@ -277,7 +277,7 @@ def analysis_pipeline(scenario: dict) -> list[StepSpec]:
 ```python
 # my_realm/handler.py
 
-async def generate_plan_draft(self, payload):
+async def generate_plan_drafts(self, payload):
     doc = payload["doc"]
     ctx = payload["planning_ctx"]
 
@@ -314,7 +314,7 @@ def run_analysis(ctx: StepContext, scenario: dict) -> StepResult:
 To embed data fetched from CouchDB directly into step params as a **structured dict** (so the plan record shows exactly what was fetched and is queryable):
 
 ```python
-async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
     ctx: PlanningContext = payload["planning_ctx"]
 
     # Fetch at planning time — use the async API (handler runs in async context)

@@ -52,7 +52,7 @@ Passed to every `@step` function at execution time.
 
 ### `PlanningContext`
 
-Passed to `generate_plan_draft()`. Contains everything a handler needs to build a plan.
+Passed to `generate_plan_drafts()`. Contains everything a handler needs to build a plan.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -131,14 +131,14 @@ def run_processor(
 
 ## Handler planner contract
 
-A planner is a `BaseHandler` subclass — not just any object implementing `generate_plan_draft()`. The full contract `YggdrasilCore` enforces at registration time:
+A planner is a `BaseHandler` subclass — not just any object implementing `generate_plan_drafts()`. The full contract `YggdrasilCore` enforces at registration time:
 
 | Requirement | Kind | Description |
 |-------------|------|-------------|
 | `event_type` | class variable | `EventType` the handler subscribes to |
 | `handler_id` | class variable | Unique string identifier for this handler |
 | `derive_scope(doc)` | method | Extracts `{"kind": ..., "id": ...}` from the triggering document |
-| `async generate_plan_draft(payload)` | method | Returns a `PlanDraft` |
+| `async generate_plan_drafts(payload)` | method | Returns a `list[PlanDraft]` |
 
 `realm_id` is set on the handler instance by `YggdrasilCore` during realm registration — handlers must not set it themselves.
 
