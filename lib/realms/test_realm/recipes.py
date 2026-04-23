@@ -368,7 +368,7 @@ def data_fetch_plan_steps(ref_dict: dict) -> list[StepSpec]:
 
     This function is NOT in the RECIPES registry because it requires the
     already-fetched reference data to be passed in at plan-generation time.
-    The handler performs an async CouchDB fetch during ``generate_plan_draft``
+    The handler performs an async CouchDB fetch during ``generate_plan_drafts``
     and then calls this function so the result is baked into the step params
     as a **structured dict** — not a formatted string.
 
@@ -433,7 +433,7 @@ def metadata_harvest_steps(scenario: dict) -> list[StepSpec]:
     extracted from the triggering document to be passed in at plan-generation
     time.  The handler harvests domain fields (``input_path``, ``mode``,
     ``priority``, ``sample_id``, ``flags``) from the scenario doc during
-    ``generate_plan_draft`` and calls this function so the metadata is baked
+    ``generate_plan_drafts`` and calls this function so the metadata is baked
     as a **structured dict** into ``StepSpec.params``.
 
     This demonstrates the "real realm" pattern: handlers map domain-document

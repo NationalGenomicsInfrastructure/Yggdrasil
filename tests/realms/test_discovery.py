@@ -24,7 +24,7 @@ class _FakeHandler(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "project", "id": doc.get("project_id", "unknown")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
