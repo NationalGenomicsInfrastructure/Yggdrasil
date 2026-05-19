@@ -201,7 +201,18 @@ class Engine:
                 continue
 
             # build context and call the step function
-            from yggdrasil.flow.data_access import DataAccess
+            from yggdrasil.flow.data_access import DataAccess, DataAccessTraceContext
+
+            trace_ctx = DataAccessTraceContext(
+                realm=plan.realm,
+                phase="execution",
+                plan_id=plan.plan_id,
+                run_id=run_id,
+                step_id=spec.step_id,
+                step_name=spec.name,
+                scope=spec.scope or plan.scope,
+                emitter=self.emitter,
+            )
 
             ctx = StepContext(
                 realm=plan.realm,
@@ -215,7 +226,11 @@ class Engine:
                 run_mode=os.environ.get("YGG_RUN_MODE", "auto"),
                 fingerprint=fingerprint,
                 run_id=run_id,
-                data=DataAccess(plan.realm),
+                data=DataAccess(
+                    plan.realm,
+                    phase="execution",
+                    trace_context=trace_ctx,
+                ),
             )
 
             try:
