@@ -687,5 +687,133 @@ class TestTransientErrorClassifiers(unittest.TestCase):
         self.assertFalse(is_transient_doc_fetch_error(RuntimeError("unexpected")))
 
 
+class TestCouchDBHandlerPutDocument(unittest.TestCase):
+    """Tests for CouchDBHandler.put_document."""
+
+    def setUp(self):
+        with (
+            patch(
+                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+            ) as mock_factory,
+            patch.dict(os.environ, {"PD_USER": "admin", "PD_PASS": "secret"}),
+        ):
+            self.mock_client = MagicMock()
+            mock_factory.return_value = self.mock_client
+            self.handler = CouchDBHandler(
+                db_name="test_db",
+                url="http://localhost:5984",
+                user_env="PD_USER",
+                pass_env="PD_PASS",
+            )
+        self.mock_client.reset_mock()
+
+    def _set_put_result(self, result):
+        self.mock_client.put_document.return_value.get_result.return_value = result
+
+    def test_create_returns_sdk_response(self):
+        """put_document without rev returns the SDK response dict unchanged."""
+        expected = {"id": "doc1", "rev": "1-abc", "ok": True}
+        self._set_put_result(expected)
+
+        result = self.handler.put_document("doc1", {"status": "ready"})
+
+        self.mock_client.put_document.assert_called_once()
+        self.assertEqual(result, expected)
+
+    def test_create_calls_sdk_with_correct_db_and_doc_id(self):
+        """put_document forwards db and doc_id as kwargs to the SDK."""
+        self._set_put_result({"id": "doc1", "rev": "1-x", "ok": True})
+
+        self.handler.put_document("doc1", {"status": "ready"})
+
+        call_kwargs = self.mock_client.put_document.call_args[1]
+        self.assertEqual(call_kwargs["db"], "test_db")
+        self.assertEqual(call_kwargs["doc_id"], "doc1")
+
+    def test_create_injects_id_without_rev(self):
+        """Without rev arg, Document.from_dict receives _id but not _rev."""
+        self._set_put_result({"id": "doc1", "rev": "1-x", "ok": True})
+
+        with patch("lib.couchdb.couchdb_connection.cloudant_v1") as mock_cv1:
+            self.handler.put_document("doc1", {"status": "ready"})
+            body = mock_cv1.Document.from_dict.call_args[0][0]
+
+        self.assertEqual(body["_id"], "doc1")
+        self.assertNotIn("_rev", body)
+        self.assertEqual(body["status"], "ready")
+
+    def test_update_injects_id_and_rev(self):
+        """With rev arg, Document.from_dict receives both _id and _rev."""
+        self._set_put_result({"id": "doc1", "rev": "2-y", "ok": True})
+
+        with patch("lib.couchdb.couchdb_connection.cloudant_v1") as mock_cv1:
+            self.handler.put_document("doc1", {"status": "done"}, rev="1-abc")
+            body = mock_cv1.Document.from_dict.call_args[0][0]
+
+        self.assertEqual(body["_id"], "doc1")
+        self.assertEqual(body["_rev"], "1-abc")
+
+    def test_raises_if_doc_contains_id(self):
+        """ValueError is raised if caller's doc contains _id."""
+        with self.assertRaises(ValueError) as ctx:
+            self.handler.put_document("doc1", {"_id": "doc1", "status": "x"})
+        self.assertIn("_id", str(ctx.exception))
+        self.mock_client.put_document.assert_not_called()
+
+    def test_raises_if_doc_contains_rev(self):
+        """ValueError is raised if caller's doc contains _rev."""
+        with self.assertRaises(ValueError) as ctx:
+            self.handler.put_document("doc1", {"_rev": "1-abc", "status": "x"})
+        self.assertIn("_rev", str(ctx.exception))
+        self.mock_client.put_document.assert_not_called()
+
+    def test_raises_if_doc_contains_both_reserved_keys(self):
+        """ValueError is raised if caller's doc contains both _id and _rev."""
+        with self.assertRaises(ValueError):
+            self.handler.put_document(
+                "doc1", {"_id": "doc1", "_rev": "1-x", "status": "x"}
+            )
+        self.mock_client.put_document.assert_not_called()
+
+    def test_does_not_mutate_caller_doc(self):
+        """put_document must not modify the caller's dict."""
+        self._set_put_result({"id": "doc1", "rev": "1-abc", "ok": True})
+        original = {"status": "ready", "count": 5}
+        snapshot = dict(original)
+
+        self.handler.put_document("doc1", original)
+
+        self.assertEqual(original, snapshot)
+        self.assertNotIn("_id", original)
+        self.assertNotIn("_rev", original)
+
+    def test_409_api_exception_propagates(self):
+        """Conflict (409) from the SDK propagates unchanged."""
+        self.mock_client.put_document.side_effect = MockApiException(
+            "conflict", code=409
+        )
+
+        with self.assertRaises(MockApiException) as ctx:
+            self.handler.put_document("doc1", {"status": "x"})
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_404_api_exception_propagates(self):
+        """Not-found (404) from the SDK propagates unchanged (update on absent doc)."""
+        self.mock_client.put_document.side_effect = MockApiException(
+            "not found", code=404
+        )
+
+        with self.assertRaises(MockApiException) as ctx:
+            self.handler.put_document("doc1", {"status": "x"}, rev="1-abc")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_generic_exception_propagates(self):
+        """Non-ApiException from the SDK propagates unchanged."""
+        self.mock_client.put_document.side_effect = RuntimeError("network failure")
+
+        with self.assertRaises(RuntimeError):
+            self.handler.put_document("doc1", {"status": "x"})
+
+
 if __name__ == "__main__":
     unittest.main()
