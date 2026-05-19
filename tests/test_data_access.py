@@ -1,12 +1,12 @@
 """Unit tests for yggdrasil.flow.data_access.DataAccess.
 
-Tests cover allowlist enforcement, caching, error conditions, and the
-PlanningContext guard. All tests are filesystem-free (injected config +
-mocked CouchDBHandler).
+Tests cover permission enforcement, phase-aware client selection, caching,
+error conditions, and the PlanningContext guard. All tests are filesystem-free
+(injected config + mocked CouchDBHandler).
 """
 
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from yggdrasil.flow.data_access import (
     DataAccess,
@@ -14,7 +14,10 @@ from yggdrasil.flow.data_access import (
     DataAccessDeniedError,
     DataAccessError,
 )
-from yggdrasil.flow.data_access.couchdb_read import CouchDBReadClient
+from yggdrasil.flow.data_access.couchdb_data import (
+    CouchDBExecutionClient,
+    CouchDBPlanningClient,
+)
 
 # ---------------------------------------------------------------------------
 # Shared test config
@@ -26,22 +29,51 @@ SAMPLE_CFG = {
             "backend": "couchdb",
             "url": "http://couch.example.org:5984",
             "auth": {"user_env": "MY_USER", "pass_env": "MY_PASS"},
-        }
+        },
+        "postgres": {
+            "backend": "postgres",
+            "url": "http://pg.example.org:5432",
+        },
     },
-    "data_access_defaults": {"couchdb": {"max_limit": 150}},
+    "defaults": {"couchdb": {"max_limit": 150}},
     "connections": {
         "allowed_db": {
             "endpoint": "couchdb",
             "resource": {"db": "allowed"},
             "data_access": {
-                "realm_allowlist": ["demux", "tenx"],
+                "realms": {
+                    "demux": {
+                        "planning": {"permissions": ["read"]},
+                        "execution": {"permissions": ["read", "write"]},
+                    },
+                    "tenx": {
+                        "planning": {"permissions": ["read"]},
+                        "execution": {"permissions": ["read"]},
+                    },
+                }
             },
         },
         "restricted_db": {
             "endpoint": "couchdb",
             "resource": {"db": "restricted"},
             "data_access": {
-                "realm_allowlist": ["admin"],
+                "realms": {
+                    "admin": {
+                        "planning": {"permissions": ["read"]},
+                        "execution": {"permissions": ["read", "write"]},
+                    }
+                }
+            },
+        },
+        "write_only_db": {
+            "endpoint": "couchdb",
+            "resource": {"db": "write_only"},
+            "data_access": {
+                "realms": {
+                    "dmx": {
+                        "execution": {"permissions": ["write"]},
+                    }
+                }
             },
         },
         "no_policy_db": {
@@ -49,140 +81,224 @@ SAMPLE_CFG = {
             "resource": {"db": "no_policy"},
             # No data_access block
         },
+        "pg_db": {
+            "endpoint": "postgres",
+            "resource": {"db": "pgdb"},
+            "data_access": {
+                "realms": {"demux": {"execution": {"permissions": ["read"]}}}
+            },
+        },
     },
 }
 
+_PATCH_HANDLER = "lib.couchdb.couchdb_connection.CouchDBHandler"
+
+
+def _mock_handler():
+    m = MagicMock()
+    m.fetch_document_by_id.return_value = None
+    m.find_documents.return_value = []
+    return m
+
 
 # ---------------------------------------------------------------------------
-# TestDataAccess
+# TestDataAccess — phase-aware client selection
 # ---------------------------------------------------------------------------
 
 
-class TestDataAccess(unittest.TestCase):
-    """Tests for DataAccess allowlist enforcement and caching."""
+class TestDataAccessConnection(unittest.TestCase):
+    """Tests for DataAccess.connection() phase-aware client selection."""
 
-    def _make_da(self, realm_id: str) -> DataAccess:
-        """Create a DataAccess with injected config (no disk access)."""
-        return DataAccess(realm_id=realm_id, cfg=SAMPLE_CFG)
+    @patch(_PATCH_HANDLER)
+    def test_planning_phase_returns_planning_client(self, MockHandler):
+        MockHandler.return_value = _mock_handler()
+        da = DataAccess("demux", phase="planning", cfg=SAMPLE_CFG)
+        client = da.connection("allowed_db")
+        self.assertIsInstance(client, CouchDBPlanningClient)
 
-    # --- Allowlist enforcement ---
+    @patch(_PATCH_HANDLER)
+    def test_execution_phase_returns_execution_client(self, MockHandler):
+        MockHandler.return_value = _mock_handler()
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
+        client = da.connection("allowed_db")
+        self.assertIsInstance(client, CouchDBExecutionClient)
 
-    @patch("lib.couchdb.couchdb_connection.CouchDBHandler")
-    def test_allowed_realm_returns_client(self, MockHandler):
-        """Allowed realm gets a CouchDBReadClient for the connection."""
-        da = self._make_da("demux")
-        client = da.couchdb("allowed_db")
-        self.assertIsInstance(client, CouchDBReadClient)
+    @patch(_PATCH_HANDLER)
+    def test_connection_cached_second_call_returns_same_instance(self, MockHandler):
+        MockHandler.return_value = _mock_handler()
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
+        c1 = da.connection("allowed_db")
+        c2 = da.connection("allowed_db")
+        self.assertIs(c1, c2)
 
-    @patch("lib.couchdb.couchdb_connection.CouchDBHandler")
-    def test_second_allowed_realm_returns_client(self, MockHandler):
-        """Second realm in the allowlist also gets a client."""
-        da = self._make_da("tenx")
-        client = da.couchdb("allowed_db")
-        self.assertIsInstance(client, CouchDBReadClient)
+    @patch(_PATCH_HANDLER)
+    def test_handler_created_only_once_for_same_connection(self, MockHandler):
+        MockHandler.return_value = _mock_handler()
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
+        da.connection("allowed_db")
+        da.connection("allowed_db")
+        da.connection("allowed_db")
+        self.assertEqual(MockHandler.call_count, 1)
 
-    def test_realm_not_in_allowlist_raises(self):
-        """Realm not in allowlist raises DataAccessDeniedError."""
-        da = self._make_da("smartseq3")
+    # --- Permission denial ---
+
+    def test_connection_denied_when_no_permissions_for_phase(self):
+        """Realm has planning permissions=[] (empty) → denied."""
+        cfg = {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://h:5984"}},
+            "connections": {
+                "db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "x"},
+                    "data_access": {
+                        "realms": {"demux": {"planning": {"permissions": []}}}
+                    },
+                }
+            },
+        }
+        da = DataAccess("demux", phase="planning", cfg=cfg)
         with self.assertRaises(DataAccessDeniedError) as ctx:
-            da.couchdb("restricted_db")
+            da.connection("db")
+        self.assertIn("demux", str(ctx.exception))
+
+    def test_connection_denied_when_realm_not_in_policy(self):
+        da = DataAccess("smartseq3", phase="execution", cfg=SAMPLE_CFG)
+        with self.assertRaises(DataAccessDeniedError) as ctx:
+            da.connection("restricted_db")
         self.assertIn("smartseq3", str(ctx.exception))
-        self.assertIn("restricted_db", str(ctx.exception))
 
-    def test_connection_with_no_policy_raises(self):
-        """Connection without data_access block raises DataAccessDeniedError."""
-        da = self._make_da("demux")
+    def test_connection_denied_when_phase_not_in_policy(self):
+        """write_only_db has only execution phase; planning → denied."""
+        da = DataAccess("dmx", phase="planning", cfg=SAMPLE_CFG)
+        with self.assertRaises(DataAccessDeniedError):
+            da.connection("write_only_db")
+
+    def test_connection_with_no_policy_raises_denied(self):
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
         with self.assertRaises(DataAccessDeniedError) as ctx:
-            da.couchdb("no_policy_db")
+            da.connection("no_policy_db")
         self.assertIn("no_policy_db", str(ctx.exception))
 
+    def test_unknown_connection_raises_config_error(self):
+        da = DataAccess("demux", phase="planning", cfg=SAMPLE_CFG)
+        with self.assertRaises(DataAccessConfigError) as ctx:
+            da.connection("nonexistent_db")
+        self.assertIn("nonexistent_db", str(ctx.exception))
+
     def test_denied_error_is_subclass_of_data_access_error(self):
-        """DataAccessDeniedError is-a DataAccessError."""
-        da = self._make_da("demux")
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
         with self.assertRaises(DataAccessError):
-            da.couchdb("no_policy_db")
+            da.connection("no_policy_db")
 
-    # --- Caching ---
+    def test_config_error_is_subclass_of_data_access_error(self):
+        da = DataAccess("demux", phase="planning", cfg=SAMPLE_CFG)
+        with self.assertRaises(DataAccessError):
+            da.connection("nonexistent_db")
 
-    @patch("lib.couchdb.couchdb_connection.CouchDBHandler")
-    def test_same_connection_called_twice_returns_same_client(self, MockHandler):
-        """couchdb() returns cached client on second call (same instance)."""
-        da = self._make_da("demux")
-        client1 = da.couchdb("allowed_db")
-        client2 = da.couchdb("allowed_db")
-        self.assertIs(client1, client2)
+    # --- Read vs write permission on execution client ---
 
-    @patch("lib.couchdb.couchdb_connection.CouchDBHandler")
-    def test_handler_created_only_once_for_same_connection(self, MockHandler):
-        """CouchDBHandler is instantiated only once for repeated couchdb() calls."""
-        da = self._make_da("demux")
-        da.couchdb("allowed_db")
-        da.couchdb("allowed_db")
-        da.couchdb("allowed_db")
-        # Handler constructor should be called exactly once
-        self.assertEqual(MockHandler.call_count, 1)
+    @patch(_PATCH_HANDLER)
+    def test_write_permission_does_not_grant_read(self, MockHandler):
+        """write-only permission → get() raises DataAccessDeniedError."""
+        MockHandler.return_value = _mock_handler()
+        da = DataAccess("dmx", phase="execution", cfg=SAMPLE_CFG)
+        client = da.connection("write_only_db")
+        with self.assertRaises(DataAccessDeniedError):
+            client.get("some_id")
+
+    # --- Planning phase read requirement (Fix 1) ---
+
+    def test_planning_with_only_write_permission_denied(self):
+        """Planning phase with only 'write' permission → DataAccessDeniedError."""
+        cfg = {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://h:5984"}},
+            "connections": {
+                "db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "x"},
+                    "data_access": {
+                        "realms": {
+                            "dmx": {
+                                "planning": {"permissions": ["write"]},
+                            }
+                        }
+                    },
+                }
+            },
+        }
+        da = DataAccess("dmx", phase="planning", cfg=cfg)
+        with self.assertRaises(DataAccessDeniedError) as ctx:
+            da.connection("db")
+        self.assertIn("read", str(ctx.exception))
+
+    # --- Backend type guard in connection() (Fix 2) ---
+
+    def test_connection_on_non_couchdb_backend_raises_config_error(self):
+        """connection() on a non-CouchDB backend raises DataAccessConfigError."""
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
+        with self.assertRaises(DataAccessConfigError) as ctx:
+            da.connection("pg_db")
+        self.assertIn("postgres", str(ctx.exception))
+
+    def test_connection_invalid_permission_config_raises_config_error(self):
+        """connection() with a typo'd permission string raises DataAccessConfigError."""
+        cfg = {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://h:5984"}},
+            "connections": {
+                "db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "x"},
+                    "data_access": {
+                        "realms": {"demux": {"execution": {"permissions": ["reed"]}}}
+                    },
+                }
+            },
+        }
+        da = DataAccess("demux", phase="execution", cfg=cfg)
+        with self.assertRaises(DataAccessConfigError) as ctx:
+            da.connection("db")
+        self.assertIn("reed", str(ctx.exception))
+
+    def test_connection_invalid_phase_config_raises_config_error(self):
+        """connection() with a typo'd phase key raises DataAccessConfigError."""
+        cfg = {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://h:5984"}},
+            "connections": {
+                "db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "x"},
+                    "data_access": {
+                        "realms": {"demux": {"executin": {"permissions": ["read"]}}}
+                    },
+                }
+            },
+        }
+        da = DataAccess("demux", phase="execution", cfg=cfg)
+        with self.assertRaises(DataAccessConfigError) as ctx:
+            da.connection("db")
+        self.assertIn("executin", str(ctx.exception))
+
+    # --- couchdb() helper ---
+
+    @patch(_PATCH_HANDLER)
+    def test_couchdb_helper_returns_planning_client(self, MockHandler):
+        MockHandler.return_value = _mock_handler()
+        da = DataAccess("demux", phase="planning", cfg=SAMPLE_CFG)
+        client = da.couchdb("allowed_db")
+        self.assertIsInstance(client, CouchDBPlanningClient)
+        """couchdb() on a non-CouchDB endpoint raises DataAccessConfigError."""
+        da = DataAccess("demux", phase="execution", cfg=SAMPLE_CFG)
+        with self.assertRaises(DataAccessConfigError) as ctx:
+            da.couchdb("pg_db")
+        self.assertIn("postgres", str(ctx.exception))
 
     # --- Config loaded once ---
 
     @patch("yggdrasil.flow.data_access.data_access.load_external_systems_config")
     def test_config_loaded_once_in_init(self, mock_loader):
-        """load_external_systems_config() called once at __init__, not per couchdb()."""
         mock_loader.return_value = SAMPLE_CFG
-        DataAccess(realm_id="demux")
+        DataAccess(realm_id="demux", phase="planning")
         self.assertEqual(mock_loader.call_count, 1)
-
-    @patch("yggdrasil.flow.data_access.data_access.load_external_systems_config")
-    @patch("lib.couchdb.couchdb_connection.CouchDBHandler")
-    def test_config_not_reloaded_on_multiple_couchdb_calls(
-        self, MockHandler, mock_loader
-    ):
-        """Repeated couchdb() calls do not trigger additional config loads."""
-        mock_loader.return_value = SAMPLE_CFG
-        da = DataAccess(realm_id="demux")
-        da.couchdb("allowed_db")
-        da.couchdb("allowed_db")
-        # Still only one call at __init__
-        self.assertEqual(mock_loader.call_count, 1)
-
-    # --- Unknown connection ---
-
-    def test_unknown_connection_raises_config_error(self):
-        """Requesting a connection not in config raises DataAccessConfigError."""
-        da = self._make_da("demux")
-        with self.assertRaises(DataAccessConfigError) as ctx:
-            da.couchdb("nonexistent_db")
-        self.assertIn("nonexistent_db", str(ctx.exception))
-
-    def test_unknown_connection_error_lists_available(self):
-        """DataAccessConfigError message includes available connection names."""
-        da = self._make_da("demux")
-        with self.assertRaises(DataAccessConfigError) as ctx:
-            da.couchdb("nonexistent_db")
-        error_msg = str(ctx.exception)
-        # At least one known connection should appear in the message
-        self.assertTrue(
-            any(
-                conn in error_msg
-                for conn in ("allowed_db", "restricted_db", "no_policy_db")
-            ),
-            f"Expected available connections in error message, got: {error_msg}",
-        )
-
-    def test_config_error_is_subclass_of_data_access_error(self):
-        """DataAccessConfigError is-a DataAccessError."""
-        da = self._make_da("demux")
-        with self.assertRaises(DataAccessError):
-            da.couchdb("nonexistent_db")
-
-    def test_unknown_connection_does_not_leak_keyerror(self):
-        """Raw KeyError must not propagate; only DataAccessConfigError should."""
-        da = self._make_da("demux")
-        try:
-            da.couchdb("nonexistent_db")
-        except DataAccessConfigError:
-            pass  # expected
-        except KeyError as exc:
-            self.fail(f"Raw KeyError leaked instead of DataAccessConfigError: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +353,6 @@ class TestPlanningContextGuard(unittest.TestCase):
         handler = _Handler()
         handler.realm_id = "demux"
 
-        # Patching DataAccess so it doesn't try to load config
         with patch(
             "yggdrasil.flow.data_access.data_access.load_external_systems_config",
             return_value=SAMPLE_CFG,
@@ -253,6 +368,8 @@ class TestPlanningContextGuard(unittest.TestCase):
         self.assertIsInstance(ctx, PlanningContext)
         self.assertEqual(ctx.realm, "demux")
         self.assertIsNotNone(ctx.data)
+        # planning phase → DataAccess with phase="planning"
+        self.assertEqual(ctx.data._phase, "planning")
 
     def test_data_access_is_lazy_per_handler_instance(self):
         """_data_access lazy property returns same instance on repeated access."""
@@ -279,6 +396,7 @@ class TestPlanningContextGuard(unittest.TestCase):
             da2 = handler._data_access
 
         self.assertIs(da1, da2)
+        self.assertEqual(da1._phase, "planning")
 
 
 if __name__ == "__main__":

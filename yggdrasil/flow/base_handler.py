@@ -74,7 +74,9 @@ class BaseHandler(ABC):
         except AttributeError:
             from yggdrasil.flow.data_access import DataAccess
 
-            self.__data_access: DataAccess = DataAccess(self._require_realm_id())
+            self.__data_access: DataAccess = DataAccess(
+                self._require_realm_id(), phase="planning"
+            )
             return self.__data_access
 
     def build_planning_context(

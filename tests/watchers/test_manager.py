@@ -190,9 +190,11 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
                 },
             },
             "defaults": {
-                "start_seq": "0",
-                "poll_interval": 5,
-                "include_docs": False,
+                "couchdb": {
+                    "start_seq": "0",
+                    "poll_interval": 5,
+                    "include_docs": False,
+                }
             },
         }
         self.store = InMemoryCheckpointStore()
@@ -282,6 +284,77 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
         )
         with self.assertRaises(KeyError):
             manager._resolve_connection_config("projects_db")
+
+    def test_defaults_couchdb_start_seq_reaches_backend_config(self):
+        """defaults.couchdb.start_seq is merged into resolved watcher config."""
+        cfg = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "http://couch.example.org:5984",
+                    "auth": {"user_env": "U", "pass_env": "P"},
+                }
+            },
+            "connections": {
+                "my_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                    # No watch block — defaults should apply
+                }
+            },
+            "defaults": {"couchdb": {"start_seq": "42"}},
+        }
+        manager = WatcherManager(config=cfg, checkpoint_store=self.store)
+        resolved = manager._resolve_connection_config("my_db")
+        self.assertEqual(resolved["start_seq"], "42")
+
+    def test_connection_watch_start_seq_overrides_defaults_couchdb(self):
+        """connection.watch.start_seq takes precedence over defaults.couchdb.start_seq."""
+        cfg = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "http://couch.example.org:5984",
+                    "auth": {"user_env": "U", "pass_env": "P"},
+                }
+            },
+            "connections": {
+                "my_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                    "watch": {"start_seq": "now"},
+                }
+            },
+            "defaults": {"couchdb": {"start_seq": "0"}},
+        }
+        manager = WatcherManager(config=cfg, checkpoint_store=self.store)
+        resolved = manager._resolve_connection_config("my_db")
+        self.assertEqual(resolved["start_seq"], "now")
+
+    def test_defaults_other_backend_type_does_not_bleed(self):
+        """defaults for a different backend type are not applied to a couchdb connection."""
+        cfg = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "http://couch.example.org:5984",
+                    "auth": {"user_env": "U", "pass_env": "P"},
+                }
+            },
+            "connections": {
+                "my_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                }
+            },
+            "defaults": {
+                "postgres": {"start_seq": "99", "poll_interval": 30},
+            },
+        }
+        manager = WatcherManager(config=cfg, checkpoint_store=self.store)
+        resolved = manager._resolve_connection_config("my_db")
+        self.assertNotIn("start_seq", resolved)
+        self.assertNotIn("poll_interval", resolved)
 
 
 class TestWatcherManagerBackendTypeValidation(unittest.TestCase):

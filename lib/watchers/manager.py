@@ -287,7 +287,7 @@ class WatcherManager:
         Algorithm:
         1. Delegate endpoint + connection lookup to resolve_connection()
         2. Build base config from resolved endpoint (backend, url)
-        3. Merge global watcher defaults (start_seq etc.)
+        3. Merge backend-specific defaults (defaults[backend_type])
         4. Merge per-connection watch settings (poll_interval, limit etc.)
         5. Merge resource (db, path, etc.)
         6. Pass auth env var names (not values) for backend credential resolution
@@ -319,11 +319,12 @@ class WatcherManager:
             "url": resolved_conn.endpoint.url,
         }
 
-        # Merge watch-specific settings (WatcherManager-only concern).
-        # Precedence: defaults < connection.watch < resource
-        defaults = self.config.get("defaults", {})
-        if isinstance(defaults, dict):
-            resolved.update(defaults)
+        # Merge backend-specific defaults. Precedence: defaults[backend] < connection.watch < resource
+        backend_defaults = (self.config.get("defaults") or {}).get(
+            resolved_conn.endpoint.backend_type, {}
+        )
+        if isinstance(backend_defaults, dict):
+            resolved.update(backend_defaults)
 
         connections = self.config.get("connections", {})
         conn = connections.get(connection_name, {})
