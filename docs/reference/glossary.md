@@ -126,4 +126,4 @@ Realm code interacts with the emitter only via `ctx.emitter` (typed as `EventEmi
 ## Data access
 
 ### DataAccess
-Realm-scoped, read-only gateway to external system connections. Enforces the `realm_allowlist` and `max_limit` policies configured under `external_systems.connections`. Accessed via `ctx.data` in both step functions and the planning context. Only connections explicitly configured with a `data_access` policy are accessible.
+Phase-aware, realm-scoped gateway to external system connections. Accessed via `ctx.data` in both step functions (execution phase — sync reads and writes) and the planning context (planning phase — async reads only). Call `ctx.data.connection(name)` to obtain the appropriate client for the current phase. Authorization is per-realm and per-phase: a realm must be listed under `data_access.realms` for a connection, with the appropriate phase permissions (`"read"`, `"write"`). `"write"` does not imply `"read"` — grant both explicitly for realms that need both. Only connections with a `data_access` block are accessible.
