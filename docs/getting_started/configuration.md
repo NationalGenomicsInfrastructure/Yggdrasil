@@ -73,13 +73,21 @@ Two key files:
             "endpoint": "main_couchdb",
             "resource": { "db": "yggdrasil" },
             "data_access": {
-                "realm_allowlist": ["my_realm"],
-                "max_limit": 50
+                "realms": {
+                    "my_realm": {
+                        "planning":  { "permissions": ["read"] },
+                        "execution": { "permissions": ["read", "write"] }
+                    }
+                },
+                "options": { "max_limit": 50 }
             }
         }
     },
     "defaults": {
-        "start_seq": "0"
+        "couchdb": {
+            "start_seq": "0",
+            "max_limit": 200
+        }
     }
 }
 ```
@@ -91,9 +99,16 @@ Two key files:
 | Key | Purpose |
 |---|---|
 | `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq`. A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
-| `data_access` | Used by `DataAccess` for realm data queries. Configures `realm_allowlist` (which realms may use this connection) and `max_limit` (max documents per query). |
+| `data_access` | Used by `DataAccess` for realm data queries. See the table below for sub-keys. |
 
-**`defaults`** provides fallback values for connections that omit optional fields (e.g. `start_seq`).
+**`data_access` sub-keys:**
+
+| Key | Purpose |
+|---|---|
+| `data_access.realms` | Maps realm_id → phase → permission list. Unlisted realms are denied. Each phase (`planning`, `execution`) has its own `permissions` array (`"read"`, `"write"`). |
+| `data_access.options` | Per-connection backend options (e.g. `max_limit`). Overrides the matching key in `defaults.<backend>`. |
+
+**`defaults`** groups all backend defaults under `defaults.<backend>`. Both `WatcherManager` and `DataAccess` read from `defaults.<backend>` — watcher settings (e.g. `start_seq`, `poll_interval`) and data-access settings (e.g. `max_limit`) all live here. Connection-level overrides (`watch` keys and `data_access.options` respectively) take precedence over these defaults.
 
 `WatchSpec` entries in a realm's registration reference a connection by logical name (e.g. `connection="projects_db"`). The `WatcherManager` resolves the name to the concrete endpoint at startup.
 

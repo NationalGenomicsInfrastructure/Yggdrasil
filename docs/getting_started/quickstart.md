@@ -81,11 +81,18 @@ See [CLI reference](cli.md) for all commands and flags.
 
 ### Pre-commit hooks
 
+Install both hook stages:
+
 ```bash
-pre-commit install
+pre-commit install                        # commit-time hooks
+pre-commit install --hook-type pre-push   # push-time hooks
 ```
 
-This runs `ruff`, `black`, and `mypy` automatically on each commit.
+**Commit-time** (`pre-commit install`): `ruff`, `black`, and mypy on staged files only — fast, catches local errors before they land in the branch.
+
+**Push-time** (`--hook-type pre-push`): full-project mypy (same config as CI) and the full test suite — runs once before the branch leaves your machine.
+
+> CI remains the authoritative gate. The pre-push hooks are a convenience that surfaces whole-project type and test failures before the push, without slowing down individual commits.
 
 ### Everyday commands
 

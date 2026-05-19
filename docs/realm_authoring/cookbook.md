@@ -181,7 +181,7 @@ def run_pipeline(ctx: StepContext, config_file: str, threads: int = 4) -> StepRe
 | `run_mode` | `str` | `"auto"` or `"manual"` |
 | `fingerprint` | `str` | SHA-256 fingerprint for this run |
 | `run_id` | `str` | Unique run ID |
-| `data` | `DataAccess` | Injected DataAccess object for CouchDB reads (use blocking API: `ctx.data.couchdb(conn).get_blocking(id)`) |
+| `data` | `DataAccess` | Phase-aware gateway to configured data sources. Call `ctx.data.connection(conn)` to get a sync client for reads (`get`, `find`, `require`, …) and writes (`put`). |
 
 ---
 
@@ -318,7 +318,9 @@ async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]
     ctx: PlanningContext = payload["planning_ctx"]
 
     # Fetch at planning time — use the async API (handler runs in async context)
-    client = ctx.data.couchdb("config_db")
+    # connection() is the preferred backend-neutral form; couchdb() is a CouchDB-specific
+    # alias that validates the backend type and delegates to connection().
+    client = ctx.data.connection("config_db")
     doc = await client.get("config:pipeline_defaults")
 
     # Build a structured dict — not a formatted string
@@ -356,24 +358,54 @@ def run_processor(ctx: StepContext, ref_doc: dict) -> StepResult:
 
 **When to use:** When the step itself doesn't need live data access, but the plan record should document exactly what configuration was resolved at plan-generation time.  Using a structured dict (rather than a formatted string) keeps the plan record queryable and makes it clear what fields were inspected.
 
-**Alternative — fetch at *execution time* inside the step:** Steps are synchronous (`def`, not `async def`), so use the blocking variants of the DataAccess API:
+**Alternative — fetch at *execution time* inside the step:** Steps are synchronous (`def`, not `async def`). Call `ctx.data.connection(conn)` to get a synchronous client — all read methods return results directly:
 
 ```python
 @step
 def run_processor(ctx: StepContext, item_id: str) -> StepResult:
-    # Blocking fetch — safe inside a synchronous step
-    client = ctx.data.couchdb("config_db")
-    doc = client.get_blocking("config:pipeline_defaults")    # sync
-    # or: client.find_blocking(selector)
-    # or: client.require_blocking(doc_id)          — raises if not found
-    # or: client.find_one_blocking(selector)
-    # or: client.fetch_by_field_blocking(field, value)
-    # or: client.require_one_blocking(selector)    — raises if not found
+    # Execution steps are synchronous — connection() returns a sync client directly
+    client = ctx.data.connection("config_db")
+    doc = client.get("config:pipeline_defaults")         # returns dict or None
+    # or: client.find(selector)                          # list of matching docs
+    # or: client.require(doc_id)                         # raises DataAccessNotFoundError if absent
+    # or: client.find_one(selector)                      # first match or None
+    # or: client.fetch_by_field(field, value)            # equality shorthand
+    # or: client.require_one(selector)                   # raises DataAccessNotFoundError if no match
     config_path = doc["default_config"] if doc else "/fallback/defaults.yaml"
     # ...
 ```
 
 The fetch is visible via step events and metrics (not baked into plan params), which is appropriate when live data is needed at run time.
+
+---
+
+## Pattern 8b: Writing to CouchDB in a step
+
+Steps with write permission can call `put()` on the execution client. Pass a clean body dict — do not include `_id` or `_rev`; the client manages them:
+
+```python
+@step
+def update_run_status(ctx: StepContext, run_id: str) -> StepResult:
+    client = ctx.data.connection("flowcell_db")
+
+    # Body must not contain _id or _rev — those are managed by the client
+    body = {"status": "complete", "processed_by": "yggdrasil"}
+    result = client.put(run_id, body, mode="upsert")
+    # result.status is "created" or "updated"
+    # result.old_rev / result.new_rev carry revision info
+
+    return StepResult(metrics={"write_status": result.status, "new_rev": result.new_rev})
+```
+
+**`mode` values:**
+
+| `mode` | Behaviour |
+|--------|-----------|
+| `"create"` | Fail if the document already exists (409) |
+| `"update"` | Fail if the document does not exist |
+| `"upsert"` | Create if absent, update if present; retries once on conflict |
+
+> **Note on write vs read:** A realm configured with only `"write"` permission can call `put()` but not `get()` or `find()`. Grant `"read"` explicitly for realms that need both.
 
 ---
 
