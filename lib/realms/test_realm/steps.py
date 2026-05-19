@@ -208,8 +208,8 @@ def step_fetch_from_db(
             "ctx.data is None — DataAccess was not injected by the Engine"
         )
 
-    client = ctx.data.couchdb(connection)
-    doc = client.get_blocking(doc_id)
+    client = ctx.data.connection(connection)
+    doc = client.get(doc_id)
 
     if doc is None:
         ctx.emit("step.fetch_result", status="not_found", doc_id=doc_id)
@@ -310,44 +310,44 @@ def step_exercise_all_fetch_methods(
             "ctx.data is None — DataAccess was not injected by the Engine"
         )
 
-    client = ctx.data.couchdb(connection)
+    client = ctx.data.connection(connection)
     selector = {"type": {"$eq": selector_type}}
     results: dict = {}
 
-    # 1. get_blocking() — returns the doc dict or None
-    doc = client.get_blocking(doc_id)
+    # 1. get() — returns the doc dict or None
+    doc = client.get(doc_id)
     results["get"] = {
         "found": doc is not None,
         "id": doc.get("_id") if doc else None,
     }
 
-    # 2. require_blocking() — same as get but raises DataAccessNotFoundError if absent
-    doc_req = client.require_blocking(doc_id)
+    # 2. require() — same as get but raises DataAccessNotFoundError if absent
+    doc_req = client.require(doc_id)
     results["require"] = {"id": doc_req.get("_id")}
 
-    # 3. find_blocking() — Mango selector, returns list (clamped to policy.max_limit)
-    docs = client.find_blocking(selector)
+    # 3. find() — Mango selector, returns list (clamped to policy.max_limit)
+    docs = client.find(selector)
     results["find"] = {
         "count": len(docs),
         "ids": [d.get("_id") for d in docs],
     }
 
-    # 4. find_one_blocking() — Mango selector, returns first match or None
-    first = client.find_one_blocking(selector)
+    # 4. find_one() — Mango selector, returns first match or None
+    first = client.find_one(selector)
     results["find_one"] = {
         "found": first is not None,
         "id": first.get("_id") if first else None,
     }
 
-    # 5. fetch_by_field_blocking() — equality convenience wrapper around find_blocking()
-    by_type = client.fetch_by_field_blocking("type", selector_type)
+    # 5. fetch_by_field() — equality convenience wrapper around find()
+    by_type = client.fetch_by_field("type", selector_type)
     results["fetch_by_field"] = {
         "count": len(by_type),
         "ids": [d.get("_id") for d in by_type],
     }
 
-    # 6. require_one_blocking() — Mango selector, raises DataAccessNotFoundError if none
-    one = client.require_one_blocking(selector)
+    # 6. require_one() — Mango selector, raises DataAccessNotFoundError if none
+    one = client.require_one(selector)
     results["require_one"] = {"id": one.get("_id")}
 
     ctx.emit("step.all_fetch_methods", results=results)
@@ -392,10 +392,10 @@ def step_verify_limit_clamping(
             "ctx.data is None — DataAccess was not injected by the Engine"
         )
 
-    client = ctx.data.couchdb(connection)
+    client = ctx.data.connection(connection)
     selector = {"type": {"$eq": selector_type}}
 
-    docs = client.find_blocking(selector, limit=request_limit)
+    docs = client.find(selector, limit=request_limit)
     actual_count = len(docs)
 
     ctx.emit(
