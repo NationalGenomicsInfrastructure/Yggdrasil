@@ -137,7 +137,7 @@ class TestRealmHandler(BaseHandler):
 
         doc_id = "data_access_test:reference_doc"
         try:
-            client = ctx.data.couchdb("yggdrasil_db")
+            client = ctx.data.connection("yggdrasil_db")
             doc = await client.get(doc_id)
             if doc is None:
                 return {"doc_id": doc_id, "missing": True}

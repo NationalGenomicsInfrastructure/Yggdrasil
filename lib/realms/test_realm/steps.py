@@ -228,8 +228,8 @@ def step_expect_denied(
     Verify DataAccess correctly rejects access to a restricted connection.
 
     Succeeds (returns StepResult) if any DataAccessError subclass is raised:
-    - DataAccessDeniedError: connection exists but realm is not in allowlist,
-      or the connection has no data_access policy configured.
+    - DataAccessDeniedError: connection exists but realm has no permissions
+      configured, or the connection has no data_access policy at all.
     - DataAccessConfigError: connection name does not exist in config at all.
 
     Fails hard (raises RuntimeError) if access is unexpectedly granted.
@@ -269,6 +269,120 @@ def step_expect_denied(
                 "access_correctly_denied": True,
                 "connection": connection,
                 "error_type": type(exc).__name__,
+                "denial_reason": str(exc),
+            }
+        )
+
+
+@step
+def step_write_to_db(
+    ctx: StepContext,
+    connection: str = "test_realm_write_db",
+    doc_id: str = "data_access_test:write_result",
+    mode: str = "upsert",
+) -> StepResult:
+    """
+    Write a document to CouchDB at execution time using DataAccess.
+
+    Demonstrates write access from a step. The connection must have "write"
+    permission for the realm in the execution phase. The body dict is kept
+    clean (no _id or _rev) — DataAccess manages those internally.
+
+    Args:
+        ctx: Step execution context (ctx.data must be injected by Engine)
+        connection: Connection name with execution write permission
+        doc_id: Document _id to write
+        mode: Write mode — "create", "update", or "upsert" (default)
+
+    Returns:
+        StepResult with write outcome fields in metrics
+
+    Raises:
+        RuntimeError: If ctx.data was not injected
+        DataAccessDeniedError: If the realm lacks write permission
+        DataAccessWriteError: If the write fails (e.g. conflict)
+    """
+    if ctx.data is None:
+        raise RuntimeError(
+            "ctx.data is None — DataAccess was not injected by the Engine"
+        )
+
+    body = {
+        "type": "ygg_test_write_result",
+        "status": "written",
+        "written_by": "test_realm/step_write_to_db",
+    }
+    client = ctx.data.connection(connection)
+    result = client.put(doc_id, body, mode=mode)
+
+    ctx.emit(
+        "step.write_result",
+        write_status=result.status,
+        doc_id=result.doc_id,
+        old_rev=result.old_rev,
+        new_rev=result.new_rev,
+    )
+    return StepResult(
+        metrics={
+            "write_status": result.status,
+            "doc_id": result.doc_id,
+            "old_rev": result.old_rev,
+            "new_rev": result.new_rev,
+        }
+    )
+
+
+@step
+def step_expect_read_denied(
+    ctx: StepContext,
+    connection: str = "test_realm_write_db",
+    doc_id: str = "data_access_test:probe",
+) -> StepResult:
+    """
+    Verify that a write-only connection correctly denies read access.
+
+    The connection() call succeeds (write permission allows it), but
+    client.get() must raise DataAccessDeniedError because "read" is absent
+    from the connection's execution permissions.
+
+    Succeeds (returns StepResult) only if DataAccessDeniedError is raised on
+    get(). Fails hard (raises RuntimeError) if the read unexpectedly succeeds.
+
+    Args:
+        ctx: Step execution context
+        connection: Connection name configured with write-only execution permission
+        doc_id: Document _id to attempt reading
+
+    Returns:
+        StepResult confirming read was correctly denied
+
+    Raises:
+        RuntimeError: If read was unexpectedly allowed
+    """
+    from yggdrasil.flow.data_access import DataAccessDeniedError
+
+    if ctx.data is None:
+        raise RuntimeError(
+            "ctx.data is None — DataAccess was not injected by the Engine"
+        )
+
+    client = ctx.data.connection(connection)  # succeeds — write permission exists
+    try:
+        client.get(doc_id)
+        raise RuntimeError(
+            f"Expected DataAccessDeniedError for get() on '{connection}' "
+            f"but read succeeded — check permissions configuration!"
+        )
+    except DataAccessDeniedError as exc:
+        ctx.emit(
+            "step.read_denied_as_expected",
+            connection=connection,
+            denial_reason=str(exc),
+        )
+        return StepResult(
+            metrics={
+                "read_correctly_denied": True,
+                "connection": connection,
                 "denial_reason": str(exc),
             }
         )
@@ -325,7 +439,7 @@ def step_exercise_all_fetch_methods(
     doc_req = client.require(doc_id)
     results["require"] = {"id": doc_req.get("_id")}
 
-    # 3. find() — Mango selector, returns list (clamped to policy.max_limit)
+    # 3. find() — Mango selector, returns list (clamped to effective max_limit from data_access.options)
     docs = client.find(selector)
     results["find"] = {
         "count": len(docs),
@@ -365,10 +479,11 @@ def step_verify_limit_clamping(
     """
     Verify that DataAccess clamps find() results to policy.max_limit.
 
-    Requests ``request_limit`` documents (intentionally larger than
-    ``policy.max_limit``) and asserts that the number of returned documents
-    does not exceed ``expected_max`` (which should equal the connection's
-    ``max_limit``).
+    Requests ``request_limit`` documents (intentionally larger than the
+    effective ``max_limit`` from ``data_access.options.max_limit``) and
+    asserts that the number of returned documents does not exceed
+    ``expected_max`` (which should equal the connection's configured
+    ``options.max_limit``).
 
     The step SUCCEEDS (returns StepResult) when clamping is correctly
     enforced. It FAILS (raises RuntimeError) if the returned count exceeds
@@ -376,7 +491,8 @@ def step_verify_limit_clamping(
 
     Args:
         ctx: Step execution context (ctx.data must be injected by Engine)
-        connection: Connection name with a low max_limit (default: yggdrasil_db_clamped)
+        connection: Connection name with a low max_limit in data_access.options
+            (default: yggdrasil_db_clamped)
         selector_type: Value of the 'type' field used in the Mango selector
         request_limit: Limit value to pass to find() — should exceed max_limit
         expected_max: Maximum number of results expected after clamping
@@ -477,6 +593,8 @@ STEPS: dict[str, Any] = {
     "step_random_fail": step_random_fail,
     "step_fetch_from_db": step_fetch_from_db,
     "step_expect_denied": step_expect_denied,
+    "step_write_to_db": step_write_to_db,
+    "step_expect_read_denied": step_expect_read_denied,
     "step_exercise_all_fetch_methods": step_exercise_all_fetch_methods,
     "step_verify_limit_clamping": step_verify_limit_clamping,
     "step_emit_metadata": step_emit_metadata,
