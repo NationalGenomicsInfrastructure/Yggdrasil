@@ -1,0 +1,579 @@
+"""Phase-specific CouchDB clients for realm data access.
+
+Provides:
+  _CouchDBSyncOps        — internal shared sync read helpers
+  CouchDBPlanningClient  — async read-only client for planning phase
+  CouchDBExecutionClient — sync read/write client for execution phase
+  _CouchDBWriteOps       — internal write helpers (create/update/upsert)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Any, Literal
+from uuid import uuid4
+
+from ibm_cloud_sdk_core.api_exception import ApiException
+from requests.exceptions import RequestException
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
+
+from yggdrasil.flow.data_access.errors import (
+    DataAccessDeniedError,
+    DataAccessNotFoundError,
+    DataAccessQueryError,
+    DataAccessWriteError,
+)
+from yggdrasil.flow.data_access.models import (
+    DataAccessTraceContext,
+    DataAccessWriteResult,
+)
+
+if TYPE_CHECKING:
+    from lib.couchdb.couchdb_connection import CouchDBHandler
+
+_logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_LIMIT = 200
+
+# Both query and write paths wrap the same transport exception types.
+_QUERY_EXCEPTIONS = (ApiException, RequestException, ConnectionError, Urllib3HTTPError)
+_WRITE_EXCEPTIONS = (ApiException, RequestException, ConnectionError, Urllib3HTTPError)
+
+
+# ---------------------------------------------------------------------------
+# Internal shared read helpers
+# ---------------------------------------------------------------------------
+
+
+class _CouchDBSyncOps:
+    """Internal synchronous CouchDB read helpers shared by both clients.
+
+    Not part of the public API. Both CouchDBPlanningClient (which calls
+    these via asyncio.to_thread) and CouchDBExecutionClient (which calls
+    these directly) use this class.
+    """
+
+    def __init__(self, handler: CouchDBHandler, options: dict[str, Any]) -> None:
+        self._handler = handler
+        self._max_limit: int = options.get("max_limit", _DEFAULT_MAX_LIMIT)
+
+    def _get_sync(self, doc_id: str) -> dict[str, Any] | None:
+        try:
+            return self._handler.fetch_document_by_id(doc_id)
+        except _QUERY_EXCEPTIONS as exc:
+            raise DataAccessQueryError(f"Failed to fetch '{doc_id}': {exc}") from exc
+
+    def _find_sync(
+        self, selector: dict[str, Any], *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        effective_limit = (
+            min(limit, self._max_limit) if limit is not None else self._max_limit
+        )
+        try:
+            return self._handler.find_documents(selector, limit=effective_limit)
+        except _QUERY_EXCEPTIONS as exc:
+            raise DataAccessQueryError(f"Query failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Planning client — async reads only
+# ---------------------------------------------------------------------------
+
+
+class CouchDBPlanningClient:
+    """Async read-only CouchDB client for planning-phase handlers.
+
+    Exposes get/find/find_one/fetch_by_field/require/require_one as async
+    methods. No put() — planning writes are not supported by design.
+    """
+
+    def __init__(self, ops: _CouchDBSyncOps) -> None:
+        self._ops = ops
+
+    async def get(self, doc_id: str) -> dict[str, Any] | None:
+        return await asyncio.to_thread(self._ops._get_sync, doc_id)
+
+    async def find(
+        self, selector: dict[str, Any], *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._ops._find_sync, selector, limit=limit)
+
+    async def find_one(self, selector: dict[str, Any]) -> dict[str, Any] | None:
+        results = await self.find(selector, limit=1)
+        return results[0] if results else None
+
+    async def fetch_by_field(
+        self, field: str, value: Any, *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        return await self.find({field: {"$eq": value}}, limit=limit)
+
+    async def require(self, doc_id: str) -> dict[str, Any]:
+        doc = await self.get(doc_id)
+        if doc is None:
+            raise DataAccessNotFoundError(f"Document '{doc_id}' not found")
+        return doc
+
+    async def require_one(self, selector: dict[str, Any]) -> dict[str, Any]:
+        doc = await self.find_one(selector)
+        if doc is None:
+            raise DataAccessNotFoundError(f"No document matched selector {selector!r}")
+        return doc
+
+    # put() is intentionally absent. Planning phase is read-only by design.
+
+
+# ---------------------------------------------------------------------------
+# Internal write helpers
+# ---------------------------------------------------------------------------
+
+
+class _CouchDBWriteOps:
+    """Internal CouchDB write helpers used only by CouchDBExecutionClient.
+
+    Not part of the public API. Uses CouchDBHandler.put_document() and
+    CouchDBHandler.fetch_document_by_id() directly.
+
+    All methods return a (status, old_rev, new_rev) tuple on success and
+    raise DataAccessWriteError on expected failure conditions, including
+    failures that occur during internal _rev fetches.
+    """
+
+    def __init__(self, handler: CouchDBHandler) -> None:
+        self._handler = handler
+
+    def _fetch_existing_for_write(self, doc_id: str) -> dict[str, Any] | None:
+        """Fetch existing document as part of a write operation.
+
+        This is an adapter-internal read — it does NOT require realm-level
+        'read' permission. Wraps transport/API errors as DataAccessWriteError
+        (not DataAccessQueryError) because the failure occurs within a write
+        operation context.
+
+        Returns:
+            The document dict if found, or None if absent.
+
+        Raises:
+            DataAccessWriteError: If the fetch fails due to network or API error.
+        """
+        try:
+            return self._handler.fetch_document_by_id(doc_id)
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"Failed to fetch '{doc_id}' for write pre-check: {exc}"
+            ) from exc
+
+    def _create(
+        self, doc_id: str, doc: dict[str, Any]
+    ) -> tuple[Literal["created", "updated"], str | None, str | None]:
+        """Create a document; fail if it already exists.
+
+        Does NOT fetch the existing document first. If the document exists,
+        CouchDB returns 409 and we raise immediately (no retry).
+
+        Raises:
+            DataAccessWriteError: Document already exists (409).
+            DataAccessWriteError: Other backend write failure.
+        """
+        try:
+            result = self._handler.put_document(doc_id, doc)
+            return "created", None, result.get("rev")
+        except ApiException as exc:
+            if exc.status_code == 409:
+                raise DataAccessWriteError(
+                    f"Cannot create '{doc_id}': document already exists (409 conflict)."
+                ) from exc
+            raise DataAccessWriteError(
+                f"CouchDB error creating '{doc_id}': {exc.status_code} {exc.message}"
+            ) from exc
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"Network/transport error creating '{doc_id}': {exc}"
+            ) from exc
+
+    def _update(
+        self, doc_id: str, doc: dict[str, Any]
+    ) -> tuple[Literal["created", "updated"], str | None, str | None]:
+        """Update a document; fail if it does not exist.
+
+        Fetches the existing _rev first. If the document is absent (fetch returns
+        None), raises immediately. If the rev changes between fetch and write (409),
+        raises immediately — update mode does not retry.
+
+        Raises:
+            DataAccessWriteError: Document not found (fetch returned None).
+            DataAccessWriteError: Fetch failed due to network/API error.
+            DataAccessWriteError: Existing document is missing '_rev'.
+            DataAccessWriteError: Rev conflict (409) or other write failure.
+        """
+        existing = self._fetch_existing_for_write(doc_id)
+        if existing is None:
+            raise DataAccessWriteError(
+                f"Cannot update '{doc_id}': document does not exist."
+            )
+        old_rev: str | None = existing.get("_rev")
+        if not old_rev:
+            raise DataAccessWriteError(
+                f"Cannot update '{doc_id}': existing document is missing '_rev'. "
+                "The document may be malformed."
+            )
+        try:
+            result = self._handler.put_document(doc_id, doc, rev=old_rev)
+            return "updated", old_rev, result.get("rev")
+        except ApiException as exc:
+            if exc.status_code == 409:
+                raise DataAccessWriteError(
+                    f"Cannot update '{doc_id}': revision conflict (409). "
+                    "Document was modified concurrently."
+                ) from exc
+            raise DataAccessWriteError(
+                f"CouchDB error updating '{doc_id}': {exc.status_code} {exc.message}"
+            ) from exc
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"Network/transport error updating '{doc_id}': {exc}"
+            ) from exc
+
+    def _upsert(
+        self, doc_id: str, doc: dict[str, Any], *, logger: logging.Logger
+    ) -> tuple[Literal["created", "updated"], str | None, str | None]:
+        """Create or update a document.
+
+        Dispatches to _upsert_absent (document not found at fetch time) or
+        _upsert_present (document found at fetch time). Both paths retry once
+        on 409 conflict.
+        """
+        existing = self._fetch_existing_for_write(doc_id)
+        if existing is None:
+            return self._upsert_absent(doc_id, doc, logger=logger)
+        return self._upsert_present(doc_id, doc, existing.get("_rev"), logger=logger)
+
+    def _upsert_absent(
+        self, doc_id: str, doc: dict[str, Any], *, logger: logging.Logger
+    ) -> tuple[Literal["created", "updated"], str | None, str | None]:
+        """Create path: document was absent at initial fetch.
+
+        Tries to create the document. On 409 (another process created it between
+        fetch and create), refetches:
+        - If now present: updates once.
+        - If still absent: calls _create() once more (bounded retry).
+        Raises DataAccessWriteError on any non-retriable failure or a second 409.
+        """
+        try:
+            result = self._handler.put_document(doc_id, doc)
+            return "created", None, result.get("rev")
+        except ApiException as exc:
+            if exc.status_code != 409:
+                raise DataAccessWriteError(
+                    f"CouchDB error creating '{doc_id}' during upsert: "
+                    f"{exc.status_code} {exc.message}"
+                ) from exc
+            # 409: another process created the document between fetch and create.
+            # Refetch and write once more.
+            logger.warning(
+                "upsert create-path conflict on '%s': document appeared after "
+                "fetch; refetching.",
+                doc_id,
+            )
+            retry_existing = self._fetch_existing_for_write(doc_id)
+            if retry_existing is None:
+                return self._create(doc_id, doc)
+            retry_rev = retry_existing.get("_rev")
+            if not retry_rev:
+                raise DataAccessWriteError(
+                    f"Cannot upsert '{doc_id}': refetched document has no _rev "
+                    "after create-path 409."
+                ) from exc
+            try:
+                retry_result = self._handler.put_document(doc_id, doc, rev=retry_rev)
+                return "updated", retry_rev, retry_result.get("rev")
+            except ApiException as retry_exc:
+                if retry_exc.status_code == 409:
+                    raise DataAccessWriteError(
+                        f"Cannot upsert '{doc_id}': two consecutive 409 conflicts. "
+                        "Document is being modified at high frequency."
+                    ) from retry_exc
+                raise DataAccessWriteError(
+                    f"CouchDB error on upsert create-path retry for '{doc_id}': "
+                    f"{retry_exc.status_code} {retry_exc.message}"
+                ) from retry_exc
+            except _WRITE_EXCEPTIONS as retry_exc:
+                raise DataAccessWriteError(
+                    f"Network/transport error on upsert create-path retry for '{doc_id}': "
+                    f"{retry_exc}"
+                ) from retry_exc
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"Network/transport error creating '{doc_id}' during upsert: {exc}"
+            ) from exc
+
+    def _upsert_present(
+        self,
+        doc_id: str,
+        doc: dict[str, Any],
+        old_rev: str | None,
+        *,
+        logger: logging.Logger,
+    ) -> tuple[Literal["created", "updated"], str | None, str | None]:
+        """Update path: document was present at initial fetch.
+
+        Tries to update the document with the fetched _rev. On 409 (rev changed
+        between fetch and write), refetches:
+        - If now present: updates once more.
+        - If absent: calls _create() (document was deleted concurrently).
+        Raises DataAccessWriteError on any non-retriable failure or a second 409.
+        """
+        if not old_rev:
+            raise DataAccessWriteError(
+                f"Cannot upsert '{doc_id}': existing document is missing '_rev'."
+            )
+        try:
+            result = self._handler.put_document(doc_id, doc, rev=old_rev)
+            return "updated", old_rev, result.get("rev")
+        except ApiException as exc:
+            if exc.status_code != 409:
+                raise DataAccessWriteError(
+                    f"CouchDB error upserting '{doc_id}': {exc.status_code} {exc.message}"
+                ) from exc
+            # 409 conflict — retry once
+            logger.warning(
+                "upsert conflict on '%s' (rev %s changed between fetch and write); "
+                "retrying once.",
+                doc_id,
+                old_rev,
+            )
+            retry_existing = self._fetch_existing_for_write(doc_id)
+            if retry_existing is None:
+                return self._create(doc_id, doc)
+            retry_rev: str | None = retry_existing.get("_rev")
+            if not retry_rev:
+                raise DataAccessWriteError(
+                    f"Cannot upsert '{doc_id}': retry document is missing '_rev'."
+                )
+            try:
+                retry_result = self._handler.put_document(doc_id, doc, rev=retry_rev)
+                return "updated", retry_rev, retry_result.get("rev")
+            except ApiException as retry_exc:
+                if retry_exc.status_code == 409:
+                    raise DataAccessWriteError(
+                        f"Cannot upsert '{doc_id}': two consecutive 409 conflicts. "
+                        "Document is being modified at high frequency."
+                    ) from retry_exc
+                raise DataAccessWriteError(
+                    f"CouchDB error on upsert retry for '{doc_id}': "
+                    f"{retry_exc.status_code} {retry_exc.message}"
+                ) from retry_exc
+            except _WRITE_EXCEPTIONS as retry_exc:
+                raise DataAccessWriteError(
+                    f"Network/transport error on upsert retry for '{doc_id}': {retry_exc}"
+                ) from retry_exc
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"Network/transport error upserting '{doc_id}': {exc}"
+            ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Execution client — sync reads + writes
+# ---------------------------------------------------------------------------
+
+
+class CouchDBExecutionClient:
+    """Sync read/write CouchDB client for execution-phase steps.
+
+    Exposes synchronous get/find/find_one/fetch_by_field/require/require_one
+    plus put() for authorized writes. No async wrappers.
+    """
+
+    def __init__(
+        self,
+        ops: _CouchDBSyncOps,
+        write_ops: _CouchDBWriteOps,
+        *,
+        permissions: frozenset[str],
+        realm_id: str,
+        connection_name: str,
+        resource: str,
+        trace_context: DataAccessTraceContext | None,
+    ) -> None:
+        self._ops = ops
+        self._write_ops = write_ops
+        self._permissions = permissions
+        self._realm_id = realm_id
+        self._connection_name = connection_name
+        self._resource = resource
+        self._trace = trace_context
+
+    def _check_read_permission(self) -> None:
+        if "read" not in self._permissions:
+            raise DataAccessDeniedError(
+                f"Realm '{self._realm_id}' does not have 'read' permission "
+                f"for connection '{self._connection_name}'."
+            )
+
+    # --- Sync reads ---
+
+    def get(self, doc_id: str) -> dict[str, Any] | None:
+        self._check_read_permission()
+        return self._ops._get_sync(doc_id)
+
+    def find(
+        self, selector: dict[str, Any], *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        self._check_read_permission()
+        return self._ops._find_sync(selector, limit=limit)
+
+    def find_one(self, selector: dict[str, Any]) -> dict[str, Any] | None:
+        results = self.find(selector, limit=1)
+        return results[0] if results else None
+
+    def fetch_by_field(
+        self, field: str, value: Any, *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        return self.find({field: {"$eq": value}}, limit=limit)
+
+    def require(self, doc_id: str) -> dict[str, Any]:
+        doc = self.get(doc_id)
+        if doc is None:
+            raise DataAccessNotFoundError(f"Document '{doc_id}' not found")
+        return doc
+
+    def require_one(self, selector: dict[str, Any]) -> dict[str, Any]:
+        doc = self.find_one(selector)
+        if doc is None:
+            raise DataAccessNotFoundError(f"No document matched selector {selector!r}")
+        return doc
+
+    # --- Write trace event emission ---
+
+    def _emit(self, type_: str, **extra: Any) -> None:
+        """Emit a data_access event. Silently no-ops if no emitter is configured.
+
+        Emission failures are caught and logged; they never propagate to the caller.
+        The backend write result is authoritative regardless of emission outcome.
+        """
+        if self._trace is None or self._trace.emitter is None:
+            return
+        doc_id: str = extra.get("doc_id", "")
+        event: dict[str, Any] = {
+            "type": type_,
+            "realm": self._trace.realm,
+            "phase": self._trace.phase,
+            "plan_id": self._trace.plan_id,
+            "run_id": self._trace.run_id,
+            "step_id": self._trace.step_id,
+            "step_name": self._trace.step_name,
+            "connection": self._connection_name,
+            "backend": "couchdb",
+            "_spool_path": {
+                "realm": self._trace.realm,
+                "plan_id": self._trace.plan_id or "unknown",
+                "step_id": self._trace.step_id or "unknown",
+                "run_id": self._trace.run_id,
+                "filename": (
+                    f"data_access_write_{doc_id[:12].replace('/', '_')}"
+                    f"_{uuid4().hex[:8]}.json"
+                ),
+            },
+            **extra,
+        }
+        try:
+            self._trace.emitter.emit(event)
+        except Exception:
+            _logger.exception(
+                "Failed to emit %s event for connection '%s'",
+                type_,
+                self._connection_name,
+            )
+
+    # --- Write ---
+
+    def put(
+        self,
+        doc_id: str,
+        doc: dict[str, Any],
+        *,
+        mode: Literal["create", "update", "upsert"] = "upsert",
+    ) -> DataAccessWriteResult:
+        """Write a document to the CouchDB database.
+
+        Args:
+            doc_id: Target document ID.
+            doc: Document body. Must NOT contain '_id' or '_rev' — DataAccess
+                manages document identity and revision internally. Pass a clean
+                body dict only. If you obtained a document via get(), strip the
+                CouchDB metadata fields before passing it here.
+            mode: Write mode:
+                "create"  — fail if document exists (409).
+                "update"  — fail if document does not exist.
+                "upsert"  — create if missing, update if present; retries once on 409.
+
+        Returns:
+            DataAccessWriteResult with status, revisions, and context.
+
+        Raises:
+            ValueError: doc contains '_id' or '_rev' (caller contract violation).
+            ValueError: mode is not one of 'create', 'update', 'upsert'.
+            DataAccessDeniedError: Realm lacks 'write' permission.
+            DataAccessWriteError: Backend conflict or write failure, including
+                internal _rev fetch failures.
+        """
+        if mode not in {"create", "update", "upsert"}:
+            raise ValueError(
+                f"Invalid mode '{mode}'. Must be one of: 'create', 'update', 'upsert'."
+            )
+
+        reserved = {"_id", "_rev"} & doc.keys()
+        if reserved:
+            raise ValueError(
+                f"doc must not contain {sorted(reserved)!r}. "
+                "DataAccess manages document identity and revision internally. "
+                "Pass a clean body dict without CouchDB metadata fields."
+            )
+
+        common: dict[str, Any] = {"operation": mode, "doc_id": doc_id}
+
+        # Permission check — raise immediately; Phase 6 event emission is in _emit()
+        if "write" not in self._permissions:
+            self._emit(
+                "data_access.write.denied",
+                reason=f"Realm '{self._realm_id}' lacks 'write' permission.",
+                **common,
+            )
+            raise DataAccessDeniedError(
+                f"Realm '{self._realm_id}' does not have 'write' permission "
+                f"for connection '{self._connection_name}'."
+            )
+
+        dispatch = {
+            "create": self._write_ops._create,
+            "update": self._write_ops._update,
+            "upsert": lambda did, d: self._write_ops._upsert(did, d, logger=_logger),
+        }
+
+        try:
+            status, old_rev, new_rev = dispatch[mode](doc_id, doc)
+        except DataAccessWriteError as exc:
+            self._emit("data_access.write.failed", error=str(exc), **common)
+            raise
+
+        result = DataAccessWriteResult(
+            backend="couchdb",
+            connection_name=self._connection_name,
+            resource=self._resource,
+            operation=mode,
+            doc_id=doc_id,
+            status=status,
+            old_rev=old_rev,
+            new_rev=new_rev,
+        )
+
+        self._emit(
+            "data_access.write.succeeded",
+            status=status,
+            old_rev=old_rev,
+            new_rev=new_rev,
+            **common,
+        )
+
+        return result

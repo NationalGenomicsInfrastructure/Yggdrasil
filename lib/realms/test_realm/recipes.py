@@ -358,16 +358,15 @@ def artifact_write(
 
 
 # ---------------------------------------------------------------------------
-# Recipe: data_fetch_plan  (planning-time — called from handler, not registry)
+# Recipe: data_fetch_plan
 # ---------------------------------------------------------------------------
 
 
 def data_fetch_plan_steps(ref_dict: dict) -> list[StepSpec]:
     """
-    Generate steps for the data_fetch_plan scenario.
+    Internal helper called by the handler (Mode 1) and by data_fetch_plan().
+    Requires the already-fetched reference data to be passed in.
 
-    This function is NOT in the RECIPES registry because it requires the
-    already-fetched reference data to be passed in at plan-generation time.
     The handler performs an async CouchDB fetch during ``generate_plan_drafts``
     and then calls this function so the result is baked into the step params
     as a **structured dict** — not a formatted string.
@@ -484,7 +483,7 @@ def data_fetch_exec(
     """
     Generate a plan that fetches from CouchDB at execution time.
 
-    The step_fetch_from_db step uses ctx.data.couchdb() at runtime, so the
+    The step_fetch_from_db step uses ctx.data.connection() at runtime, so the
     fetch happens when the Engine runs the step — not during planning. The
     fetched document appears in the step's emitted events and result metrics,
     which makes it visible in the execution record.
@@ -537,8 +536,8 @@ def data_access_denied(
 
     Two denial cases are tested in sequence:
       1. projects_db — has no data_access block → DataAccessDeniedError (no policy)
-      2. mock_resource — has data_access but test_realm not in allowlist
-             → DataAccessDeniedError (realm not in allowlist)
+      2. mock_resource — has data_access but test_realm not in realms config
+             → DataAccessDeniedError (realm not configured)
 
     Each step succeeds only if the expected denial is raised; it fails hard
     if access is unexpectedly granted.
@@ -564,8 +563,8 @@ def data_access_denied(
             params={"connection": "projects_db"},
         ),
         _make_step(
-            step_id="verify_not_allowlisted",
-            name="Verify Not-Allowlisted Denial",
+            step_id="verify_not_configured",
+            name="Verify Realm-Not-Configured Denial",
             fn_name="step_expect_denied",
             params={"connection": "mock_resource"},
             deps=["verify_no_policy"],
@@ -575,7 +574,7 @@ def data_access_denied(
             name="All Denials Verified",
             fn_name="step_echo",
             params={"message": "All data-access denial cases passed as expected!"},
-            deps=["verify_not_allowlisted"],
+            deps=["verify_not_configured"],
         ),
     ]
 
@@ -594,10 +593,8 @@ def data_fetch_all_methods(
     Exercise every read method on CouchDBReadClient in sequence.
 
     Uses step_exercise_all_fetch_methods which calls get, require, find,
-    find_one, fetch_by_field, and require_one in a single step. Each
-    method's result is reported in the step metrics and emitted as a
-    step.all_fetch_methods event so all outcomes are visible in the
-    execution record.
+    find_one, fetch_by_field, and require_one in a single step against the
+    phase-aware CouchDBExecutionClient.
 
     Steps:
         1. exercise_all: Runs all six fetch methods against yggdrasil_db
@@ -647,7 +644,7 @@ def data_verify_limit_clamping(
     """
     Verify that DataAccess clamps find() results to policy.max_limit.
 
-    Uses the ``yggdrasil_db_clamped`` connection (max_limit: 2). The step
+    Uses the ``yggdrasil_db_clamped`` connection (data_access.options.max_limit: 2). The step
     requests 100 documents but expects at most 2 to be returned, proving
     the policy is enforced by CouchDBReadClient regardless of what the
     caller requests.
@@ -688,6 +685,112 @@ def data_verify_limit_clamping(
             fn_name="step_echo",
             params={"message": "max_limit clamping enforced — policy is working!"},
             deps=["verify_clamp"],
+        ),
+    ]
+
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
+# Recipe: data_write_exec
+# ---------------------------------------------------------------------------
+
+
+def data_write_exec(
+    overrides: dict[str, Any] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that writes a document to CouchDB at execution time.
+
+    Proves that a step with execution write permission can call
+    client.put() successfully via ctx.data.connection(). The write result
+    (status, doc_id, old_rev, new_rev) is returned in step metrics and
+    emitted as a step.write_result event so it is visible in the execution
+    record.
+
+    Steps:
+        1. write_doc: Write data_access_test:write_result to test_realm_write_db
+        2. echo_confirm: Confirm write completed (depends on write_doc)
+
+    Args:
+        overrides: Optional param overrides by step_id.
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="write_doc",
+            name="Write Doc to DB",
+            fn_name="step_write_to_db",
+            params={
+                "connection": "test_realm_write_db",
+                "doc_id": "data_access_test:write_result",
+                "mode": "upsert",
+            },
+        ),
+        _make_step(
+            step_id="echo_confirm",
+            name="Confirm Write",
+            fn_name="step_echo",
+            params={"message": "Execution-time CouchDB write complete!"},
+            deps=["write_doc"],
+        ),
+    ]
+
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
+# Recipe: data_write_only_permission
+# ---------------------------------------------------------------------------
+
+
+def data_write_only_permission(
+    overrides: dict[str, Any] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that proves "write" permission does not imply "read".
+
+    Uses a connection configured with execution permissions ["write"] only.
+    The first step calls put() — which must succeed. The second step calls
+    get() on the same connection — which must raise DataAccessDeniedError.
+    The second step succeeds only if that denial is raised.
+
+    Steps:
+        1. write_only_put: put() to test_realm_write_only_db — must succeed
+        2. write_only_read_denied: get() on same connection — denial expected
+
+    Args:
+        overrides: Optional param overrides by step_id.
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="write_only_put",
+            name="Write-Only Put",
+            fn_name="step_write_to_db",
+            params={
+                "connection": "test_realm_write_db",
+                "doc_id": "data_access_test:write_only_probe",
+                "mode": "upsert",
+            },
+        ),
+        _make_step(
+            step_id="write_only_read_denied",
+            name="Read Must Be Denied",
+            fn_name="step_expect_read_denied",
+            params={
+                "connection": "test_realm_write_db",
+                "doc_id": "data_access_test:write_only_probe",
+            },
+            deps=["write_only_put"],
         ),
     ]
 
@@ -739,6 +842,8 @@ RECIPES: dict[str, Any] = {
     "data_access_denied": data_access_denied,
     "data_fetch_all_methods": data_fetch_all_methods,
     "data_verify_limit_clamping": data_verify_limit_clamping,
+    "data_write_exec": data_write_exec,
+    "data_write_only_permission": data_write_only_permission,
 }
 
 

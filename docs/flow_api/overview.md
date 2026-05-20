@@ -48,7 +48,7 @@ Passed to every `@step` function at execution time.
 | `run_mode` | `str` | `"auto"` or `"manual"` |
 | `fingerprint` | `str` | SHA-256 fingerprint for this run |
 | `run_id` | `str` | Unique run ID (UUID fragment) |
-| `data` | `DataAccess` | Read-only access to configured data sources |
+| `data` | `DataAccess` | Phase-aware read/write gateway to configured data sources. Call `connection(name)` to obtain a sync client (execution phase: reads + writes; planning phase: async reads only). |
 
 ### `PlanningContext`
 
@@ -63,7 +63,7 @@ Passed to `generate_plan_drafts()`. Contains everything a handler needs to build
 | `source_doc` | `dict` | The raw document that triggered the event |
 | `reason` | `str` | Human-readable trigger reason |
 | `realm_config` | `dict \| None` | Optional realm-specific config slice |
-| `data` | `DataAccess` | Read-only access for plan-time data fetches |
+| `data` | `DataAccess` | Planning-phase DataAccess gateway. Call `connection(name)` to obtain an async read-only client (`await client.get(...)`, `await client.find(...)`). |
 
 ### `PlanDraft`
 
@@ -224,6 +224,106 @@ Each event JSON record contains: `type`, `seq`, `ts`, `eid`, `realm`, `scope`, `
 | `CouchEmitter` | Writes events as CouchDB documents | When you need queryable event history |
 
 The concrete emitter is configured by the operator at daemon startup (via `YGG_EVENT_SPOOL` or, in future, `main.json`). Realm step functions interact with the emitter only via `ctx.emitter`, which is typed as `EventEmitter`. Realm code should never import or instantiate concrete emitter classes directly.
+
+---
+
+## DataAccess (`ctx.data`)
+
+`DataAccess` is the realm's phase-aware gateway to configured external connections. It is injected into both `StepContext` (execution phase) and `PlanningContext` (planning phase) as `ctx.data`.
+
+### Two clients, two phases
+
+Calling `ctx.data.connection(name)` returns a different client type depending on the phase:
+
+| Phase | Client returned | Read methods | Write methods |
+|-------|-----------------|--------------|---------------|
+| `"planning"` | `CouchDBPlanningClient` | `async` — must be `await`ed | none |
+| `"execution"` | `CouchDBExecutionClient` | sync — return results directly | `put()` |
+
+**Planning phase** (inside `generate_plan_drafts`):
+
+```python
+async def generate_plan_drafts(self, payload):
+    ctx = payload["planning_ctx"]
+    client = ctx.data.connection("my_db")          # CouchDBPlanningClient
+    doc = await client.get("some_id")              # async — await required
+    docs = await client.find({"status": "ready"})
+```
+
+**Execution phase** (inside a `@step` function):
+
+```python
+@step
+def my_step(ctx: StepContext, item_id: str) -> StepResult:
+    client = ctx.data.connection("my_db")          # CouchDBExecutionClient
+    doc = client.get(item_id)                      # sync — no await
+    docs = client.find({"status": "ready"})
+```
+
+### Available read methods
+
+Both clients expose the same read methods (async in planning, sync in execution):
+
+| Method | Returns | Raises |
+|--------|---------|--------|
+| `get(doc_id)` | `dict \| None` | — |
+| `find(selector)` | `list[dict]` | — |
+| `find_one(selector)` | `dict \| None` | — |
+| `fetch_by_field(field, value)` | `list[dict]` | — |
+| `require(doc_id)` | `dict` | `DataAccessNotFoundError` if absent |
+| `require_one(selector)` | `dict` | `DataAccessNotFoundError` if no match |
+
+### Writing — `put()` (execution phase only)
+
+`CouchDBExecutionClient.put(doc_id, body, mode)` writes a document. The `body` dict must be **clean** — no `_id` or `_rev` keys; the client manages revision tracking internally.
+
+```python
+result = client.put("run_123", {"status": "done"}, mode="upsert")
+# result.status  → "created" or "updated"
+# result.new_rev → new CouchDB revision string
+# result.old_rev → previous revision (None if created)
+```
+
+| `mode` | Behaviour |
+|--------|-----------|
+| `"create"` | Fail (raise) if the document already exists |
+| `"update"` | Fail (raise) if the document does not exist |
+| `"upsert"` | Create if absent, update if present; retries once on conflict |
+
+### API entry points
+
+`ctx.data.connection(name)` is the preferred form — it works for any supported backend.
+`ctx.data.couchdb(name)` is a CouchDB-specific alias that validates the backend type before delegating to `connection()`. Use it when you want to make the CouchDB dependency explicit.
+
+### Permission model
+
+Access is controlled per-realm, per-phase in the connection's `data_access.realms` config block:
+
+- A realm must appear in `realms` for a given connection to access it at all.
+- Each phase (`planning`, `execution`) has its own `permissions` list.
+- `"read"` grants access to `get`, `find`, and related methods.
+- `"write"` grants access to `put()`. It does **not** imply `"read"` — a realm with only `"write"` can call `put()` but not `get()`.
+- Planning phase requires at least `"read"` — a planning-phase connection with write-only permission is denied.
+
+### Configuration shape
+
+```json
+"my_db": {
+    "endpoint": "couchdb",
+    "resource": { "db": "actual_db_name" },
+    "data_access": {
+        "realms": {
+            "my_realm": {
+                "planning":   { "permissions": ["read"] },
+                "execution":  { "permissions": ["read", "write"] }
+            }
+        },
+        "options": { "max_limit": 50 }
+    }
+}
+```
+
+Global backend defaults (e.g. `defaults.couchdb.max_limit`) are merged with per-connection `options`; the connection-level value wins on conflict. See [Configuration](../getting_started/configuration.md) for the full schema.
 
 ---
 

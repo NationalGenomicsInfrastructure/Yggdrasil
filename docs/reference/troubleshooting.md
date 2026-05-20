@@ -149,11 +149,11 @@ def my_step(ctx: StepContext, **params) -> StepResult:
 
 ### `DataAccessDeniedError` when accessing a connection
 
-**Symptom:** Step fails with `DataAccessDeniedError: realm 'X' is not allowed to access 'Y'`
+**Symptom:** Step or plan generation fails with `DataAccessDeniedError: realm 'X' has no permissions for connection 'Y' in phase 'Z'`
 
-**Explanation:** The connection `Y` has a `data_access.realm_allowlist` that does not include your realm.
+**Explanation:** The connection `Y` has a `data_access.realms` block that does not include your realm for the requested phase, or the realm's `permissions` list for that phase is missing `"read"` (or `"write"` for writes).
 
-**Resolution:** Add your realm to the `realm_allowlist` for the relevant connection in `main.json`:
+**Resolution:** Add your realm with the correct phase permissions to the connection's `data_access.realms` block in `main.json`:
 ```json
 {
   "external_systems": {
@@ -169,8 +169,13 @@ def my_step(ctx: StepContext, **params) -> StepResult:
         "endpoint": "main_couchdb",
         "resource": { "db": "my_database" },
         "data_access": {
-          "realm_allowlist": ["my_realm", "other_realm"],
-          "max_limit": 50
+          "realms": {
+            "my_realm": {
+              "planning":  { "permissions": ["read"] },
+              "execution": { "permissions": ["read", "write"] }
+            }
+          },
+          "options": { "max_limit": 50 }
         }
       }
     }
@@ -178,11 +183,13 @@ def my_step(ctx: StepContext, **params) -> StepResult:
 }
 ```
 
+> **Note:** `"write"` permission does not grant `"read"`. A realm that only has `"write"` can call `put()` but calling `get()` or `find()` will still raise `DataAccessDeniedError`. Grant `"read"` explicitly if reads are also needed.
+
 ### `DataAccessDeniedError` — no data_access policy for connection
 
 **Symptom:** `DataAccessDeniedError: connection 'X' has no data_access policy`
 
-**Explanation:** Connections without a `data_access` block are not accessible via `ctx.data.couchdb()`. This is intentional — opt-in only.
+**Explanation:** Connections without a `data_access` block are not accessible via `ctx.data.connection()`. This is intentional — opt-in only.
 
 ---
 

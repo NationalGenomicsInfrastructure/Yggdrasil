@@ -236,6 +236,50 @@ class CouchDBHandler:
             self._logger.error("Error while accessing database %s: %s", self.db_name, e)
             raise
 
+    def put_document(
+        self,
+        doc_id: str,
+        doc: dict[str, Any],
+        *,
+        rev: str | None = None,
+    ) -> dict[str, Any]:
+        """Write a document to the database by ID.
+
+        Args:
+            doc_id: Target document ID.
+            doc: Document body. Must NOT contain '_id' or '_rev' — this method
+                injects them. Caller contract: CouchDBExecutionClient.put() already
+                validates this at the realm-facing boundary; this check is a
+                defensive duplicate for any direct handler callers.
+            rev: Current document revision. Required for updates; absent for create.
+
+        Returns:
+            Response dict from CouchDB: {"id": ..., "rev": ..., "ok": True}.
+
+        Raises:
+            ValueError: doc contains '_id' or '_rev'.
+            ApiException: Propagated as-is. Callers distinguish:
+                409 Conflict — document exists (on create) or rev mismatch (on update).
+                404 Not Found — document absent (on update attempt).
+        """
+        reserved = {"_id", "_rev"} & doc.keys()
+        if reserved:
+            raise ValueError(
+                f"doc must not contain {sorted(reserved)!r}. "
+                "put_document() injects _id and _rev internally."
+            )
+        body = dict(doc)
+        body["_id"] = doc_id
+        if rev is not None:
+            body["_rev"] = rev
+
+        response = self.server.put_document(
+            db=self.db_name,
+            doc_id=doc_id,
+            document=cloudant_v1.Document.from_dict(body),
+        )
+        return response.get_result()
+
     def find_documents(
         self,
         selector: dict[str, Any],

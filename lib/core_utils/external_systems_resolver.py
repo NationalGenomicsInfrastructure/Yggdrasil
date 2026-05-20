@@ -2,7 +2,7 @@
 
 Provides a single source of truth for resolving endpoint and connection
 configuration from external_systems in main.json. Used by both WatcherManager
-(to build backend config) and DataAccess (to build read clients).
+(to build backend config) and DataAccess (to build read/write clients).
 
 Usage
 -----
@@ -14,7 +14,7 @@ Usage
 
     cfg = load_external_systems_config()
     conn = resolve_connection("flowcell_db", cfg)
-    # conn.db_name, conn.endpoint.url, conn.data_access.realm_allowlist, ...
+    # conn.db_name, conn.endpoint.url, conn.data_access.get_permissions(...), ...
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ logger = custom_logger(__name__)
 _DEFAULT_USER_ENV = "YGG_COUCH_USER"
 _DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
 
-# Built-in default for max_limit when not specified in config
-_DEFAULT_MAX_LIMIT = 200
+_ALLOWED_PERMISSIONS = frozenset({"read", "write"})
+_ALLOWED_PHASES = frozenset({"planning", "execution"})
 
 
 # ---------------------------------------------------------------------------
@@ -65,22 +65,21 @@ class ResolvedEndpoint:
 class DataAccessPolicy:
     """Per-connection data access policy.
 
-    Controls which realms may read a connection and the query limits applied.
-
     Attributes:
-        realm_allowlist: Realm IDs permitted to read this connection.
-            No wildcard support in v1 — explicit realm IDs only.
-        max_limit: Maximum number of results for find() queries.
-            Effective value: per-connection override wins over global default,
-            which wins over built-in default (200).
-
-    Note:
-        default_timeout_s is intentionally excluded from v1. It will be added
-        in a future PR when actually wired to Cloudant request options.
+        realms: Nested mapping of realm_id -> phase -> frozenset of permissions.
+            Missing realm or phase means no permissions granted.
+            Known permissions: "read", "write".
+        options: Merged backend options dict (global defaults overridden by
+            connection-level options). Backend adapters extract their own
+            options from here (e.g. CouchDB reads options.get("max_limit", 200)).
     """
 
-    realm_allowlist: list[str]
-    max_limit: int
+    realms: dict[str, dict[str, frozenset[str]]]
+    options: dict[str, Any]
+
+    def get_permissions(self, realm_id: str, phase: str) -> frozenset[str]:
+        """Return permission set for realm_id+phase; empty frozenset if not configured."""
+        return frozenset(self.realms.get(realm_id, {}).get(phase, frozenset()))
 
 
 @dataclass(frozen=True)
@@ -90,14 +89,21 @@ class ResolvedConnection:
     Attributes:
         name: Connection name from config (e.g. "flowcell_db").
         endpoint: Resolved endpoint this connection belongs to.
-        db_name: Database name from resource.db.
-        data_access: Policy governing realm read access, or None if the
-            connection has no data_access block (not readable by realms).
+        db_name: Database name from resource.db. CouchDB convenience field kept
+            for v0.3 CouchDB compatibility. A future backend-neutral resolver
+            should expose resource separately rather than assuming a db_name.
+        resource: Raw resource dict from config (e.g. {"db": "x_flowcells"}).
+            Backend adapters extract their own resource identifier from here.
+            For CouchDB, this is {"db": "<dbname>"}. For future backends it
+            may use different keys.
+        data_access: Policy governing realm access, or None if the connection
+            has no data_access block (not accessible to realms).
     """
 
     name: str
     endpoint: ResolvedEndpoint
     db_name: str
+    resource: dict[str, Any]
     data_access: DataAccessPolicy | None
 
 
@@ -116,8 +122,8 @@ def load_external_systems_config(cfg: dict[str, Any] | None = None) -> dict[str,
 
     Returns:
         A plain dict with "endpoints" and "connections" keys (and optionally
-        "defaults", "data_access_defaults").  Always a plain dict, never a
-        MappingProxyType, so callers can safely merge / copy values.
+        "defaults").  Always a plain dict, never a MappingProxyType, so callers
+        can safely merge / copy values.
 
     Notes:
         ConfigLoader returns MappingProxyType. This function converts the
@@ -196,17 +202,16 @@ def resolve_connection(connection_name: str, cfg: dict[str, Any]) -> ResolvedCon
     Resolves the referenced endpoint, extracts db_name from resource, and
     builds a DataAccessPolicy if a data_access block is present.
 
-    DataAccessPolicy.max_limit effective value:
-        per-connection data_access.max_limit
-        OR global data_access_defaults.couchdb.max_limit
-        OR built-in default (200)
+    DataAccessPolicy.options effective value:
+        global defaults[backend_type] merged with connection-level options.
+        Connection-level options win over global defaults.
 
     Args:
         connection_name: Key in config["connections"] (e.g. "flowcell_db").
         cfg: External systems config dict (from load_external_systems_config).
 
     Returns:
-        ResolvedConnection with endpoint, db_name, and optional DataAccessPolicy.
+        ResolvedConnection with endpoint, db_name, resource, and optional policy.
 
     Raises:
         KeyError: If the connection, its endpoint, or required fields are missing.
@@ -230,36 +235,61 @@ def resolve_connection(connection_name: str, cfg: dict[str, Any]) -> ResolvedCon
 
     endpoint = resolve_endpoint(endpoint_name, cfg)
 
-    resource = conn.get("resource") or {}
-    db_name: str | None = resource.get("db")
+    resource_dict: dict[str, Any] = dict(conn.get("resource") or {})
+    db_name: str | None = resource_dict.get("db")
     if not db_name:
         raise KeyError(
             f"Connection '{connection_name}' resource is missing required 'db' field"
         )
+    # 'db' is required in v0.3 because CouchDB is the only implemented backend.
+    # The 'resource' dict is intentionally generic to prepare for future backends
+    # that may use different keys. When a second backend is added, this block should
+    # move into a backend-specific resolver rather than expanding the 'db' check here.
 
     # Build DataAccessPolicy if connection has a data_access block
     da_policy: DataAccessPolicy | None = None
     conn_da = conn.get("data_access")
 
     if conn_da is not None:
-        # Merge: global defaults < per-connection override
-        global_defaults = (cfg.get("data_access_defaults") or {}).get("couchdb") or {}
-        global_max_limit: int = global_defaults.get("max_limit", _DEFAULT_MAX_LIMIT)
-        per_conn_max_limit: int | None = conn_da.get("max_limit")
-        effective_max_limit = (
-            per_conn_max_limit if per_conn_max_limit is not None else global_max_limit
+        # Merge: global backend defaults < connection-level options
+        backend_type = endpoint.backend_type  # e.g. "couchdb"
+        global_defaults: dict[str, Any] = dict(
+            (cfg.get("defaults") or {}).get(backend_type) or {}
         )
+        conn_options: dict[str, Any] = dict(conn_da.get("options") or {})
+        effective_options: dict[str, Any] = {**global_defaults, **conn_options}
 
-        realm_allowlist = list(conn_da.get("realm_allowlist") or [])
+        # Build realms permissions dict
+        raw_realms = conn_da.get("realms") or {}
+        resolved_realms: dict[str, dict[str, frozenset[str]]] = {}
+        for realm_id, phases in raw_realms.items():
+            resolved_realms[realm_id] = {}
+            for phase, phase_cfg in (phases or {}).items():
+                if phase not in _ALLOWED_PHASES:
+                    raise ValueError(
+                        f"Connection '{connection_name}', realm '{realm_id}': "
+                        f"unknown phase '{phase}'. "
+                        f"Valid phases: {sorted(_ALLOWED_PHASES)}"
+                    )
+                perms = frozenset(phase_cfg.get("permissions") or [])
+                unknown = perms - _ALLOWED_PERMISSIONS
+                if unknown:
+                    raise ValueError(
+                        f"Connection '{connection_name}', realm '{realm_id}', "
+                        f"phase '{phase}': unknown permissions {sorted(unknown)!r}. "
+                        f"Valid permissions: {sorted(_ALLOWED_PERMISSIONS)}"
+                    )
+                resolved_realms[realm_id][phase] = perms
 
         da_policy = DataAccessPolicy(
-            realm_allowlist=realm_allowlist,
-            max_limit=effective_max_limit,
+            realms=resolved_realms,
+            options=effective_options,
         )
 
     return ResolvedConnection(
         name=connection_name,
         endpoint=endpoint,
         db_name=db_name,
+        resource=resource_dict,
         data_access=da_policy,
     )

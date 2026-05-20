@@ -31,7 +31,7 @@ def handle_project_change(payload: dict[str, Any]) -> None:
         emitter=FileSpoolEmitter(),
         source_doc=doc,
         reason=payload.get("reason", "project.updated"),
-        data=DataAccess("tenx"),
+        data=DataAccess("tenx", phase="planning"),
     )
 
     drafts = TenxPlanner().generate(ctx)
