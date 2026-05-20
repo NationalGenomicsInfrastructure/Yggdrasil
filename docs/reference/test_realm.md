@@ -31,8 +31,10 @@ Standard recipes (selected via `"recipe"` field, in RECIPES registry):
 - **artifact_write**: Creates files and registers artifacts
 - **data_fetch_exec**: Fetches a CouchDB doc at *execution time* inside the step
 - **data_access_denied**: Verifies DataAccess correctly rejects unauthorized connections
-- **data_fetch_all_methods**: Exercises every CouchDBReadClient read method
-- **data_verify_limit_clamping**: Confirms `find()` results are clamped by `policy.max_limit`
+- **data_fetch_all_methods**: Exercises every read method on the execution-phase DataAccess client
+- **data_verify_limit_clamping**: Confirms `find()` results are clamped to the effective `max_limit` from `data_access.options`
+- **data_write_exec**: Writes a document to CouchDB at execution time via `client.put()`; proves write permission works end-to-end
+- **data_write_only_permission**: Proves write permission does not imply read; `put()` must succeed, `get()` must raise `DataAccessDeniedError`
 
 Planning-time recipes (handler processes the doc before building steps; not in RECIPES registry):
 - **data_fetch_plan**: Async-fetches a CouchDB doc *during planning*; bakes the result as a structured `ref_doc` dict into step params.
@@ -51,9 +53,11 @@ Available steps (for custom mode):
 - **step_write_file**: Write file to workdir (params: `filename`, `content`)
 - **step_fetch_from_db**: Fetch a CouchDB document at execution time (params: `connection`, `doc_id`)
 - **step_expect_denied**: Assert that DataAccess correctly rejects a restricted connection (params: `connection`)
-- **step_exercise_all_fetch_methods**: Exercise every CouchDBReadClient read method in one step (params: `connection`, `doc_id`, `selector_type`)
-- **step_verify_limit_clamping**: Assert that `find()` results are clamped to `policy.max_limit` (params: `connection`, `selector_type`, `request_limit`, `expected_max`)
+- **step_exercise_all_fetch_methods**: Exercise every read method on the execution-phase DataAccess client in one step (params: `connection`, `doc_id`, `selector_type`)
+- **step_verify_limit_clamping**: Assert that `find()` results are clamped to the effective `max_limit` from `data_access.options` (params: `connection`, `selector_type`, `request_limit`, `expected_max`)
 - **step_emit_metadata**: Emit structured metadata baked into the plan at planning time (params: `scenario` dict and/or `ref_doc` dict)
+- **step_write_to_db**: Write a document via `client.put()` with write permission; returns `write_status`, `doc_id`, `old_rev`, `new_rev` in metrics (params: `connection`, `doc_id`, `mode`)
+- **step_expect_read_denied**: Assert that `client.get()` raises `DataAccessDeniedError` on a write-only connection; step succeeds only if denial is raised (params: `connection`, `doc_id`)
 
 ---
 
@@ -591,7 +595,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:metadata_har
 
 **Purpose**: Demonstrate plan-time CouchDB fetch where the result is baked into step params as a **structured dict** (`ref_doc`), not a formatted string. The plan record is self-documenting: it contains the exact doc snapshot that drove the run.
 
-**Requires**: A document `data_access_test:reference_doc` in the `yggdrasil` database, and `yggdrasil_db` listed as an allowed connection for `test_realm` in the DataAccess config.
+**Requires**: A document `data_access_test:reference_doc` in the `yggdrasil` database, and `yggdrasil_db` configured with `data_access.realms.test_realm.planning.permissions: ["read"]`.
 
 **Insert as**:
 ```json
@@ -606,7 +610,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:metadata_har
 ```
 
 **Expected**:
-- Handler calls `await ctx.data.couchdb("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_drafts`
+- Handler calls `await ctx.data.connection("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_drafts`
 - Result is a structured dict: `{"doc_id": "...", "message": "...", "value": 13, "missing": false}`
 - Dict is baked into `echo_fetched.params["ref_doc"]` — visible in the persisted plan record
 - `echo_fetched` step emits `step.ref_doc_echoed` event with the dict fields
@@ -626,6 +630,63 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:data_fetch_p
 #   "missing": false
 # }
 ```
+
+---
+
+## Scenario 17: Execution-Time Write
+
+**Purpose**: Prove that a step with execution write permission can call `client.put()` via
+`ctx.data.connection()` and have the result visible in step metrics and the
+`data_access.write.succeeded` event.
+
+**Requires**: Connection `test_realm_write_db` configured with
+`data_access.realms.test_realm.execution.permissions: ["write"]`.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_write_exec",
+  "type": "ygg_test_scenario",
+  "recipe": "data_write_exec",
+  "name": "Execution-Time Write",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `write_doc` step calls `ctx.data.connection("test_realm_write_db").put("data_access_test:write_result", body, mode="upsert")`
+- Body is a clean dict without `_id` or `_rev` — DataAccess manages those internally
+- `step.write_result` event emitted with `write_status`, `doc_id`, `old_rev`, `new_rev`
+- `data_access.write.succeeded` event emitted by the DataAccess layer (visible in event spool)
+- Step metrics include all four fields; `old_rev` is `null` on first create, populated on subsequent runs
+- `echo_confirm` step succeeds after write
+
+---
+
+## Scenario 18: Write-Only Permission (Read Denied)
+
+**Purpose**: Prove that a connection with only `"write"` in its execution permissions correctly
+denies read operations. `put()` must succeed; `get()` must raise `DataAccessDeniedError`.
+
+**Requires**: Connection `test_realm_write_db` (write-only for test_realm — same connection as Scenario 17).
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_write_only_permission",
+  "type": "ygg_test_scenario",
+  "recipe": "data_write_only_permission",
+  "name": "Write-Only Permission Test",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `write_only_put` step calls `put()` → must succeed (write permission is present)
+- `write_only_read_denied` step calls `get()` on the same connection → must raise `DataAccessDeniedError`
+- `step_expect_read_denied` treats the `DataAccessDeniedError` as the expected outcome; emits `step.read_denied_as_expected`
+- Step metrics include `read_correctly_denied: true` and the denial reason
+- Plan completes successfully — both steps pass
 
 ---
 
@@ -811,6 +872,8 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 | Artifact with Chaos | Custom steps | ✓ | <1s | Artifact + 50% failure |
 | Metadata Harvest | metadata_harvest | ✓ | <50ms | Domain fields baked as structured dict in plan params |
 | Plan-Time Fetch (Structured) | data_fetch_plan | ✓ | <1s | CouchDB ref doc baked as structured dict in plan params |
+| Execution-Time Write | data_write_exec | ✓ | <1s | Write succeeds; write_status + revs in step metrics |
+| Write-Only Permission | data_write_only_permission | ✓ | <1s | put() passes, get() correctly denied |
 
 ---
 
@@ -829,14 +892,15 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 - Check PlanWatcher is running: `tail -f yggdrasil.log | grep PlanWatcher`
 
 **Step failures with missing fn_ref:**
-- Ensure recipe exists in `lib/realms/test_realm/recipes.py`
+- For standard recipes, ensure the recipe exists in `lib/realms/test_realm/recipes.py`.
+- For planning-time handler scenarios such as `data_fetch_plan` or `metadata_harvest`, ensure the handler special-case exists in `lib/realms/test_realm/handler.py` — these are intentionally not in the RECIPES registry.
 - Verify step function exists in `lib/realms/test_realm/steps.py`
 - Check error message for typos in override field names or fn_name
 
 **Custom steps not working:**
 - Verify `steps` is an array of dicts
 - Each step must have `step_id` and `fn_name`
-- Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`, `step_fetch_from_db`, `step_expect_denied`, `step_exercise_all_fetch_methods`, `step_verify_limit_clamping`, `step_emit_metadata`
+- Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`, `step_fetch_from_db`, `step_expect_denied`, `step_write_to_db`, `step_expect_read_denied`, `step_exercise_all_fetch_methods`, `step_verify_limit_clamping`, `step_emit_metadata`
 - Check deps refer to existing step_id values
 
 For broader troubleshooting (CouchDB connectivity, config errors, realm discovery, DataAccess), see [troubleshooting.md](troubleshooting.md).
