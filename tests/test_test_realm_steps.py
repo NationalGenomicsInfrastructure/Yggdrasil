@@ -303,33 +303,52 @@ class TestHandlerPlanTimeFetch(unittest.IsolatedAsyncioTestCase):
 
 
 # ---------------------------------------------------------------------------
-# Recipe registry: data_fetch_plan discoverability
+# data_fetch_plan_steps: internal helper used by handler Mode 1
 # ---------------------------------------------------------------------------
 
 
-class TestRecipesRegistry(unittest.TestCase):
-    """Verify data_fetch_plan is registered and produces the expected step shape."""
+class TestDataFetchPlanSteps(unittest.TestCase):
+    """Unit tests for data_fetch_plan_steps (internal helper called by handler Mode 1).
+
+    Covers the three ref_dict shapes the handler can produce:
+    success, doc-absent (missing), and DataAccessError.
+    """
 
     def setUp(self):
-        from lib.realms.test_realm.recipes import RECIPES
+        from lib.realms.test_realm.recipes import data_fetch_plan_steps
 
-        self.RECIPES = RECIPES
+        self.helper = data_fetch_plan_steps
 
-    def test_data_fetch_plan_in_recipes_registry(self):
-        self.assertIn("data_fetch_plan", self.RECIPES)
-        self.assertTrue(callable(self.RECIPES["data_fetch_plan"]))
-
-    def test_data_fetch_plan_recipe_returns_two_steps(self):
-        steps = self.RECIPES["data_fetch_plan"]()
+    def test_returns_two_steps(self):
+        steps = self.helper(
+            {"doc_id": "x", "missing": False, "message": "hi", "value": 1}
+        )
         self.assertEqual(len(steps), 2)
         self.assertEqual(steps[0].step_id, "echo_fetched")
         self.assertEqual(steps[1].step_id, "echo_confirm")
 
-    def test_data_fetch_plan_echo_fetched_uses_step_emit_metadata(self):
-        steps = self.RECIPES["data_fetch_plan"]()
+    def test_echo_fetched_uses_step_emit_metadata(self):
+        steps = self.helper(
+            {"doc_id": "x", "missing": False, "message": "hi", "value": 1}
+        )
         self.assertIn("step_emit_metadata", steps[0].fn_ref)
 
-    def test_data_fetch_plan_placeholder_ref_doc_has_missing_true(self):
-        steps = self.RECIPES["data_fetch_plan"]()
-        ref_doc = steps[0].params.get("ref_doc", {})
-        self.assertTrue(ref_doc.get("missing"))
+    def test_success_case_bakes_ref_doc_into_params(self):
+        ref_dict = {"doc_id": "x", "message": "hi", "value": 7, "missing": False}
+        steps = self.helper(ref_dict)
+        self.assertEqual(steps[0].params["ref_doc"], ref_dict)
+
+    def test_missing_case_confirm_message_mentions_not_found(self):
+        steps = self.helper({"doc_id": "x", "missing": True})
+        self.assertIn("not found", steps[1].params["message"])
+
+    def test_error_case_confirm_message_mentions_failed(self):
+        steps = self.helper(
+            {"doc_id": "x", "error": "denied", "error_type": "DataAccessDeniedError"}
+        )
+        self.assertIn("failed", steps[1].params["message"])
+
+    def test_data_fetch_plan_not_in_recipes_registry(self):
+        from lib.realms.test_realm.recipes import RECIPES
+
+        self.assertNotIn("data_fetch_plan", RECIPES)
