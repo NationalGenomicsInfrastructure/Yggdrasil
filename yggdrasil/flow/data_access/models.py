@@ -42,8 +42,9 @@ class DataAccessWriteResult:
         backend: Backend type (e.g. "couchdb").
         connection_name: Connection name from config.
         resource: Backend resource identifier (db name for CouchDB).
-        operation: Write mode used: "create", "update", or "upsert".
-        doc_id: Document ID that was written.
+        operation: Requested write mode: "create", "update", or "upsert".
+        identity: Identity resolution method used: "doc_id", "selector", or "view".
+        doc_id: Document ID that was written (existing, provided, or CouchDB-generated).
         status: "created" if the document was new; "updated" if it existed.
         old_rev: Previous CouchDB revision, or None if document was created.
         new_rev: New CouchDB revision after the write, or None if unavailable.
@@ -52,7 +53,8 @@ class DataAccessWriteResult:
     backend: str
     connection_name: str
     resource: str
-    operation: str
+    operation: Literal["create", "update", "upsert"]
+    identity: Literal["doc_id", "selector", "view"]
     doc_id: str
     status: Literal["created", "updated"]
     old_rev: str | None

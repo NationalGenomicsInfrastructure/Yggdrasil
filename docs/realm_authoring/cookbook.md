@@ -181,7 +181,7 @@ def run_pipeline(ctx: StepContext, config_file: str, threads: int = 4) -> StepRe
 | `run_mode` | `str` | `"auto"` or `"manual"` |
 | `fingerprint` | `str` | SHA-256 fingerprint for this run |
 | `run_id` | `str` | Unique run ID |
-| `data` | `DataAccess` | Phase-aware gateway to configured data sources. Call `ctx.data.connection(conn)` to get a sync client for reads (`get`, `find`, `require`, …) and writes (`put`). |
+| `data` | `DataAccess` | Phase-aware gateway to configured data sources. Call `ctx.data.connection(conn)` to get a sync client for reads (`get`, `find`, `require`, …) and writes (`save`). |
 
 ---
 
@@ -381,7 +381,7 @@ The fetch is visible via step events and metrics (not baked into plan params), w
 
 ## Pattern 8b: Writing to CouchDB in a step
 
-Steps with write permission can call `put()` on the execution client. Pass a clean body dict — do not include `_id` or `_rev`; the client manages them:
+Steps with write permission can call `save()` on the execution client. Pass a clean body dict — do not include `_id` or `_rev`; the client manages them. Provide exactly one of `doc_id`, `selector`, or `view` to identify the target document:
 
 ```python
 @step
@@ -390,11 +390,23 @@ def update_run_status(ctx: StepContext, run_id: str) -> StepResult:
 
     # Body must not contain _id or _rev — those are managed by the client
     body = {"status": "complete", "processed_by": "yggdrasil"}
-    result = client.put(run_id, body, mode="upsert")
+
+    # Write by explicit document ID
+    result = client.save(body, doc_id=run_id, mode="upsert")
     # result.status is "created" or "updated"
     # result.old_rev / result.new_rev carry revision info
+    # result.identity → "doc_id"
 
     return StepResult(metrics={"write_status": result.status, "new_rev": result.new_rev})
+```
+
+To let CouchDB auto-generate the document ID, use selector or view identity instead:
+
+```python
+# CouchDB generates the _id on create; selector matches the doc on update
+result = client.save(body, selector={"type": "run_status", "run_id": run_id}, mode="upsert")
+# result.identity → "selector"
+# result.doc_id   → CouchDB-generated ID (on create) or matched ID (on update)
 ```
 
 **`mode` values:**
@@ -405,7 +417,7 @@ def update_run_status(ctx: StepContext, run_id: str) -> StepResult:
 | `"update"` | Fail if the document does not exist |
 | `"upsert"` | Create if absent, update if present; retries once on conflict |
 
-> **Note on write vs read:** A realm configured with only `"write"` permission can call `put()` but not `get()` or `find()`. Grant `"read"` explicitly for realms that need both.
+> **Note on write vs read:** A realm configured with only `"write"` permission can call `save()` but not `get()` or `find()`. Grant `"read"` explicitly for realms that need both.
 
 ---
 

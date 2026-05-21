@@ -248,7 +248,7 @@ class CouchDBHandler:
         Args:
             doc_id: Target document ID.
             doc: Document body. Must NOT contain '_id' or '_rev' — this method
-                injects them. Caller contract: CouchDBExecutionClient.put() already
+                injects them. Caller contract: CouchDBExecutionClient.save() already
                 validates this at the realm-facing boundary; this check is a
                 defensive duplicate for any direct handler callers.
             rev: Current document revision. Required for updates; absent for create.
@@ -335,6 +335,135 @@ class CouchDBHandler:
         except Exception as e:
             self._logger.error(
                 "Error in find_documents on database '%s': %s", self.db_name, e
+            )
+            raise
+
+    def post_document(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """Create a document and let CouchDB generate the document ID.
+
+        Unlike put_document(), the caller does not supply a doc_id. CouchDB
+        assigns a UUID. Use this when the logical identity of the document
+        will be determined by a selector or view query rather than a known ID.
+
+        Args:
+            doc: Document body. Must NOT contain '_id' or '_rev'.
+
+        Returns:
+            Response dict from CouchDB: {"id": <generated>, "rev": ..., "ok": True}.
+
+        Raises:
+            ValueError: doc contains '_id' or '_rev'.
+            ApiException: Propagated as-is on backend failure.
+        """
+        reserved = {"_id", "_rev"} & doc.keys()
+        if reserved:
+            raise ValueError(
+                f"doc must not contain {sorted(reserved)!r}. "
+                "post_document() does not accept pre-assigned identity fields."
+            )
+        body = dict(doc)
+        try:
+            response = self.server.post_document(
+                db=self.db_name,
+                document=cloudant_v1.Document.from_dict(body),
+            )
+            return response.get_result()
+        except ApiException as e:
+            self._logger.error(
+                "Cloudant API error in post_document on '%s': %s %s",
+                self.db_name,
+                e.status_code,
+                e.message,
+            )
+            raise
+        except Exception as e:
+            self._logger.error(
+                "Error in post_document on database '%s': %s", self.db_name, e
+            )
+            raise
+
+    def query_view(
+        self,
+        ddoc: str,
+        view: str,
+        *,
+        key: Any = None,
+        limit: int | None = None,
+        include_docs: bool = False,
+        reduce: bool = False,
+        stable: bool = False,
+    ) -> dict[str, Any]:
+        """Query a CouchDB view and return the raw result dict.
+
+        Callers access ``result["rows"]`` for the list of view rows.
+
+        Args:
+            ddoc: Design document name (without the ``_design/`` prefix).
+            view: View name within the design document.
+            key: Optional key to filter rows. When None, all rows are returned.
+                 Omitted from the request entirely when None — do not pass None
+                 to query for documents with a null key; that case is not
+                 supported by this method.
+            limit: Maximum number of rows to return. Omitted when None.
+            include_docs: If True, include full document bodies in each row.
+                          Defaults to False. Set to True when the caller needs
+                          ``_id`` and ``_rev`` without a separate fetch.
+            reduce: If True, run the view's reduce function. Defaults to False.
+                    Save-path callers must use False to get individual map rows
+                    with ``id`` fields — a reduce result has no row ``id``.
+            stable: If True, request a stable (potentially stale) view read.
+                    Defaults to False, which uses CouchDB's default (update
+                    before responding). Combining stable=True with update=True
+                    (the CouchDB default) is generally discouraged per IBM SDK
+                    docs — omit unless you have a specific reason.
+
+        Returns:
+            Raw result dict containing at least ``{"rows": [...]}``.
+
+        Raises:
+            ApiException: Propagated as-is on backend failure.
+        """
+        kwargs: dict[str, Any] = {
+            "db": self.db_name,
+            "ddoc": ddoc,
+            "view": view,
+            "include_docs": include_docs,
+            "reduce": reduce,
+            "stable": stable,
+        }
+        if key is not None:
+            kwargs["key"] = key
+        if limit is not None:
+            kwargs["limit"] = limit
+        try:
+            response = self.server.post_view(**kwargs)
+            result = response.get_result()
+            if not isinstance(result, dict):
+                self._logger.warning(
+                    "Unexpected non-dict response from post_view on '%s' ('%s/%s')",
+                    self.db_name,
+                    ddoc,
+                    view,
+                )
+                return {"rows": []}
+            return result
+        except ApiException as e:
+            self._logger.error(
+                "Cloudant API error in query_view on '%s' ('%s/%s'): %s %s",
+                self.db_name,
+                ddoc,
+                view,
+                e.status_code,
+                e.message,
+            )
+            raise
+        except Exception as e:
+            self._logger.error(
+                "Error in query_view on '%s' ('%s/%s'): %s",
+                self.db_name,
+                ddoc,
+                view,
+                e,
             )
             raise
 

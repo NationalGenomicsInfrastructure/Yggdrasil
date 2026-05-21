@@ -20,6 +20,7 @@ stops the plan on failure.
 
 import random
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -313,7 +314,7 @@ def step_write_to_db(
         "written_by": "test_realm/step_write_to_db",
     }
     client = ctx.data.connection(connection)
-    result = client.put(doc_id, body, mode=mode)
+    result = client.save(body, doc_id=doc_id, mode=mode)
 
     ctx.emit(
         "step.write_result",
@@ -328,6 +329,73 @@ def step_write_to_db(
             "doc_id": result.doc_id,
             "old_rev": result.old_rev,
             "new_rev": result.new_rev,
+        }
+    )
+
+
+@step
+def step_write_to_db_no_id(
+    ctx: StepContext,
+    connection: str = "test_realm_write_db",
+    selector: dict[str, Any] | None = None,
+    mode: str = "upsert",
+) -> StepResult:
+    """
+    Write a document to CouchDB without providing a _id.
+
+    Uses Mango selector identity so CouchDB auto-generates the document ID on
+    create. Demonstrates the selector identity path of save().
+
+    Args:
+        ctx: Step execution context
+        connection: Connection name with execution write permission
+        selector: Mango selector for identity (default: match by type + written_by)
+        mode: Write mode — "create", "update", or "upsert" (default)
+
+    Returns:
+        StepResult with write outcome fields; doc_id is CouchDB-generated on create
+
+    Raises:
+        RuntimeError: If ctx.data was not injected
+        DataAccessDeniedError: If the realm lacks write permission
+        DataAccessWriteError: If the write fails (e.g. conflict)
+    """
+    if ctx.data is None:
+        raise RuntimeError(
+            "ctx.data is None — DataAccess was not injected by the Engine"
+        )
+
+    effective_selector = selector or {
+        "type": "ygg_test_write_result_no_id",
+        "written_by": "test_realm/step_write_to_db_no_id",
+    }
+    body = {
+        "type": "ygg_test_write_result_no_id",
+        "status": "written",
+        "written_by": "test_realm/step_write_to_db_no_id",
+        "write_mode": mode,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    client = ctx.data.connection(connection)
+    result = client.save(body, selector=effective_selector, mode=mode)
+
+    ctx.emit(
+        "step.write_result",
+        write_status=result.status,
+        doc_id=result.doc_id,
+        old_rev=result.old_rev,
+        new_rev=result.new_rev,
+        identity=result.identity,
+        operation=result.operation,
+    )
+    return StepResult(
+        metrics={
+            "write_status": result.status,
+            "doc_id": result.doc_id,
+            "old_rev": result.old_rev,
+            "new_rev": result.new_rev,
+            "identity": result.identity,
+            "operation": result.operation,
         }
     )
 
