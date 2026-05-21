@@ -33,8 +33,9 @@ Standard recipes (selected via `"recipe"` field, in RECIPES registry):
 - **data_access_denied**: Verifies DataAccess correctly rejects unauthorized connections
 - **data_fetch_all_methods**: Exercises every read method on the execution-phase DataAccess client
 - **data_verify_limit_clamping**: Confirms `find()` results are clamped to the effective `max_limit` from `data_access.options`
-- **data_write_exec**: Writes a document to CouchDB at execution time via `client.put()`; proves write permission works end-to-end
-- **data_write_only_permission**: Proves write permission does not imply read; `put()` must succeed, `get()` must raise `DataAccessDeniedError`
+- **data_write_exec**: Writes a document to CouchDB at execution time via `client.save()`; proves write permission works end-to-end
+- **data_write_only_permission**: Proves write permission does not imply read; `save()` must succeed, `get()` must raise `DataAccessDeniedError`
+- **data_write_no_id**: Writes a document without supplying a `_id`; CouchDB auto-generates the ID via selector identity; the resolved `doc_id` appears in step metrics
 
 Planning-time recipes (handler processes the doc before building steps; not in RECIPES registry):
 - **data_fetch_plan**: Async-fetches a CouchDB doc *during planning*; bakes the result as a structured `ref_doc` dict into step params.
@@ -56,7 +57,8 @@ Available steps (for custom mode):
 - **step_exercise_all_fetch_methods**: Exercise every read method on the execution-phase DataAccess client in one step (params: `connection`, `doc_id`, `selector_type`)
 - **step_verify_limit_clamping**: Assert that `find()` results are clamped to the effective `max_limit` from `data_access.options` (params: `connection`, `selector_type`, `request_limit`, `expected_max`)
 - **step_emit_metadata**: Emit structured metadata baked into the plan at planning time (params: `scenario` dict and/or `ref_doc` dict)
-- **step_write_to_db**: Write a document via `client.put()` with write permission; returns `write_status`, `doc_id`, `old_rev`, `new_rev` in metrics (params: `connection`, `doc_id`, `mode`)
+- **step_write_to_db**: Write a document via `client.save(doc, doc_id=..., mode=...)` with write permission; returns `write_status`, `doc_id`, `old_rev`, `new_rev` in metrics (params: `connection`, `doc_id`, `mode`)
+- **step_write_to_db_no_id**: Write a document using Mango selector identity — no `_id` supplied, CouchDB auto-generates it; returns `write_status`, `doc_id`, `old_rev`, `new_rev`, `identity`, `operation` in metrics (params: `connection`, `selector`, `mode`)
 - **step_expect_read_denied**: Assert that `client.get()` raises `DataAccessDeniedError` on a write-only connection; step succeeds only if denial is raised (params: `connection`, `doc_id`)
 
 ---
@@ -635,7 +637,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:data_fetch_p
 
 ## Scenario 17: Execution-Time Write
 
-**Purpose**: Prove that a step with execution write permission can call `client.put()` via
+**Purpose**: Prove that a step with execution write permission can call `client.save()` via
 `ctx.data.connection()` and have the result visible in step metrics and the
 `data_access.write.succeeded` event.
 
@@ -654,7 +656,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:data_fetch_p
 ```
 
 **Expected**:
-- `write_doc` step calls `ctx.data.connection("test_realm_write_db").put("data_access_test:write_result", body, mode="upsert")`
+- `write_doc` step calls `ctx.data.connection("test_realm_write_db").save(body, doc_id="data_access_test:write_result", mode="upsert")`
 - Body is a clean dict without `_id` or `_rev` — DataAccess manages those internally
 - `step.write_result` event emitted with `write_status`, `doc_id`, `old_rev`, `new_rev`
 - `data_access.write.succeeded` event emitted by the DataAccess layer (visible in event spool)
@@ -666,7 +668,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:data_fetch_p
 ## Scenario 18: Write-Only Permission (Read Denied)
 
 **Purpose**: Prove that a connection with only `"write"` in its execution permissions correctly
-denies read operations. `put()` must succeed; `get()` must raise `DataAccessDeniedError`.
+denies read operations. `save()` must succeed; `get()` must raise `DataAccessDeniedError`.
 
 **Requires**: Connection `test_realm_write_db` (write-only for test_realm — same connection as Scenario 17).
 
@@ -682,11 +684,41 @@ denies read operations. `put()` must succeed; `get()` must raise `DataAccessDeni
 ```
 
 **Expected**:
-- `write_only_put` step calls `put()` → must succeed (write permission is present)
+- `write_only_put` step calls `save()` → must succeed (write permission is present)
 - `write_only_read_denied` step calls `get()` on the same connection → must raise `DataAccessDeniedError`
 - `step_expect_read_denied` treats the `DataAccessDeniedError` as the expected outcome; emits `step.read_denied_as_expected`
 - Step metrics include `read_correctly_denied: true` and the denial reason
 - Plan completes successfully — both steps pass
+
+---
+
+## Scenario 19: Write Without _id (Auto-Generated ID)
+
+**Purpose**: Prove that a step can write a document to CouchDB without supplying a `_id`. The
+selector identity path of `save()` is used; CouchDB generates the document ID on create. The
+resolved `doc_id`, `identity`, and `operation` are visible in step metrics.
+
+**Requires**: Connection `test_realm_write_db` configured with
+`data_access.realms.test_realm.execution.permissions: ["write"]`.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_write_no_id",
+  "type": "ygg_test_scenario",
+  "recipe": "data_write_no_id",
+  "name": "Write Without _id",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `write_doc_no_id` step calls `client.save(body, selector={...}, mode="upsert")` — no `_id` in body or call
+- On first run: CouchDB creates a new document and returns a generated ID
+- `step.write_result` event emitted with `write_status`, `doc_id`, `old_rev`, `new_rev`, `identity="selector"`, `operation="upsert"`
+- `data_access.write.succeeded` event emitted by the DataAccess layer
+- Step metrics include `identity="selector"` confirming the selector path was used
+- `echo_confirm` step succeeds after write
 
 ---
 
@@ -873,7 +905,8 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 | Metadata Harvest | metadata_harvest | ✓ | <50ms | Domain fields baked as structured dict in plan params |
 | Plan-Time Fetch (Structured) | data_fetch_plan | ✓ | <1s | CouchDB ref doc baked as structured dict in plan params |
 | Execution-Time Write | data_write_exec | ✓ | <1s | Write succeeds; write_status + revs in step metrics |
-| Write-Only Permission | data_write_only_permission | ✓ | <1s | put() passes, get() correctly denied |
+| Write-Only Permission | data_write_only_permission | ✓ | <1s | save() passes, get() correctly denied |
+| Write Without _id | data_write_no_id | ✓ | <1s | CouchDB generates ID; identity="selector" in metrics |
 
 ---
 

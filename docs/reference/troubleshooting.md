@@ -183,7 +183,7 @@ def my_step(ctx: StepContext, **params) -> StepResult:
 }
 ```
 
-> **Note:** `"write"` permission does not grant `"read"`. A realm that only has `"write"` can call `put()` but calling `get()` or `find()` will still raise `DataAccessDeniedError`. Grant `"read"` explicitly if reads are also needed.
+> **Note:** `"write"` permission does not grant `"read"`. A realm that only has `"write"` can call `save()` but calling `get()` or `find()` will still raise `DataAccessDeniedError`. Grant `"read"` explicitly if reads are also needed.
 
 ### `DataAccessDeniedError` — no data_access policy for connection
 

@@ -238,7 +238,7 @@ Calling `ctx.data.connection(name)` returns a different client type depending on
 | Phase | Client returned | Read methods | Write methods |
 |-------|-----------------|--------------|---------------|
 | `"planning"` | `CouchDBPlanningClient` | `async` — must be `await`ed | none |
-| `"execution"` | `CouchDBExecutionClient` | sync — return results directly | `put()` |
+| `"execution"` | `CouchDBExecutionClient` | sync — return results directly | `save()` |
 
 **Planning phase** (inside `generate_plan_drafts`):
 
@@ -273,15 +273,26 @@ Both clients expose the same read methods (async in planning, sync in execution)
 | `require(doc_id)` | `dict` | `DataAccessNotFoundError` if absent |
 | `require_one(selector)` | `dict` | `DataAccessNotFoundError` if no match |
 
-### Writing — `put()` (execution phase only)
+### Writing — `save()` (execution phase only)
 
-`CouchDBExecutionClient.put(doc_id, body, mode)` writes a document. The `body` dict must be **clean** — no `_id` or `_rev` keys; the client manages revision tracking internally.
+`CouchDBExecutionClient.save(doc, *, doc_id, selector, view, mode)` writes a document using one of three identity modes. The `doc` dict must be **clean** — no `_id` or `_rev` keys; the client manages revision tracking internally. Exactly one of `doc_id`, `selector`, or `view` must be provided.
 
 ```python
-result = client.put("run_123", {"status": "done"}, mode="upsert")
+# Write by explicit document ID
+result = client.save({"status": "done"}, doc_id="run_123", mode="upsert")
 # result.status  → "created" or "updated"
 # result.new_rev → new CouchDB revision string
 # result.old_rev → previous revision (None if created)
+# result.identity → "doc_id"
+
+# Write without _id — CouchDB generates one (selector identity)
+result = client.save({"status": "done"}, selector={"type": "run", "run_id": "r-1"}, mode="upsert")
+# result.identity → "selector"
+# result.doc_id   → CouchDB-generated or matched ID
+
+# Write by view row (view identity)
+result = client.save({"status": "done"}, view={"design": "runs", "view": "by_id", "key": "r-1"}, mode="update")
+# result.identity → "view"
 ```
 
 | `mode` | Behaviour |
@@ -289,6 +300,17 @@ result = client.put("run_123", {"status": "done"}, mode="upsert")
 | `"create"` | Fail (raise) if the document already exists |
 | `"update"` | Fail (raise) if the document does not exist |
 | `"upsert"` | Create if absent, update if present; retries once on conflict |
+
+`DataAccessWriteResult` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `"created" \| "updated"` | Outcome |
+| `doc_id` | `str` | Resolved or provided document ID |
+| `operation` | `"create" \| "update" \| "upsert"` | Requested write mode |
+| `identity` | `"doc_id" \| "selector" \| "view"` | Identity resolution method used |
+| `old_rev` | `str \| None` | Previous revision (`None` if created) |
+| `new_rev` | `str \| None` | New revision after write |
 
 ### API entry points
 
@@ -302,7 +324,7 @@ Access is controlled per-realm, per-phase in the connection's `data_access.realm
 - A realm must appear in `realms` for a given connection to access it at all.
 - Each phase (`planning`, `execution`) has its own `permissions` list.
 - `"read"` grants access to `get`, `find`, and related methods.
-- `"write"` grants access to `put()`. It does **not** imply `"read"` — a realm with only `"write"` can call `put()` but not `get()`.
+- `"write"` grants access to `save()`. It does **not** imply `"read"` — a realm with only `"write"` can call `save()` but not `get()`.
 - Planning phase requires at least `"read"` — a planning-phase connection with write-only permission is denied.
 
 ### Configuration shape
