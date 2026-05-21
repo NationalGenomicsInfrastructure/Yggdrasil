@@ -248,7 +248,7 @@ class CouchDBHandler:
         Args:
             doc_id: Target document ID.
             doc: Document body. Must NOT contain '_id' or '_rev' — this method
-                injects them. Caller contract: CouchDBExecutionClient.put() already
+                injects them. Caller contract: CouchDBExecutionClient.save() already
                 validates this at the realm-facing boundary; this check is a
                 defensive duplicate for any direct handler callers.
             rev: Current document revision. Required for updates; absent for create.
