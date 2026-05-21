@@ -15,7 +15,7 @@ Usage::
 
     # Writes — pass a clean body dict (no _id or _rev)
     body = {"status": "complete", "updated_by": "yggdrasil"}
-    result = client.put("run_123", body, mode="upsert")
+    result = client.save(body, doc_id="run_123", mode="upsert")
 """
 
 from yggdrasil.flow.data_access.data_access import DataAccess

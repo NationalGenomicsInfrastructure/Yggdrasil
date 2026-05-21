@@ -128,10 +128,10 @@ class TestCouchDBPlanningClient(unittest.IsolatedAsyncioTestCase):
         doc = await client.require("x")
         self.assertEqual(doc["val"], 1)
 
-    def test_planning_client_has_no_put_method(self):
+    def test_planning_client_has_no_save_method(self):
         handler = make_handler_mock()
         client = make_planning_client(handler)
-        self.assertFalse(hasattr(client, "put"))
+        self.assertFalse(hasattr(client, "save"))
 
 
 # ---------------------------------------------------------------------------
@@ -186,130 +186,75 @@ class TestCouchDBExecutionClientReads(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# CouchDBExecutionClient.put() — permission tests
+# CouchDBExecutionClient.save(doc_id=...) — mode tests
 # ---------------------------------------------------------------------------
 
 
-class TestCouchDBExecutionClientPutPermissions(unittest.TestCase):
-    def test_put_denied_without_write_permission(self):
-        handler = make_handler_mock()
-        client = make_execution_client(handler, permissions=frozenset({"read"}))
-        with self.assertRaises(DataAccessDeniedError):
-            client.put("x", {})
-
-    def test_put_succeeds_with_only_write_permission_no_read(self):
-        handler = make_handler_mock()
-        client = make_execution_client(handler, permissions=frozenset({"write"}))
-        # create mode: no pre-fetch needed
-        result = client.put("x", {}, mode="create")
-        self.assertIsInstance(result, DataAccessWriteResult)
-
-    def test_upsert_succeeds_with_only_write_permission(self):
-        """Internal _rev fetch must NOT require realm-level 'read' permission."""
-        handler = make_handler_mock(get_result=None)  # absent → create path
-        client = make_execution_client(handler, permissions=frozenset({"write"}))
-        result = client.put("x", {}, mode="upsert")
-        self.assertEqual(result.status, "created")
-
-
-# ---------------------------------------------------------------------------
-# CouchDBExecutionClient.put() — input validation
-# ---------------------------------------------------------------------------
-
-
-class TestCouchDBExecutionClientPutValidation(unittest.TestCase):
-    def test_invalid_mode_raises_value_error(self):
-        handler = make_handler_mock()
-        client = make_execution_client(handler)
-        with self.assertRaises(ValueError) as ctx:
-            client.put("x", {}, mode="replace")
-        self.assertIn("replace", str(ctx.exception))
-
-    def test_doc_with_id_raises_value_error(self):
-        handler = make_handler_mock()
-        client = make_execution_client(handler)
-        with self.assertRaises(ValueError) as ctx:
-            client.put("x", {"_id": "x"})
-        self.assertIn("_id", str(ctx.exception))
-
-    def test_doc_with_rev_raises_value_error(self):
-        handler = make_handler_mock()
-        client = make_execution_client(handler)
-        with self.assertRaises(ValueError) as ctx:
-            client.put("x", {"_rev": "1-abc"})
-        self.assertIn("_rev", str(ctx.exception))
-
-
-# ---------------------------------------------------------------------------
-# CouchDBExecutionClient.put() — mode tests
-# ---------------------------------------------------------------------------
-
-
-class TestCouchDBExecutionClientPutModes(unittest.TestCase):
-    def test_put_create_returns_created_status(self):
+class TestCouchDBExecutionClientSaveByDocIdRetryPaths(unittest.TestCase):
+    def test_create_returns_created_status(self):
         handler = make_handler_mock(put_result={"rev": "1-abc", "ok": True})
         client = make_execution_client(handler)
-        result = client.put("x", {"val": 1}, mode="create")
+        result = client.save({}, doc_id="x", mode="create")
         handler.fetch_document_by_id.assert_not_called()
         self.assertEqual(result.status, "created")
         self.assertIsNone(result.old_rev)
         self.assertEqual(result.new_rev, "1-abc")
 
-    def test_put_create_fails_on_409(self):
+    def test_create_fails_on_409(self):
         handler = make_handler_mock()
         handler.put_document.side_effect = make_api_exception(409)
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="create")
+            client.save({}, doc_id="x", mode="create")
         self.assertIn("already exists", str(ctx.exception))
 
-    def test_put_update_returns_updated_status(self):
+    def test_update_returns_updated_status(self):
         handler = make_handler_mock(
             get_result={"_id": "x", "_rev": "1-old"},
             put_result={"rev": "2-new", "ok": True},
         )
         client = make_execution_client(handler)
-        result = client.put("x", {"val": 2}, mode="update")
+        result = client.save({"val": 2}, doc_id="x", mode="update")
         self.assertEqual(result.status, "updated")
         self.assertEqual(result.old_rev, "1-old")
         self.assertEqual(result.new_rev, "2-new")
 
-    def test_put_update_fails_when_doc_absent(self):
+    def test_update_fails_when_doc_absent(self):
         handler = make_handler_mock(get_result=None)
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="update")
+            client.save({}, doc_id="x", mode="update")
         self.assertIn("does not exist", str(ctx.exception))
 
-    def test_put_update_fetch_failure_raises_write_error(self):
+    def test_update_fetch_failure_raises_write_error(self):
         """ApiException during pre-fetch is wrapped as DataAccessWriteError."""
         handler = make_handler_mock()
         handler.fetch_document_by_id.side_effect = make_api_exception(500)
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="update")
+            client.save({}, doc_id="x", mode="update")
         self.assertIn("pre-check", str(ctx.exception))
 
-    def test_put_upsert_creates_when_absent(self):
+    def test_upsert_creates_when_absent(self):
         handler = make_handler_mock(
             get_result=None,
             put_result={"rev": "1-abc", "ok": True},
         )
         client = make_execution_client(handler)
-        result = client.put("x", {}, mode="upsert")
+        result = client.save({}, doc_id="x", mode="upsert")
         self.assertEqual(result.status, "created")
 
-    def test_put_upsert_updates_when_present(self):
+    def test_upsert_updates_when_present(self):
         handler = make_handler_mock(
             get_result={"_id": "x", "_rev": "1-old"},
             put_result={"rev": "2-new", "ok": True},
         )
         client = make_execution_client(handler)
-        result = client.put("x", {"val": 2}, mode="upsert")
+        result = client.save({"val": 2}, doc_id="x", mode="upsert")
         self.assertEqual(result.status, "updated")
         self.assertEqual(result.old_rev, "1-old")
 
-    def test_put_upsert_retries_once_on_409(self):
+    def test_upsert_retries_once_on_409(self):
         handler = make_handler_mock()
         # First fetch returns present doc
         handler.fetch_document_by_id.side_effect = [
@@ -322,30 +267,30 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
             {"rev": "3-xyz", "ok": True},
         ]
         client = make_execution_client(handler)
-        result = client.put("x", {"val": 1}, mode="upsert")
+        result = client.save({"val": 1}, doc_id="x", mode="upsert")
         self.assertEqual(result.status, "updated")
         self.assertEqual(result.new_rev, "3-xyz")
 
-    def test_put_upsert_raises_after_two_409s(self):
+    def test_upsert_raises_after_two_409s(self):
         handler = make_handler_mock()
         handler.fetch_document_by_id.return_value = {"_id": "x", "_rev": "1-old"}
         handler.put_document.side_effect = make_api_exception(409)
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
         self.assertIn("consecutive", str(ctx.exception))
 
-    def test_put_upsert_fetch_failure_raises_write_error(self):
+    def test_upsert_fetch_failure_raises_write_error(self):
         from requests.exceptions import RequestException
 
         handler = make_handler_mock()
         handler.fetch_document_by_id.side_effect = RequestException("timeout")
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
         self.assertIn("pre-check", str(ctx.exception))
 
-    def test_put_upsert_retry_fetch_failure_raises_write_error(self):
+    def test_upsert_retry_fetch_failure_raises_write_error(self):
         """Fetch failure during retry raises DataAccessWriteError."""
         from requests.exceptions import RequestException
 
@@ -358,7 +303,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
         handler.put_document.side_effect = make_api_exception(409)
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError):
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
 
     # --- Fix 3: create-path 409 retry ---
 
@@ -374,7 +319,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
             {"rev": "2-xyz", "ok": True},  # retry update: success
         ]
         client = make_execution_client(handler)
-        result = client.put("x", {}, mode="upsert")
+        result = client.save({}, doc_id="x", mode="upsert")
         self.assertEqual(result.status, "updated")
         self.assertEqual(result.new_rev, "2-xyz")
 
@@ -391,7 +336,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
         ]
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
         self.assertIn("consecutive", str(ctx.exception))
 
     def test_upsert_create_path_409_refetch_absent_retries_create(self):
@@ -406,7 +351,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
             {"rev": "1-abc", "ok": True},  # second create: success
         ]
         client = make_execution_client(handler)
-        result = client.put("x", {}, mode="upsert")
+        result = client.save({}, doc_id="x", mode="upsert")
         self.assertEqual(result.status, "created")
 
     def test_upsert_create_path_non_409_error_raises(self):
@@ -416,7 +361,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
         handler.put_document.side_effect = make_api_exception(500)
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
         self.assertIn("500", str(ctx.exception))
 
     # --- Fix 4: retry transport errors wrapped ---
@@ -436,7 +381,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
         ]
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
         self.assertIn("connection reset", str(ctx.exception))
 
     # --- Fix 5: _rev guard ---
@@ -446,7 +391,7 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
         handler = make_handler_mock(get_result={"_id": "x", "value": 1})  # no _rev
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="update")
+            client.save({}, doc_id="x", mode="update")
         self.assertIn("_rev", str(ctx.exception))
 
     def test_upsert_raises_when_existing_doc_has_no_rev(self):
@@ -454,22 +399,22 @@ class TestCouchDBExecutionClientPutModes(unittest.TestCase):
         handler = make_handler_mock(get_result={"_id": "x", "value": 1})  # no _rev
         client = make_execution_client(handler)
         with self.assertRaises(DataAccessWriteError) as ctx:
-            client.put("x", {}, mode="upsert")
+            client.save({}, doc_id="x", mode="upsert")
         self.assertIn("_rev", str(ctx.exception))
 
-    def test_put_result_has_identity_doc_id(self):
+    def test_result_has_identity_doc_id(self):
         handler = make_handler_mock(put_result={"rev": "1-abc"})
-        result = make_execution_client(handler).put("x", {}, mode="create")
+        result = make_execution_client(handler).save({}, doc_id="x", mode="create")
         self.assertEqual(result.identity, "doc_id")
 
-    def test_put_result_operation_matches_mode(self):
+    def test_result_operation_matches_mode(self):
         handler = make_handler_mock(put_result={"rev": "1-abc"})
-        result = make_execution_client(handler).put("x", {}, mode="create")
+        result = make_execution_client(handler).save({}, doc_id="x", mode="create")
         self.assertEqual(result.operation, "create")
 
 
 # ---------------------------------------------------------------------------
-# CouchDBExecutionClient.put() — result shape
+# CouchDBExecutionClient.save() — result shape
 # ---------------------------------------------------------------------------
 
 
@@ -477,7 +422,7 @@ class TestCouchDBExecutionClientWriteResult(unittest.TestCase):
     def _make_result(self):
         handler = make_handler_mock(put_result={"rev": "1-abc", "ok": True})
         client = make_execution_client(handler)
-        return client.put("x", {"val": 1}, mode="upsert")
+        return client.save({"val": 1}, doc_id="x", mode="upsert")
 
     def test_write_result_fields(self):
         result = self._make_result()
@@ -496,7 +441,7 @@ class TestCouchDBExecutionClientWriteResult(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# CouchDBExecutionClient.put() — event emission
+# CouchDBExecutionClient.save() — event emission
 # ---------------------------------------------------------------------------
 
 
@@ -518,7 +463,7 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
         client = make_execution_client(
             handler, trace_context=self._make_trace(mock_emitter)
         )
-        client.put("x", {}, mode="create")
+        client.save({}, doc_id="x", mode="create")
         mock_emitter.emit.assert_called_once()
         event = mock_emitter.emit.call_args[0][0]
         self.assertEqual(event["type"], "data_access.write.succeeded")
@@ -535,7 +480,7 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
             handler, permissions=frozenset({"read"}), trace_context=trace
         )
         with self.assertRaises(DataAccessDeniedError):
-            client.put("x", {})
+            client.save({}, doc_id="x")
         mock_emitter.emit.assert_called_once()
         event = mock_emitter.emit.call_args[0][0]
         self.assertEqual(event["type"], "data_access.write.denied")
@@ -548,7 +493,7 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
             handler, trace_context=self._make_trace(mock_emitter)
         )
         with self.assertRaises(DataAccessWriteError):
-            client.put("x", {}, mode="create")
+            client.save({}, doc_id="x", mode="create")
         mock_emitter.emit.assert_called_once()
         event = mock_emitter.emit.call_args[0][0]
         self.assertEqual(event["type"], "data_access.write.failed")
@@ -560,13 +505,13 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
         client = make_execution_client(
             handler, trace_context=self._make_trace(mock_emitter)
         )
-        result = client.put("x", {}, mode="create")
+        result = client.save({}, doc_id="x", mode="create")
         self.assertEqual(result.status, "created")
 
     def test_no_emission_when_trace_context_is_none(self):
         handler = make_handler_mock(put_result={"rev": "1-abc"})
         client = make_execution_client(handler, trace_context=None)
-        result = client.put("x", {}, mode="create")
+        result = client.save({}, doc_id="x", mode="create")
         self.assertIsNotNone(result)
 
     def test_spool_path_hints_in_event(self):
@@ -574,7 +519,7 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
         trace = self._make_trace(mock_emitter)
         handler = make_handler_mock(put_result={"rev": "1-abc"})
         client = make_execution_client(handler, trace_context=trace)
-        client.put("x", {}, mode="create")
+        client.save({}, doc_id="x", mode="create")
         event = mock_emitter.emit.call_args[0][0]
         sp = event["_spool_path"]
         self.assertEqual(sp["realm"], trace.realm)
@@ -582,13 +527,13 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
         self.assertEqual(sp["step_id"], trace.step_id)
 
     def test_write_events_have_unique_filenames(self):
-        """Two put() calls in the same step produce unique _spool_path filenames."""
+        """Two save() calls in the same step produce unique _spool_path filenames."""
         mock_emitter = MagicMock()
         trace = self._make_trace(mock_emitter)
         handler = make_handler_mock(put_result={"rev": "1-abc"})
         client = make_execution_client(handler, trace_context=trace)
-        client.put("doc_a", {}, mode="create")
-        client.put("doc_b", {}, mode="create")
+        client.save({}, doc_id="doc_a", mode="create")
+        client.save({}, doc_id="doc_b", mode="create")
         filenames = [
             c[0][0]["_spool_path"]["filename"] for c in mock_emitter.emit.call_args_list
         ]

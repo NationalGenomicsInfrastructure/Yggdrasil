@@ -683,25 +683,11 @@ class CouchDBExecutionClient:
 
     # --- Write ---
 
-    def put(
-        self,
-        doc_id: str,
-        doc: dict[str, Any],
-        *,
-        mode: Literal["create", "update", "upsert"] = "upsert",
-    ) -> DataAccessWriteResult:
-        """Thin compatibility wrapper around save(doc, doc_id=doc_id, mode=mode).
-
-        Prefer save() for new realm code. put() is kept for backward compatibility
-        only and may be removed in a future version.
-        """
-        return self.save(doc, doc_id=doc_id, mode=mode)
-
     def clean_doc(self, doc: dict[str, Any]) -> dict[str, Any]:
         """Return a shallow copy of doc with CouchDB metadata fields removed.
 
         Strips '_id' and '_rev', preserving all other fields. Use this before
-        passing a document obtained via get() or find() to save() or put().
+        passing a document obtained via get() or find() to save().
         """
         return {k: v for k, v in doc.items() if k not in {"_id", "_rev"}}
 
