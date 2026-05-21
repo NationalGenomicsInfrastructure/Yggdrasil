@@ -815,5 +815,270 @@ class TestCouchDBHandlerPutDocument(unittest.TestCase):
             self.handler.put_document("doc1", {"status": "x"})
 
 
+class TestCouchDBHandlerPostDocument(unittest.TestCase):
+    """Tests for CouchDBHandler.post_document."""
+
+    def setUp(self):
+        with (
+            patch(
+                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+            ) as mock_factory,
+            patch.dict(os.environ, {"PD_USER": "admin", "PD_PASS": "secret"}),
+        ):
+            self.mock_client = MagicMock()
+            mock_factory.return_value = self.mock_client
+            self.handler = CouchDBHandler(
+                db_name="test_db",
+                url="http://localhost:5984",
+                user_env="PD_USER",
+                pass_env="PD_PASS",
+            )
+        self.mock_client.reset_mock()
+
+    def _set_post_result(self, result):
+        self.mock_client.post_document.return_value.get_result.return_value = result
+
+    def test_returns_sdk_response(self):
+        """post_document returns the SDK response dict unchanged."""
+        expected = {"id": "gen-uuid-abc", "rev": "1-new", "ok": True}
+        self._set_post_result(expected)
+
+        result = self.handler.post_document({"status": "ready"})
+
+        self.assertEqual(result, expected)
+
+    def test_calls_sdk_with_correct_db(self):
+        """post_document forwards correct db to the SDK."""
+        self._set_post_result({"id": "x", "rev": "1-r", "ok": True})
+
+        self.handler.post_document({"status": "ready"})
+
+        call_kwargs = self.mock_client.post_document.call_args[1]
+        self.assertEqual(call_kwargs["db"], "test_db")
+
+    def test_does_not_inject_id_into_body(self):
+        """post_document must NOT inject _id — CouchDB generates it."""
+        self._set_post_result({"id": "gen-x", "rev": "1-r", "ok": True})
+
+        with patch("lib.couchdb.couchdb_connection.cloudant_v1") as mock_cv1:
+            self.handler.post_document({"type": "run", "status": "new"})
+            body = mock_cv1.Document.from_dict.call_args[0][0]
+
+        self.assertNotIn("_id", body)
+        self.assertNotIn("_rev", body)
+        self.assertEqual(body["type"], "run")
+
+    def test_does_not_mutate_caller_doc(self):
+        """post_document must not modify the caller's dict."""
+        self._set_post_result({"id": "gen-x", "rev": "1-r", "ok": True})
+        original = {"type": "run", "status": "new"}
+        snapshot = dict(original)
+
+        self.handler.post_document(original)
+
+        self.assertEqual(original, snapshot)
+
+    def test_raises_if_doc_contains_id(self):
+        """ValueError is raised if caller's doc contains _id."""
+        with self.assertRaises(ValueError) as ctx:
+            self.handler.post_document({"_id": "existing", "status": "x"})
+        self.assertIn("_id", str(ctx.exception))
+        self.mock_client.post_document.assert_not_called()
+
+    def test_raises_if_doc_contains_rev(self):
+        """ValueError is raised if caller's doc contains _rev."""
+        with self.assertRaises(ValueError) as ctx:
+            self.handler.post_document({"_rev": "1-abc", "status": "x"})
+        self.assertIn("_rev", str(ctx.exception))
+        self.mock_client.post_document.assert_not_called()
+
+    def test_raises_if_doc_contains_both_reserved_keys(self):
+        """ValueError is raised if caller's doc contains both _id and _rev."""
+        with self.assertRaises(ValueError):
+            self.handler.post_document({"_id": "x", "_rev": "1-abc", "status": "x"})
+        self.mock_client.post_document.assert_not_called()
+
+    def test_api_exception_propagates(self):
+        """ApiException from the SDK propagates unchanged."""
+        self.mock_client.post_document.side_effect = MockApiException(
+            "server error", code=500
+        )
+
+        with self.assertRaises(MockApiException) as ctx:
+            self.handler.post_document({"status": "x"})
+        self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_generic_exception_propagates(self):
+        """Non-ApiException from the SDK propagates unchanged."""
+        self.mock_client.post_document.side_effect = RuntimeError("network failure")
+
+        with self.assertRaises(RuntimeError):
+            self.handler.post_document({"status": "x"})
+
+
+class TestCouchDBHandlerQueryView(unittest.TestCase):
+    """Tests for CouchDBHandler.query_view."""
+
+    def setUp(self):
+        with (
+            patch(
+                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+            ) as mock_factory,
+            patch.dict(os.environ, {"QV_USER": "admin", "QV_PASS": "secret"}),
+        ):
+            self.mock_client = MagicMock()
+            mock_factory.return_value = self.mock_client
+            self.handler = CouchDBHandler(
+                db_name="test_db",
+                url="http://localhost:5984",
+                user_env="QV_USER",
+                pass_env="QV_PASS",
+            )
+        self.mock_client.reset_mock()
+
+    def _set_view_result(self, result):
+        self.mock_client.post_view.return_value.get_result.return_value = result
+
+    def test_returns_raw_result_dict(self):
+        """query_view returns the full result dict from the SDK."""
+        rows = [{"id": "doc1", "key": "k", "value": None}]
+        self._set_view_result({"rows": rows, "total_rows": 1, "offset": 0})
+
+        result = self.handler.query_view("design_doc", "my_view", key="k")
+
+        self.assertEqual(result["rows"], rows)
+
+    def test_calls_sdk_with_mandatory_kwargs(self):
+        """query_view always sends db, ddoc, view, include_docs, reduce, stable."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("design_doc", "my_view")
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertEqual(call_kwargs["db"], "test_db")
+        self.assertEqual(call_kwargs["ddoc"], "design_doc")
+        self.assertEqual(call_kwargs["view"], "my_view")
+        self.assertIn("include_docs", call_kwargs)
+        self.assertIn("reduce", call_kwargs)
+        self.assertIn("stable", call_kwargs)
+
+    def test_default_flags_are_false(self):
+        """Default include_docs, reduce, and stable are all False."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view")
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertFalse(call_kwargs["include_docs"])
+        self.assertFalse(call_kwargs["reduce"])
+        self.assertFalse(call_kwargs["stable"])
+
+    def test_key_included_when_provided(self):
+        """key is sent to the SDK when not None."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", key="flowcell-1")
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertEqual(call_kwargs["key"], "flowcell-1")
+
+    def test_key_omitted_when_none(self):
+        """key is not sent to the SDK when None (the default)."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", key=None)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertNotIn("key", call_kwargs)
+
+    def test_limit_included_when_provided(self):
+        """limit is sent to the SDK when not None."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", limit=10)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertEqual(call_kwargs["limit"], 10)
+
+    def test_limit_omitted_when_none(self):
+        """limit is not sent to the SDK when None (the default)."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", limit=None)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertNotIn("limit", call_kwargs)
+
+    def test_key_and_limit_both_sent_when_provided(self):
+        """key and limit are both included when both are specified."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", key="k1", limit=2)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertEqual(call_kwargs["key"], "k1")
+        self.assertEqual(call_kwargs["limit"], 2)
+
+    def test_include_docs_true_forwarded(self):
+        """include_docs=True is forwarded to the SDK."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", include_docs=True)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertTrue(call_kwargs["include_docs"])
+
+    def test_reduce_true_forwarded(self):
+        """reduce=True is forwarded to the SDK."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", reduce=True)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertTrue(call_kwargs["reduce"])
+
+    def test_stable_true_forwarded(self):
+        """stable=True is forwarded to the SDK."""
+        self._set_view_result({"rows": []})
+
+        self.handler.query_view("ddoc", "view", stable=True)
+
+        call_kwargs = self.mock_client.post_view.call_args[1]
+        self.assertTrue(call_kwargs["stable"])
+
+    def test_non_dict_result_returns_empty_rows(self):
+        """Non-dict SDK result returns {"rows": []}."""
+        self.mock_client.post_view.return_value.get_result.return_value = "not-a-dict"
+
+        result = self.handler.query_view("ddoc", "view")
+
+        self.assertEqual(result, {"rows": []})
+
+    def test_404_api_exception_propagates(self):
+        """ApiException from the SDK propagates unchanged."""
+        self.mock_client.post_view.side_effect = MockApiException("not found", code=404)
+
+        with self.assertRaises(MockApiException) as ctx:
+            self.handler.query_view("ddoc", "view")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_500_api_exception_propagates(self):
+        """5xx ApiException propagates unchanged."""
+        self.mock_client.post_view.side_effect = MockApiException(
+            "server error", code=500
+        )
+
+        with self.assertRaises(MockApiException) as ctx:
+            self.handler.query_view("ddoc", "view")
+        self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_generic_exception_propagates(self):
+        """Non-ApiException from the SDK propagates unchanged."""
+        self.mock_client.post_view.side_effect = RuntimeError("connection reset")
+
+        with self.assertRaises(RuntimeError):
+            self.handler.query_view("ddoc", "view")
+
+
 if __name__ == "__main__":
     unittest.main()
