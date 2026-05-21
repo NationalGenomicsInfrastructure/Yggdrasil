@@ -798,6 +798,56 @@ def data_write_only_permission(
 
 
 # ---------------------------------------------------------------------------
+# Recipe: data_write_no_id
+# ---------------------------------------------------------------------------
+
+
+def data_write_no_id(
+    overrides: dict[str, Any] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that writes a document to CouchDB without supplying a _id.
+
+    Uses the selector identity path of save() so CouchDB auto-generates the
+    document ID on create. The resolved/generated doc_id appears in step metrics,
+    along with identity="selector" and operation="upsert" to make the write
+    path visible for verification.
+
+    Steps:
+        1. write_doc_no_id: Write with selector identity, no explicit _id
+        2. echo_confirm: Confirm write completed (depends on write_doc_no_id)
+
+    Args:
+        overrides: Optional param overrides by step_id.
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="write_doc_no_id",
+            name="Write Doc Without _id",
+            fn_name="step_write_to_db_no_id",
+            params={
+                "connection": "test_realm_write_db",
+                "mode": "upsert",
+            },
+        ),
+        _make_step(
+            step_id="echo_confirm",
+            name="Confirm Write",
+            fn_name="step_echo",
+            params={"message": "CouchDB auto-generated ID write complete!"},
+            deps=["write_doc_no_id"],
+        ),
+    ]
+
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
 # Helper: Apply parameter overrides
 # ---------------------------------------------------------------------------
 
@@ -844,6 +894,7 @@ RECIPES: dict[str, Any] = {
     "data_verify_limit_clamping": data_verify_limit_clamping,
     "data_write_exec": data_write_exec,
     "data_write_only_permission": data_write_only_permission,
+    "data_write_no_id": data_write_no_id,
 }
 
 

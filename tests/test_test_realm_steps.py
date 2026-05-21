@@ -24,6 +24,7 @@ _ALL_STEP_NAMES = [
     "step_fetch_from_db",
     "step_expect_denied",
     "step_write_to_db",
+    "step_write_to_db_no_id",
     "step_expect_read_denied",
     "step_exercise_all_fetch_methods",
     "step_verify_limit_clamping",
@@ -99,6 +100,7 @@ class TestStepWriteToDb(unittest.TestCase):
             connection_name="test_realm_write_db",
             resource="yggdrasil",
             operation="upsert",
+            identity="doc_id",
             doc_id="data_access_test:write_result",
             status=status,
             old_rev=old_rev,
@@ -107,30 +109,30 @@ class TestStepWriteToDb(unittest.TestCase):
 
     def _make_ctx(self, write_result):
         ctx = MagicMock()
-        ctx.data.connection.return_value.put.return_value = write_result
+        ctx.data.connection.return_value.save.return_value = write_result
         return ctx
 
-    def test_put_called_with_clean_body(self):
-        """Body passed to put() must not contain _id or _rev."""
+    def test_save_called_with_clean_body(self):
+        """Body passed to save() must not contain _id or _rev."""
         result = self._make_write_result()
         ctx = self._make_ctx(result)
 
         self.step_fn(ctx)
 
-        put_call = ctx.data.connection.return_value.put.call_args
-        body = put_call[0][1]  # second positional argument
+        save_call = ctx.data.connection.return_value.save.call_args
+        body = save_call[0][0]  # first positional argument
         self.assertNotIn("_id", body)
         self.assertNotIn("_rev", body)
 
-    def test_put_called_with_correct_doc_id_and_mode(self):
+    def test_save_called_with_correct_doc_id_and_mode(self):
         result = self._make_write_result()
         ctx = self._make_ctx(result)
 
         self.step_fn(ctx, doc_id="custom:doc", mode="create")
 
-        put_call = ctx.data.connection.return_value.put.call_args
-        self.assertEqual(put_call[0][0], "custom:doc")
-        self.assertEqual(put_call[1]["mode"], "create")
+        save_call = ctx.data.connection.return_value.save.call_args
+        self.assertEqual(save_call[1]["doc_id"], "custom:doc")
+        self.assertEqual(save_call[1]["mode"], "create")
 
     def test_metrics_include_write_result_fields_on_create(self):
         result = self._make_write_result(
@@ -156,6 +158,97 @@ class TestStepWriteToDb(unittest.TestCase):
         self.assertEqual(step_result.metrics["write_status"], "updated")
         self.assertEqual(step_result.metrics["old_rev"], "1-abc")
         self.assertEqual(step_result.metrics["new_rev"], "2-def")
+
+    def test_raises_if_ctx_data_is_none(self):
+        ctx = MagicMock()
+        ctx.data = None
+        with self.assertRaises(RuntimeError):
+            self.step_fn(ctx)
+
+
+# ---------------------------------------------------------------------------
+# Functional: step_write_to_db_no_id
+# ---------------------------------------------------------------------------
+
+
+class TestStepWriteToDbNoId(unittest.TestCase):
+    """Functional tests for step_write_to_db_no_id."""
+
+    def setUp(self):
+        from lib.realms.test_realm.steps import step_write_to_db_no_id
+        from yggdrasil.flow.data_access.models import DataAccessWriteResult
+
+        self.step_fn = step_write_to_db_no_id
+        self.WriteResult = DataAccessWriteResult
+
+    def _make_write_result(
+        self,
+        status="created",
+        doc_id="auto-generated-id-abc",
+        old_rev=None,
+        new_rev="1-xyz",
+    ):
+        return self.WriteResult(
+            backend="couchdb",
+            connection_name="test_realm_write_db",
+            resource="yggdrasil",
+            operation="upsert",
+            identity="selector",
+            doc_id=doc_id,
+            status=status,
+            old_rev=old_rev,
+            new_rev=new_rev,
+        )
+
+    def _make_ctx(self, write_result):
+        ctx = MagicMock()
+        ctx.data.connection.return_value.save.return_value = write_result
+        return ctx
+
+    def test_save_called_with_selector_mode_not_doc_id(self):
+        """save() must use selector=... and mode=..., not doc_id=..."""
+        ctx = self._make_ctx(self._make_write_result())
+        self.step_fn(ctx, mode="upsert")
+        save_call = ctx.data.connection.return_value.save.call_args
+        self.assertIn("selector", save_call[1])
+        self.assertEqual(save_call[1]["mode"], "upsert")
+        self.assertNotIn("doc_id", save_call[1])
+
+    def test_save_called_with_clean_body(self):
+        """Body passed to save() must not contain _id or _rev."""
+        ctx = self._make_ctx(self._make_write_result())
+        self.step_fn(ctx)
+        save_call = ctx.data.connection.return_value.save.call_args
+        body = save_call[0][0]
+        self.assertNotIn("_id", body)
+        self.assertNotIn("_rev", body)
+
+    def test_default_selector_applied_when_none_provided(self):
+        """When selector param is None, a non-empty default selector must be used."""
+        ctx = self._make_ctx(self._make_write_result())
+        self.step_fn(ctx)
+        save_call = ctx.data.connection.return_value.save.call_args
+        sel = save_call[1]["selector"]
+        self.assertIsInstance(sel, dict)
+        self.assertTrue(len(sel) > 0)
+
+    def test_custom_selector_overrides_default(self):
+        """Explicit selector param must be forwarded to save()."""
+        ctx = self._make_ctx(self._make_write_result())
+        custom = {"type": "my_type", "batch_id": "b-42"}
+        self.step_fn(ctx, selector=custom)
+        save_call = ctx.data.connection.return_value.save.call_args
+        self.assertEqual(save_call[1]["selector"], custom)
+
+    def test_metrics_include_couchdb_generated_doc_id_and_identity(self):
+        """doc_id, identity, and operation in metrics must reflect the write result."""
+        result = self._make_write_result(doc_id="couchdb-abc123")
+        ctx = self._make_ctx(result)
+        step_result = self.step_fn(ctx)
+        self.assertEqual(step_result.metrics["doc_id"], "couchdb-abc123")
+        self.assertEqual(step_result.metrics["write_status"], "created")
+        self.assertEqual(step_result.metrics["identity"], "selector")
+        self.assertEqual(step_result.metrics["operation"], "upsert")
 
     def test_raises_if_ctx_data_is_none(self):
         ctx = MagicMock()
