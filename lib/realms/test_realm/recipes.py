@@ -703,7 +703,7 @@ def data_write_exec(
     Generate a plan that writes a document to CouchDB at execution time.
 
     Proves that a step with execution write permission can call
-    client.put() successfully via ctx.data.connection(). The write result
+    client.save() successfully via ctx.data.connection(). The write result
     (status, doc_id, old_rev, new_rev) is returned in step metrics and
     emitted as a step.write_result event so it is visible in the execution
     record.
