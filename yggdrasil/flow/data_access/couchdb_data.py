@@ -128,6 +128,16 @@ class CouchDBPlanningClient:
 # ---------------------------------------------------------------------------
 
 
+def _validate_clean_doc(doc: dict[str, Any]) -> None:
+    reserved = {"_id", "_rev"} & doc.keys()
+    if reserved:
+        raise ValueError(
+            f"doc must not contain CouchDB metadata fields {sorted(reserved)!r}. "
+            "DataAccess manages _id and _rev internally. "
+            "Pass a clean body dict, or call client.clean_doc(doc) before save()."
+        )
+
+
 class _CouchDBWriteOps:
     """Internal CouchDB write helpers used only by CouchDBExecutionClient.
 
@@ -372,6 +382,195 @@ class _CouchDBWriteOps:
                 f"Network/transport error upserting '{doc_id}': {exc}"
             ) from exc
 
+    def _post_new(
+        self, doc: dict[str, Any]
+    ) -> tuple[str, Literal["created"], None, str | None]:
+        """Create a document via HTTP POST, letting CouchDB generate the ID.
+
+        Returns a 4-tuple (resolved_doc_id, "created", None, new_rev).
+
+        Raises:
+            DataAccessWriteError: On any backend failure.
+        """
+        try:
+            result = self._handler.post_document(doc)
+            return result["id"], "created", None, result.get("rev")
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"CouchDB error creating document via POST: {exc}"
+            ) from exc
+
+    def _find_for_write(
+        self, selector: dict[str, Any], *, limit: int
+    ) -> list[dict[str, Any]]:
+        """Run a Mango selector query as part of a write operation.
+
+        Wraps failures as DataAccessWriteError (not DataAccessQueryError) because
+        the failure occurs in a write operation context.
+        """
+        try:
+            return self._handler.find_documents(selector, limit=limit)
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"Mango query failed during save: {exc}"
+            ) from exc
+
+    def _view_for_write(
+        self,
+        document: str,
+        view_name: str,
+        *,
+        key: Any,
+        limit: int,
+        include_docs: bool,
+    ) -> list[dict[str, Any]]:
+        """Query a CouchDB view as part of a write operation.
+
+        Wraps failures as DataAccessWriteError. Always passes reduce=False to
+        ensure individual map rows with 'id' fields are returned.
+        """
+        try:
+            result = self._handler.query_view(
+                document,
+                view_name,
+                key=key,
+                limit=limit,
+                include_docs=include_docs,
+                reduce=False,
+            )
+            return result.get("rows", [])
+        except _WRITE_EXCEPTIONS as exc:
+            raise DataAccessWriteError(
+                f"View query '{document}/{view_name}' failed during save: {exc}"
+            ) from exc
+
+    def _save_by_selector(
+        self,
+        doc: dict[str, Any],
+        selector: dict[str, Any],
+        *,
+        mode: Literal["create", "update", "upsert"],
+        logger: logging.Logger,
+    ) -> tuple[str, Literal["created", "updated"], str | None, str | None]:
+        """Save a document identified by a Mango selector.
+
+        Finds documents matching selector with limit=2, then applies mode:
+
+        create:  0 matches → create via POST; 1+ matches → DataAccessWriteError.
+        update:  0 matches → DataAccessWriteError; 1 match → update; >1 → error.
+        upsert:  0 matches → create via POST; 1 match → update; >1 → error.
+
+        Returns a 4-tuple (resolved_doc_id, status, old_rev, new_rev).
+
+        Retry on 409 (update path): inherited from _upsert_present, which
+        refetches by doc_id. The selector is not re-run on retry; this is
+        acceptable because the document's identity is already known from the
+        initial match.
+        """
+        matches = self._find_for_write(selector, limit=2)
+        count = len(matches)
+        if count > 1:
+            raise DataAccessWriteError(
+                f"save() by selector matched {count} documents (limit=2); "
+                "expected 0 or 1. Refine the selector to match at most one document."
+            )
+        if count == 0:
+            if mode == "update":
+                raise DataAccessWriteError(
+                    "save() mode='update' by selector: no matching document found."
+                )
+            return self._post_new(doc)
+        # count == 1
+        if mode == "create":
+            raise DataAccessWriteError(
+                "save() mode='create' by selector: a matching document already exists."
+            )
+        existing = matches[0]
+        doc_id: str = existing["_id"]
+        old_rev: str | None = existing.get("_rev")
+        status, result_old_rev, new_rev = self._upsert_present(
+            doc_id, doc, old_rev, logger=logger
+        )
+        return doc_id, status, result_old_rev, new_rev
+
+    def _save_by_view(
+        self,
+        doc: dict[str, Any],
+        view_spec: dict[str, Any],
+        *,
+        mode: Literal["create", "update", "upsert"],
+        logger: logging.Logger,
+    ) -> tuple[str, Literal["created", "updated"], str | None, str | None]:
+        """Save a document identified by a CouchDB view row.
+
+        Queries the view with limit=2, then applies mode:
+
+        create:  0 rows → create via POST; 1+ rows → DataAccessWriteError.
+        update:  0 rows → DataAccessWriteError; 1 row → update; >1 → error.
+        upsert:  0 rows → create via POST; 1 row → update; >1 → error.
+
+        The target view must be a map-only view; reduce=False is always enforced.
+
+        view_spec keys:
+            "design":       Design document name (required).
+            "view":         View name (required).
+            "key":          View key to filter rows (required, must not be None).
+            "include_docs": If True (default), embed full docs in rows to avoid
+                            an extra fetch per update. If False, _rev is fetched
+                            separately.
+
+        Returns a 4-tuple (resolved_doc_id, status, old_rev, new_rev).
+        """
+        design = view_spec["design"]
+        view_name = view_spec["view"]
+        key = view_spec["key"]
+        include_docs = view_spec.get("include_docs", True)
+
+        rows = self._view_for_write(
+            design, view_name, key=key, limit=2, include_docs=include_docs
+        )
+        count = len(rows)
+        if count > 1:
+            raise DataAccessWriteError(
+                f"save() by view '{design}/{view_name}' matched {count} rows (limit=2); "
+                "expected 0 or 1."
+            )
+        if count == 0:
+            if mode == "update":
+                raise DataAccessWriteError(
+                    f"save() mode='update' by view '{design}/{view_name}': no matching row found."
+                )
+            return self._post_new(doc)
+        # count == 1
+        if mode == "create":
+            raise DataAccessWriteError(
+                f"save() mode='create' by view '{design}/{view_name}': a matching row already exists."
+            )
+        row = rows[0]
+        doc_id = row["id"]
+        row_doc = row.get("doc")
+        if include_docs and isinstance(row_doc, dict):
+            old_rev = row_doc.get("_rev")
+        else:
+            existing = self._fetch_existing_for_write(doc_id)
+            if existing is None:
+                if mode == "update":
+                    raise DataAccessWriteError(
+                        f"save() mode='update' by view: row referenced doc '{doc_id}' "
+                        "but it no longer exists."
+                    )
+                logger.warning(
+                    "View row referenced doc '%s' but it no longer exists; creating new document.",
+                    doc_id,
+                )
+                return self._post_new(doc)
+            old_rev = existing.get("_rev")
+
+        status, result_old_rev, new_rev = self._upsert_present(
+            doc_id, doc, old_rev, logger=logger
+        )
+        return doc_id, status, result_old_rev, new_rev
+
 
 # ---------------------------------------------------------------------------
 # Execution client — sync reads + writes
@@ -454,7 +653,6 @@ class CouchDBExecutionClient:
         """
         if self._trace is None or self._trace.emitter is None:
             return
-        doc_id: str = extra.get("doc_id", "")
         event: dict[str, Any] = {
             "type": type_,
             "realm": self._trace.realm,
@@ -470,10 +668,7 @@ class CouchDBExecutionClient:
                 "plan_id": self._trace.plan_id or "unknown",
                 "step_id": self._trace.step_id or "unknown",
                 "run_id": self._trace.run_id,
-                "filename": (
-                    f"data_access_write_{doc_id[:12].replace('/', '_')}"
-                    f"_{uuid4().hex[:8]}.json"
-                ),
+                "filename": f"data_access_write_{uuid4().hex}.json",
             },
             **extra,
         }
@@ -495,45 +690,124 @@ class CouchDBExecutionClient:
         *,
         mode: Literal["create", "update", "upsert"] = "upsert",
     ) -> DataAccessWriteResult:
-        """Write a document to the CouchDB database.
+        """Thin compatibility wrapper around save(doc, doc_id=doc_id, mode=mode).
+
+        Prefer save() for new realm code. put() is kept for backward compatibility
+        only and may be removed in a future version.
+        """
+        return self.save(doc, doc_id=doc_id, mode=mode)
+
+    def clean_doc(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """Return a shallow copy of doc with CouchDB metadata fields removed.
+
+        Strips '_id' and '_rev', preserving all other fields. Use this before
+        passing a document obtained via get() or find() to save() or put().
+        """
+        return {k: v for k, v in doc.items() if k not in {"_id", "_rev"}}
+
+    def save(
+        self,
+        doc: dict[str, Any],
+        *,
+        doc_id: str | None = None,
+        selector: dict[str, Any] | None = None,
+        view: dict[str, Any] | None = None,
+        mode: Literal["create", "update", "upsert"] = "upsert",
+    ) -> DataAccessWriteResult:
+        """Write a document using one of three identity modes.
+
+        Exactly one of doc_id, selector, or view must be provided.
 
         Args:
-            doc_id: Target document ID.
-            doc: Document body. Must NOT contain '_id' or '_rev' — DataAccess
-                manages document identity and revision internally. Pass a clean
-                body dict only. If you obtained a document via get(), strip the
-                CouchDB metadata fields before passing it here.
-            mode: Write mode:
-                "create"  — fail if document exists (409).
+            doc: Document body. Must NOT contain '_id' or '_rev'. Call
+                clean_doc(doc) to strip metadata before passing here.
+            doc_id: Write by explicit CouchDB document ID.
+            selector: Write by Mango selector. Finds with limit=2.
+            view: Write by CouchDB view row. Required keys: "design", "view",
+                "key" (must not be None). Optional: "include_docs" (default True).
+                The target view must be a map-only view; reduce=False is always
+                enforced internally. Null-key view lookups are not supported.
+            mode: Write intent:
+                "create"  — fail if document already exists.
                 "update"  — fail if document does not exist.
-                "upsert"  — create if missing, update if present; retries once on 409.
+                "upsert"  — create if absent, update if present (default).
+
+        Mode × identity semantics:
+
+            doc_id + create  → create with provided _id; fail if exists (409).
+            doc_id + update  → fetch _rev, update; fail if absent.
+            doc_id + upsert  → create if absent, update if present; retry once on 409.
+
+            selector + create  → 0 matches → POST; 1+ matches → DataAccessWriteError.
+            selector + update  → 0 matches → DataAccessWriteError; 1 match → update.
+            selector + upsert  → 0 matches → POST; 1 match → update; >1 → error.
+
+            view + create/update/upsert → same semantics as selector, via view query.
 
         Returns:
-            DataAccessWriteResult with status, revisions, and context.
+            DataAccessWriteResult with the resolved doc_id, requested operation,
+            and identity indicating which argument was used.
 
         Raises:
-            ValueError: doc contains '_id' or '_rev' (caller contract violation).
-            ValueError: mode is not one of 'create', 'update', 'upsert'.
+            ValueError: mode is invalid, identity count != 1, doc is dirty,
+                or view dict is malformed.
             DataAccessDeniedError: Realm lacks 'write' permission.
-            DataAccessWriteError: Backend conflict or write failure, including
-                internal _rev fetch failures.
+            DataAccessWriteError: Constraint violation, backend conflict, or failure.
+
+        Warning — non-atomic operation:
+            All three identity modes perform a lookup followed by a write. A
+            concurrent writer may create a document between the lookup and the
+            write (selector/view modes) or modify the document's revision
+            (doc_id mode). The retry-on-409 path handles revision conflicts for
+            the update case. For the upsert/create path in selector/view modes,
+            a race between two "no match" observations produces two documents; a
+            subsequent save() call will detect this via the limit=2 check and
+            raise DataAccessWriteError. This is safe when Yggdrasil is the only
+            writer for the logical document, or when concurrent creation is rare
+            and operationally detectable.
         """
         if mode not in {"create", "update", "upsert"}:
             raise ValueError(
                 f"Invalid mode '{mode}'. Must be one of: 'create', 'update', 'upsert'."
             )
 
-        reserved = {"_id", "_rev"} & doc.keys()
-        if reserved:
+        modes_given = sum(x is not None for x in (doc_id, selector, view))
+        if modes_given != 1:
             raise ValueError(
-                f"doc must not contain {sorted(reserved)!r}. "
-                "DataAccess manages document identity and revision internally. "
-                "Pass a clean body dict without CouchDB metadata fields."
+                f"save() requires exactly one of: doc_id, selector, view. Got {modes_given}."
             )
 
-        common: dict[str, Any] = {"operation": mode, "doc_id": doc_id}
+        _validate_clean_doc(doc)
 
-        # Permission check — raise immediately; Phase 6 event emission is in _emit()
+        if view is not None:
+            missing = {k for k in ("design", "view", "key") if k not in view}
+            if missing:
+                raise ValueError(
+                    f"view dict is missing required keys: {sorted(missing)!r}. "
+                    "Expected 'design', 'view', and 'key' keys."
+                )
+            if view["key"] is None:
+                raise ValueError(
+                    "'key' in view dict must not be None for save(). "
+                    "save() requires a specific key to identify a single document. "
+                    "Use save(doc, doc_id=..., mode=...) for operations without a view lookup."
+                )
+
+        identity: Literal["doc_id", "selector", "view"] = (
+            "doc_id"
+            if doc_id is not None
+            else "selector" if selector is not None else "view"
+        )
+        common: dict[str, Any] = {
+            "operation": mode,
+            "doc_id": doc_id,
+            "identity": identity,
+        }
+        if selector is not None:
+            common["selector"] = selector
+        elif view is not None:
+            common["view"] = view
+
         if "write" not in self._permissions:
             self._emit(
                 "data_access.write.denied",
@@ -545,14 +819,27 @@ class CouchDBExecutionClient:
                 f"for connection '{self._connection_name}'."
             )
 
-        dispatch = {
-            "create": self._write_ops._create,
-            "update": self._write_ops._update,
-            "upsert": lambda did, d: self._write_ops._upsert(did, d, logger=_logger),
-        }
-
         try:
-            status, old_rev, new_rev = dispatch[mode](doc_id, doc)
+            if doc_id is not None:
+                dispatch = {
+                    "create": lambda: self._write_ops._create(doc_id, doc),
+                    "update": lambda: self._write_ops._update(doc_id, doc),
+                    "upsert": lambda: self._write_ops._upsert(
+                        doc_id, doc, logger=_logger
+                    ),
+                }
+                status, old_rev, new_rev = dispatch[mode]()
+                resolved_doc_id: str = doc_id
+            elif selector is not None:
+                resolved_doc_id, status, old_rev, new_rev = (
+                    self._write_ops._save_by_selector(
+                        doc, selector, mode=mode, logger=_logger
+                    )
+                )
+            elif view is not None:
+                resolved_doc_id, status, old_rev, new_rev = (
+                    self._write_ops._save_by_view(doc, view, mode=mode, logger=_logger)
+                )
         except DataAccessWriteError as exc:
             self._emit("data_access.write.failed", error=str(exc), **common)
             raise
@@ -562,18 +849,17 @@ class CouchDBExecutionClient:
             connection_name=self._connection_name,
             resource=self._resource,
             operation=mode,
-            doc_id=doc_id,
+            identity=identity,
+            doc_id=resolved_doc_id,
             status=status,
             old_rev=old_rev,
             new_rev=new_rev,
         )
-
         self._emit(
             "data_access.write.succeeded",
             status=status,
             old_rev=old_rev,
             new_rev=new_rev,
-            **common,
+            **{**common, "doc_id": resolved_doc_id},
         )
-
         return result
