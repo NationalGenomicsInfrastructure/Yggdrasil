@@ -1,12 +1,13 @@
 # PRD: Realm-Scoped DataAccess with Controlled Writes
 
 **Version**: v0.3  
-**Status**: Draft  
+**Status**: Implemented (see v0.3.1 addendum)  
 **Target branch**: data-access  
 **Owner**: Yggdrasil core
 
 ## Changelog
 
+- v0.3.1 addendum: realm-facing write API revised from `put(doc_id, doc, mode=...)` to `save(doc, *, doc_id, selector, view, mode)`. See addendum section below.
 - v0.3: Evolves the read-only DataAccess design into a controlled read/write access layer. Adds realm- and phase-scoped permissions, execution-only writes, write traceability, and a backend-adapter boundary. CouchDB remains the first supported backend, but the design avoids hard-coding DataAccess around CouchDB-specific concepts.
 - v0.2: Read-only DataAccess for realm-controlled reads from CouchDB.
 
@@ -291,24 +292,24 @@ The same method name may return an awaitable in planning and a concrete value in
 
 DataAccess should not try to make this work without `await` in async planning code. Automatically awaiting “behind the scenes” inside a normal method is not a good Python API: an async operation cannot be transparently awaited from a synchronous-looking call without either blocking the event loop or returning a coroutine/task-like object. Realm authors should use `await` in async planning code.
 
-Writes are execution-only in this PR, so the realm-facing write API should be a single synchronous method:
+Writes are execution-only in this PR, so the realm-facing write API is a single synchronous method:
 
 ```python
-result = ctx.data.resource("x_flowcells_db").put(
-    doc_id=doc_id,
-    doc=doc,
+result = ctx.data.resource("x_flowcells_db").save(
+    doc,
+    doc_id=doc_id,   # or selector={...} or view={...}
     mode="upsert",
 )
 ```
 
-No `put_blocking` is exposed in the first implementation.
+No `save_blocking` is exposed in the first implementation.
 
 The implementation may keep existing `get_blocking` methods temporarily while migrating docs and realm code toward phase-aware `get`. Long term, the preferred API is:
 
 ```text
 planning async context:    await client.get(...)
 execution sync context:    client.get(...)
-execution write context:   client.put(...)
+execution write context:   client.save(...)
 ```
 
 If Yggdrasil later supports async steps, DataAccess can adapt by returning an async execution client for async steps, while preserving the same operation names where possible.
@@ -321,7 +322,7 @@ The public resource client returned by DataAccess should expose a small operatio
 client = ctx.data.resource("x_flowcells_db")
 client.get(...)
 client.find(...)
-client.put(...)
+client.save(...)
 ```
 
 For a CouchDB-backed connection, this resource client may be implemented by a renamed `CouchDBDataClient`.
@@ -349,11 +350,20 @@ Authorization can happen either when constructing the client or when invoking in
 
 ### 5.8 CouchDB write API
 
-Initial write support should include one operation:
+Initial write support includes one operation:
 
 ```python
-put(doc_id: str, doc: dict[str, Any], *, mode: Literal["create", "update", "upsert"] = "upsert") -> DataAccessWriteResult
+save(
+    doc: dict[str, Any],
+    *,
+    doc_id: str | None = None,
+    selector: dict[str, Any] | None = None,
+    view: dict[str, Any] | None = None,
+    mode: Literal["create", "update", "upsert"] = "upsert",
+) -> DataAccessWriteResult
 ```
+
+Exactly one of `doc_id`, `selector`, or `view` must be provided (identity mode). `doc` must be clean — no `_id` or `_rev` keys.
 
 Modes:
 
@@ -363,7 +373,7 @@ Modes:
 
 For CouchDB, `upsert` may require fetching the existing document revision internally. This is part of the authorized write operation and does not expose general read capability to the realm.
 
-Suggested result model:
+Result model:
 
 ```python
 @dataclass(frozen=True)
@@ -371,14 +381,15 @@ class DataAccessWriteResult:
     backend: str
     connection_name: str
     resource: str
-    operation: str
+    operation: Literal["create", "update", "upsert"]   # requested write intent
+    identity: Literal["doc_id", "selector", "view"]    # target resolution method
     doc_id: str
     status: Literal["created", "updated"]
     old_rev: str | None
     new_rev: str | None
 ```
 
-A status string is preferred over `created: bool` because it is clearer in logs and leaves room for future statuses without adding more booleans. Timestamps should not be encoded as a substitute for status. Write timing belongs to the event layer or trace metadata, not to the semantic write result itself.
+A status string is preferred over `created: bool` because it is clearer in logs and leaves room for future statuses without adding more booleans. `operation` records the write intent; `identity` records how the target document was resolved.
 
 ### 5.9 Trace context and write events
 
@@ -421,8 +432,9 @@ Event payload should include:
   "connection": "x_flowcells_db",
   "backend": "couchdb",
   "operation": "upsert",
+  "identity": "doc_id",
   "doc_id": "...",
-  "created": true,
+  "status": "created",
   "old_rev": null,
   "new_rev": "1-..."
 }
@@ -435,19 +447,19 @@ The `dmx` realm step should look approximately like:
 ```python
 @step
 def create_x_flowcell_doc(ctx: StepContext, flowcell_id: str, scenario: dict) -> StepResult:
-    doc_id = build_x_flowcell_doc_id(flowcell_id)
     doc = build_taca_x_flowcell_doc(scenario)
 
-    result = ctx.data.resource("x_flowcells_db").put(
-        doc_id=doc_id,
-        doc=doc,
+    result = ctx.data.resource("x_flowcells_db").save(
+        doc,
+        selector={"flowcell_id": flowcell_id},
         mode="upsert",
     )
 
     return StepResult(metrics={
         "x_flowcell_doc_id": result.doc_id,
-        "x_flowcell_created": result.created,
+        "x_flowcell_status": result.status,
         "x_flowcell_rev": result.new_rev,
+        "x_flowcell_identity": result.identity,
     })
 ```
 
@@ -490,8 +502,8 @@ Below there are example phases you may use, or get inspired to create your own.
 - Rename or supersede `CouchDBReadClient` with `CouchDBDataClient` for CouchDB-backed resources.
 - Preserve existing read behavior.
 - Move toward phase-aware method names: `await get(...)` in planning, `get(...)` in sync execution.
-- Add a single realm-facing write method: `put(...)`.
-- Do not expose `put_blocking` in this PR.
+- Add a single realm-facing write method: `save(...)`.
+- Do not expose `save_blocking` in this PR.
 
 ### Phase 5: Implement CouchDB write behavior
 
@@ -524,10 +536,12 @@ Add tests for:
 - Missing realm policy denies access.
 - Missing phase policy denies access.
 - CouchDB `max_limit` still applies to query reads.
-- `put(mode="create")` fails if document exists.
-- `put(mode="update")` fails if document is missing.
-- `put(mode="upsert")` creates or updates as expected.
-- Write events include trace context.
+- `save(doc_id=..., mode="create")` fails if document exists.
+- `save(doc_id=..., mode="update")` fails if document is missing.
+- `save(doc_id=..., mode="upsert")` creates or updates as expected.
+- `save(selector=..., mode="upsert")` creates via POST (CouchDB-generated `_id`) when no match; updates on single match.
+- `save(view=..., mode="upsert")` same semantics as selector, resolved through a view query.
+- Write events include `operation` and `identity` fields in addition to trace context.
 - Realm code cannot access raw backend client internals through public API.
 
 ## 8. Acceptance Criteria
@@ -559,4 +573,33 @@ R4. Future backends may not map cleanly to `read`/`write`.
 
 R5. Write event emission could fail after the backend write succeeds.  
 - Mitigation: Treat backend write success as authoritative for the returned `DataAccessWriteResult`. Event emission failures should be caught and logged according to existing emitter failure policy. This PR should not require a full new reliability mechanism for secondary event emission, but it must not report the backend write as failed if only trace emission failed.
+
+---
+
+## v0.3.1 Addendum — `save()` replaces realm-facing `put()`
+
+During implementation/testing, the realm-facing write API was revised from `put(doc_id, doc, mode=...)` to `save(doc, *, doc_id=None, selector=None, view=None, mode="upsert")`.
+
+**Reason:** some legacy CouchDB databases, especially `x_flowcells`, rely on CouchDB-generated `_id` values while identifying logical documents by external keys such as `flowcell_id` through selectors or views. A doc-id-only API cannot support that cleanly.
+
+`save()` is now the preferred and only realm-facing write method. It separates:
+
+- `operation`: requested write intent — `"create"`, `"update"`, or `"upsert"`
+- `identity`: target-resolution method — `"doc_id"`, `"selector"`, or `"view"`
+
+Examples:
+
+```python
+client.save(body, doc_id="known:id", mode="upsert")
+client.save(body, selector={"flowcell_id": flowcell_id}, mode="upsert")
+client.save(
+    body,
+    view={"design": "flowcells", "view": "by_flowcell_id", "key": flowcell_id},
+    mode="upsert",
+)
+```
+
+Selector/view identity modes use `limit=2` and fail with `DataAccessWriteError` if more than one match exists. If no match exists, they create the document using a CouchDB-generated `_id`.
+
+Selector/view saves are not atomic uniqueness guarantees. Concurrent writers can both observe zero matches and create duplicates. This is acceptable for Yggdrasil-managed low-contention legacy integration, and later calls fail loudly once duplicates exist.
 
