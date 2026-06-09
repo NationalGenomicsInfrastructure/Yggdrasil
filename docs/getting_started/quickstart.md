@@ -42,6 +42,14 @@ pip install -e .
 
 `requirements/lock.txt` is generated with `pip-compile --strip-extras` and pins exact versions.
 
+### Production / pip-installed
+
+For pip-installed deployments, choose a Yggdrasil workspace directory outside the source checkout and conda environment. Ensure `common/configurations/main.json` exists below it, then export `YGG_HOME` before starting Yggdrasil:
+
+```bash
+export YGG_HOME=/absolute/path/to/yggdrasil_workspace
+```
+
 ---
 
 ## Install an external realm (example: dataflow-dmx)
