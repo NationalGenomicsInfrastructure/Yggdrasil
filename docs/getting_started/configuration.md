@@ -1,7 +1,11 @@
 # Configuration
 
-Yggdrasil reads configuration from files under `yggdrasil_workspace/common/configurations/`.
-That base path is set in `lib/core_utils/common.py` and can be overridden.
+Yggdrasil reads configuration files from the resolved workspace directory:
+
+- If `YGG_HOME` is set, configuration files are loaded from `$YGG_HOME/common/configurations/`.
+- If `YGG_HOME` is not set, Yggdrasil falls back to `yggdrasil_workspace/common/configurations/` beside the source tree.
+
+`YGG_HOME` must point to the root of the Yggdrasil workspace, not to the source checkout or the conda environment.
 
 Two key files:
 
@@ -115,6 +119,14 @@ Two key files:
 ---
 
 ## Environment variables
+
+### Configuration discovery
+
+| Variable | Purpose |
+|---|---|
+| `YGG_HOME` | Root of the Yggdrasil workspace. When set, config files are resolved under `$YGG_HOME/common/configurations/`. Use an absolute path in production and HPC deployments. |
+
+### Credentials and runtime paths
 
 Sensitive credentials should be set as environment variables, not stored in config files.
 

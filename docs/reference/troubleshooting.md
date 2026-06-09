@@ -49,7 +49,7 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 
 > **Note:** `ConfigLoader` returns `None` (silently) for any key that is absent from the config file. Mistakes that don't touch the two paths above will not surface until the code path that uses the value is actually exercised at runtime.
 
-**Resolution:** Ensure `yggdrasil_workspace/common/configurations/main.json` contains all required keys. See [configuration.md](../getting_started/configuration.md) for the full structure.
+**Resolution:** Check `main.json` in the resolved configuration directory. If `YGG_HOME` is set, Yggdrasil reads `$YGG_HOME/common/configurations/main.json`; otherwise it falls back to `yggdrasil_workspace/common/configurations/main.json`. See [configuration.md](../getting_started/configuration.md) for the full structure.
 
 ---
 

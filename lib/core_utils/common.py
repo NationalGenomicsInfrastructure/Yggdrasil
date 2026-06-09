@@ -14,14 +14,35 @@ class YggdrasilUtilities:
 
     Attributes:
         module_cache (Dict[str, Any]): Cache for loaded modules and classes.
-        CONFIG_DIR (Path): Directory containing configuration files.
+        CONFIG_DIR (Path): Default directory containing configuration files.
     """
 
     module_cache: dict[str, Any] = {}
-    CONFIG_DIR: Path = (
-        Path(__file__).parent.parent.parent
-        / "yggdrasil_workspace/common/configurations"
+    DEFAULT_WORKSPACE_PATH: Path = (
+        Path(__file__).parent.parent.parent / "yggdrasil_workspace"
     )
+    CONFIG_DIR: Path = DEFAULT_WORKSPACE_PATH / "common/configurations"
+
+    @staticmethod
+    def workspace_path() -> Path:
+        """Return the root path for the Yggdrasil workspace.
+
+        If YGG_HOME is set, it is treated as the workspace root. Otherwise,
+        return the local development workspace bundled beside the source tree.
+        """
+        ygg_home = os.environ.get("YGG_HOME")
+        if ygg_home:
+            return Path(ygg_home).expanduser()
+
+        return YggdrasilUtilities.DEFAULT_WORKSPACE_PATH
+
+    @staticmethod
+    def config_dir() -> Path:
+        """Return the directory containing Yggdrasil configuration files."""
+        if os.environ.get("YGG_HOME"):
+            return YggdrasilUtilities.workspace_path() / "common/configurations"
+
+        return YggdrasilUtilities.CONFIG_DIR
 
     @staticmethod
     def load_realm_class(module_path: str) -> type | None:
@@ -85,19 +106,21 @@ class YggdrasilUtilities:
         # Convert to Path object
         requested_path = Path(file_name)
 
-        # If file_name is absolute or tries to go outside CONFIG_DIR, return None immediately
+        # If file_name is absolute or tries to go outside config_dir, return None immediately
         if requested_path.is_absolute():
             logging.error(f"Absolute paths are not allowed: '{file_name}'")
             return None
 
-        # Construct the path within CONFIG_DIR
-        config_file = YggdrasilUtilities.CONFIG_DIR / requested_path
+        config_dir = YggdrasilUtilities.config_dir()
 
-        # Check if the constructed path is still within CONFIG_DIR (no directory traversal)
+        # Construct the path within config_dir
+        config_file = config_dir / requested_path
+
+        # Check if the constructed path is still within config_dir (no directory traversal)
         try:
-            # Resolve both paths to their absolute forms and ensure CONFIG_DIR is a parent of config_file
+            # Resolve both paths to their absolute forms and ensure config_dir is a parent of config_file
             config_file_resolved = config_file.resolve()
-            config_dir_resolved = YggdrasilUtilities.CONFIG_DIR.resolve()
+            config_dir_resolved = config_dir.resolve()
 
             if config_dir_resolved not in config_file_resolved.parents:
                 logging.error(

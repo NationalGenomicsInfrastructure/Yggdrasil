@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
@@ -12,9 +13,11 @@ class TestYggdrasilUtilities(unittest.TestCase):
         # Backup original values
         self.original_module_cache = YggdrasilUtilities.module_cache.copy()
         self.original_config_dir = YggdrasilUtilities.CONFIG_DIR
+        self.original_ygg_home = os.environ.get("YGG_HOME")
 
         # Reset module cache
         YggdrasilUtilities.module_cache = {}
+        os.environ.pop("YGG_HOME", None)
 
         # Use a temporary config directory
         self.temp_config_dir = Path("/tmp/yggdrasil_test_config")
@@ -25,11 +28,43 @@ class TestYggdrasilUtilities(unittest.TestCase):
         # Restore original values
         YggdrasilUtilities.module_cache = self.original_module_cache
         YggdrasilUtilities.CONFIG_DIR = self.original_config_dir
+        if self.original_ygg_home is None:
+            os.environ.pop("YGG_HOME", None)
+        else:
+            os.environ["YGG_HOME"] = self.original_ygg_home
 
         # Clean up temporary config directory
         for item in self.temp_config_dir.glob("*"):
             item.unlink()
         self.temp_config_dir.rmdir()
+
+    def test_workspace_path_defaults_to_local_workspace(self):
+        expected = Path(__file__).parent.parent / "yggdrasil_workspace"
+
+        result = YggdrasilUtilities.workspace_path()
+
+        self.assertEqual(result, expected)
+
+    def test_workspace_path_uses_ygg_home(self):
+        ygg_home = "/tmp/yggdrasil_hpc_workspace"
+
+        with patch.dict(os.environ, {"YGG_HOME": ygg_home}):
+            result = YggdrasilUtilities.workspace_path()
+
+        self.assertEqual(result, Path(ygg_home))
+
+    def test_config_dir_uses_ygg_home(self):
+        ygg_home = "/tmp/yggdrasil_hpc_workspace"
+
+        with patch.dict(os.environ, {"YGG_HOME": ygg_home}):
+            result = YggdrasilUtilities.config_dir()
+
+        self.assertEqual(result, Path(ygg_home) / "common/configurations")
+
+    def test_config_dir_defaults_to_config_dir_attribute(self):
+        result = YggdrasilUtilities.config_dir()
+
+        self.assertEqual(result, self.temp_config_dir)
 
     @patch("importlib.import_module")
     def test_load_realm_class_success(self, mock_import_module):
@@ -125,6 +160,19 @@ class TestYggdrasilUtilities(unittest.TestCase):
         result = YggdrasilUtilities.get_path(file_name)
 
         self.assertIsNone(result)
+
+    def test_get_path_uses_ygg_home_config_dir(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            ygg_home = Path(workspace)
+            config_dir = ygg_home / "common/configurations"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            test_file = config_dir / "config.yaml"
+            test_file.touch()
+
+            with patch.dict(os.environ, {"YGG_HOME": workspace}):
+                result = YggdrasilUtilities.get_path("config.yaml")
+
+            self.assertEqual(result, test_file)
 
     def test_env_variable_exists(self):
         with patch.dict(os.environ, {"TEST_ENV_VAR": "test_value"}):
