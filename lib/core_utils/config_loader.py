@@ -27,6 +27,12 @@ class ConfigLoader:
 
     def __init__(self) -> None:
         self._config: Mapping[str, Any] | None = None
+        self._loaded_path: Path | None = None
+
+    @property
+    def loaded_path(self) -> Path | None:
+        """Resolved path for the most recently loaded config file."""
+        return self._loaded_path
 
     def __getitem__(self, key: str) -> Any:
         """
@@ -96,6 +102,7 @@ class ConfigLoader:
                 "Config file '%s' already loaded. Using cached version.",
                 base_file.name,
             )
+            self._loaded_path = key
             self._config = ConfigLoader._cache[key]
             return self._config
 
@@ -122,6 +129,7 @@ class ConfigLoader:
         # 5) wrap and cache
         mp = types.MappingProxyType(raw)
         ConfigLoader._cache[key] = mp
+        self._loaded_path = key
         self._config = mp
 
         return self._config
