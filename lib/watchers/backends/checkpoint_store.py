@@ -11,8 +11,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
-from ibm_cloud_sdk_core.api_exception import ApiException
-
 from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.backends.base import Checkpoint, CheckpointStore
 
@@ -125,13 +123,26 @@ class CouchDBCheckpointStore(CheckpointStore):
 
     @staticmethod
     def _is_conflict_error(exc: Exception) -> bool:
-        """Return True when the Cloudant exception is a CouchDB update conflict."""
-        if not isinstance(exc, ApiException):
-            return False
-        status_code = getattr(exc, "status_code", None)
-        if status_code is not None:
-            return status_code == 409
-        return getattr(exc, "code", None) == 409
+        """
+        Return True when an exception represents a CouchDB update conflict.
+
+        Args:
+            exc: Exception raised while writing a checkpoint document.
+
+        Returns:
+            True if the exception carries a CouchDB/HTTP conflict status, False
+            otherwise.
+
+        The IBM SDK exposes the HTTP status as ``status_code`` on current
+        versions, while older call paths and some test doubles expose it as
+        ``code``. Checking the status attributes keeps conflict handling tied
+        to the CouchDB response instead of a particular exception class.
+        """
+        for attr_name in ("status_code", "code"):
+            status = getattr(exc, attr_name, None)
+            if status == 409:
+                return True
+        return False
 
     def save(self, checkpoint: Checkpoint) -> None:
         """

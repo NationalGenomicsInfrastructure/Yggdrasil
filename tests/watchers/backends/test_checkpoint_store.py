@@ -107,6 +107,37 @@ class TestCouchDBCheckpointStore(unittest.TestCase):
         doc_id = store._make_doc_id("couchdb:projects")
         self.assertEqual(doc_id, "watcher_checkpoint:couchdb:projects")
 
+    def test_is_conflict_error_accepts_status_duck_typing(self):
+        """Test 409 conflict detection without depending on SDK exception identity."""
+
+        class StatusConflictError(Exception):
+            """Exception carrying a CouchDB-style conflict status."""
+
+            status_code = 409
+
+        class CodeConflictError(Exception):
+            """Exception carrying a legacy/mock conflict code."""
+
+            code = 409
+
+        self.assertTrue(
+            CouchDBCheckpointStore._is_conflict_error(StatusConflictError())
+        )
+        self.assertTrue(CouchDBCheckpointStore._is_conflict_error(CodeConflictError()))
+
+    def test_is_conflict_error_rejects_non_conflicts(self):
+        """Test non-409 errors are not classified as checkpoint conflicts."""
+
+        class ServerError(Exception):
+            """Exception carrying a non-conflict CouchDB status."""
+
+            status_code = 500
+
+        self.assertFalse(CouchDBCheckpointStore._is_conflict_error(ServerError()))
+        self.assertFalse(
+            CouchDBCheckpointStore._is_conflict_error(RuntimeError("boom"))
+        )
+
     def test_load_existing_checkpoint(self):
         """Test load() returns checkpoint from CouchDB."""
         store = CouchDBCheckpointStore(db_manager=self.mock_dbm)
@@ -291,9 +322,14 @@ class TestCouchDBCheckpointStore(unittest.TestCase):
         self.assertEqual(self.mock_dbm.server.put_document.call_count, 2)
         retry_doc = self.mock_dbm.server.put_document.call_args.kwargs["document"]
         self.assertEqual(retry_doc["_rev"], "2-newrev")
-        self.assertIn(
-            CouchDBCheckpointStore.CONCURRENT_WRITER_WARNING,
-            mock_logger.warning.call_args.args,
+        warning_args = [
+            arg for call in mock_logger.warning.call_args_list for arg in call.args
+        ]
+        self.assertTrue(
+            any(
+                CouchDBCheckpointStore.CONCURRENT_WRITER_WARNING in str(arg)
+                for arg in warning_args
+            )
         )
 
     def test_save_conflict_target_value_already_persisted_succeeds(self):
