@@ -151,13 +151,22 @@ class PlanWatcher(AbstractWatcher):
                 new_seq = change.get("seq")
                 if new_seq is not None:
                     current_seq = str(new_seq)
-                    self.checkpoint_store.save(
-                        Checkpoint(
-                            backend_key=self.CHECKPOINT_KEY,
-                            value=current_seq,
-                            updated_at=datetime.now(UTC).isoformat(),
+                    try:
+                        self.checkpoint_store.save(
+                            Checkpoint(
+                                backend_key=self.CHECKPOINT_KEY,
+                                value=current_seq,
+                                updated_at=datetime.now(UTC).isoformat(),
+                            )
                         )
-                    )
+                    except Exception as e:
+                        self._logger.error(
+                            "Failed to save PlanWatcher checkpoint for change id=%r seq=%r; continuing: %s",
+                            change.get("id"),
+                            current_seq,
+                            e,
+                            exc_info=True,
+                        )
         except Exception as e:
             # stream_changes_continuously handles transient retry/backoff internally.
             # Unexpected errors are logged and terminate start().

@@ -289,6 +289,45 @@ class TestPlanWatcher(unittest.TestCase):
         # Checkpoint should have been retrieved
         self.mock_checkpoint.load.assert_called_once_with("watcher:PlanWatcher")
 
+    def test_checkpoint_save_failure_does_not_stop_watcher_loop(self):
+        """Test checkpoint save errors are logged and do not terminate PlanWatcher."""
+        changes = [
+            {
+                "id": "pln_dmx_ASDFGG",
+                "seq": "101-aaa",
+                "doc": {
+                    "_id": "pln_dmx_ASDFGG",
+                    "status": "draft",
+                    "run_token": 0,
+                    "executed_run_token": -1,
+                    "execution_authority": "daemon",
+                },
+            },
+            {
+                "id": "pln_dmx_ASDFGG_2",
+                "seq": "102-bbb",
+                "doc": {
+                    "_id": "pln_dmx_ASDFGG_2",
+                    "status": "draft",
+                    "run_token": 0,
+                    "executed_run_token": -1,
+                    "execution_authority": "daemon",
+                },
+            },
+        ]
+
+        async def mock_stream_changes_continuously(since=None, poll_interval_sec=5.0):
+            for change in changes:
+                yield change
+
+        self.mock_fetcher.stream_changes_continuously = mock_stream_changes_continuously
+        self.mock_checkpoint.save.side_effect = [RuntimeError("conflict"), None]
+
+        asyncio.run(self.watcher.start())
+
+        self.assertEqual(self.mock_checkpoint.save.call_count, 2)
+        self.mock_on_event.assert_not_called()
+
     def test_stop_sets_running_false(self):
         """Test that stop() sets _running to False."""
         self.watcher._running = True
