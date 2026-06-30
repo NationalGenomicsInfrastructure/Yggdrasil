@@ -92,11 +92,12 @@ class DaemonLock:
         Raises:
             DaemonLockError: If another process already holds the local daemon
                 lock.
-            OSError: If the lock file cannot be opened, locked, written, or
-                synced for reasons other than an already-held lock.
+            OSError: If the runtime directory or lock file cannot be prepared,
+                opened, locked, written, or synced for reasons other than an
+                already-held lock.
         """
         lock_dir = cls._runtime_dir()
-        lock_dir.mkdir(parents=True, exist_ok=True)
+        cls._prepare_runtime_dir(lock_dir)
         lock_path = lock_dir / cls.LOCK_FILENAME
 
         lock_file = lock_path.open("a+", encoding="utf-8")
@@ -139,7 +140,71 @@ class DaemonLock:
         )
         if runtime_dir:
             return Path(runtime_dir)
+        return DaemonLock._fallback_runtime_dir()
+
+    @staticmethod
+    def _fallback_runtime_dir() -> Path:
+        """
+        Return the fallback runtime directory for this user.
+
+        Returns:
+            Per-user fallback path under ``/tmp``.
+        """
         return Path("/tmp") / f"yggdrasil-{os.getuid()}"
+
+    @classmethod
+    def _is_fallback_runtime_dir(cls, path: Path) -> bool:
+        """
+        Check whether a path is the fallback runtime directory.
+
+        Args:
+            path: Runtime directory candidate.
+
+        Returns:
+            True when ``path`` resolves to Yggdrasil's fallback directory for
+            the current user.
+        """
+        return path == cls._fallback_runtime_dir()
+
+    @classmethod
+    def _prepare_runtime_dir(cls, lock_dir: Path) -> None:
+        """
+        Create and validate the runtime directory for lock files.
+
+        Fallback directories under ``/tmp`` are owned by Yggdrasil, so they are
+        created or tightened to ``0o700``. Runtime directories provided by the
+        OS or ``appdirs`` are not chmodded because their permissions may be
+        managed externally.
+
+        Args:
+            lock_dir: Runtime directory returned by :meth:`_runtime_dir`.
+
+        Raises:
+            OSError: If the directory cannot be created, if the fallback path is
+                a symlink, or if an existing fallback directory is not owned by
+                the current user.
+        """
+        if not cls._is_fallback_runtime_dir(lock_dir):
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            return
+
+        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if lock_dir.is_symlink():
+            raise OSError(
+                errno.ELOOP,
+                "Fallback daemon lock directory must not be a symlink",
+                str(lock_dir),
+            )
+
+        stat_result = lock_dir.stat()
+        if stat_result.st_uid != os.getuid():
+            raise PermissionError(
+                errno.EACCES,
+                "Fallback daemon lock directory is not owned by the current user",
+                str(lock_dir),
+            )
+
+        os.chmod(lock_dir, 0o700)
 
     @staticmethod
     def _metadata(

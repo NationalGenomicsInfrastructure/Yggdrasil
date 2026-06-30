@@ -109,9 +109,14 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_loader.load_config.return_value = self.mock_config
             mock_loader.loaded_path = Path("/tmp/main.json")
             mock_lock = MagicMock()
-            mock_acquire.return_value = mock_lock
             mock_core = Mock()
             mock_core_class.return_value = mock_core
+
+            def acquire_lock(*args, **kwargs):
+                mock_core_class.assert_not_called()
+                return mock_lock
+
+            mock_acquire.side_effect = acquire_lock
 
             main()
 
@@ -120,6 +125,7 @@ class TestYggdrasilCLI(unittest.TestCase):
                 config_path=Path("/tmp/main.json"),
             )
             mock_lock.__enter__.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
 
     def test_dev_daemon_mode_acquires_same_local_lock(self):
@@ -156,8 +162,6 @@ class TestYggdrasilCLI(unittest.TestCase):
             patch("asyncio.run") as mock_asyncio_run,
         ):
             mock_config_loader.return_value.load_config.return_value = self.mock_config
-            mock_core = Mock()
-            mock_core_class.return_value = mock_core
             mock_acquire.side_effect = DaemonLockError(
                 Path("/tmp/yggdrasil/daemon.lock"),
                 {"pid": 12345},
@@ -167,8 +171,7 @@ class TestYggdrasilCLI(unittest.TestCase):
                 main()
 
             self.assertEqual(context.exception.code, 1)
-            mock_core.setup_realms.assert_called_once()
-            mock_core.setup_watchers.assert_not_called()
+            mock_core_class.assert_not_called()
             mock_asyncio_run.assert_not_called()
 
     def test_daemon_mode_with_dev_flag(self):

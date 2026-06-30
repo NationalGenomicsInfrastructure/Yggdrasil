@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,3 +59,74 @@ class TestDaemonLock(unittest.TestCase):
                     dev_path = dev.lock_path
 
                 self.assertEqual(normal_path, dev_path)
+
+    def test_fallback_runtime_dir_is_created_with_restrictive_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fallback_dir = Path(tmpdir) / "yggdrasil-lock"
+            with (
+                patch(
+                    "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                    return_value=None,
+                    create=True,
+                ),
+                patch.object(
+                    DaemonLock,
+                    "_fallback_runtime_dir",
+                    return_value=fallback_dir,
+                ),
+            ):
+                with DaemonLock.acquire(dev_mode=False, config_path=None):
+                    pass
+
+            mode = stat.S_IMODE(fallback_dir.stat().st_mode)
+            self.assertEqual(mode, 0o700)
+
+    def test_existing_fallback_runtime_dir_is_chmodded_to_restrictive_permissions(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fallback_dir = Path(tmpdir) / "yggdrasil-lock"
+            fallback_dir.mkdir(mode=0o755)
+            fallback_dir.chmod(0o755)
+
+            with patch.object(
+                DaemonLock,
+                "_fallback_runtime_dir",
+                return_value=fallback_dir,
+            ):
+                DaemonLock._prepare_runtime_dir(fallback_dir)
+
+            mode = stat.S_IMODE(fallback_dir.stat().st_mode)
+            self.assertEqual(mode, 0o700)
+
+    def test_appdirs_runtime_dir_permissions_are_not_mutated(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir)
+            runtime_dir.chmod(0o755)
+            with patch(
+                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                return_value=runtime_dir,
+                create=True,
+            ):
+                with DaemonLock.acquire(dev_mode=False, config_path=None):
+                    pass
+
+            mode = stat.S_IMODE(runtime_dir.stat().st_mode)
+            self.assertEqual(mode, 0o755)
+
+    def test_existing_fallback_runtime_dir_owned_by_other_user_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fallback_dir = Path(tmpdir) / "yggdrasil-lock"
+            fallback_dir.mkdir()
+            other_uid = os.getuid() + 1
+
+            with (
+                patch.object(
+                    DaemonLock,
+                    "_fallback_runtime_dir",
+                    return_value=fallback_dir,
+                ),
+                patch("lib.core_utils.daemon_lock.os.getuid", return_value=other_uid),
+            ):
+                with self.assertRaises(PermissionError):
+                    DaemonLock._prepare_runtime_dir(fallback_dir)

@@ -132,11 +132,9 @@ Examples:
 
     logger.debug("Yggdrasil: Starting up...")
 
-    # 4) Prepare core (load config, init core, discover realms)
+    # 4) Load config before dispatching to the selected mode
     config_loader = ConfigLoader()
     config = config_loader.load_config("main.json")
-    core = YggdrasilCore(config)
-    core.setup_realms()
 
     if args.mode == "daemon":
         if getattr(args, "manual_submit", False):
@@ -147,7 +145,8 @@ Examples:
                 dev_mode=args.dev,
                 config_path=config_loader.loaded_path,
             ):
-                # (future)Daemon: set up watchers and run forever
+                core = YggdrasilCore(config)
+                core.setup_realms()
                 core.setup_watchers()
                 try:
                     asyncio.run(core.start())
@@ -172,6 +171,9 @@ Examples:
             raise SystemExit(1) from e
 
     elif args.mode == "run-doc":
+        core = YggdrasilCore(config)
+        core.setup_realms()
+
         # Validate mode selection
         if not args.plan_only and not args.run_once:
             # Default to plan-only with notice
