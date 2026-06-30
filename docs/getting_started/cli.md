@@ -51,6 +51,8 @@ yggdrasil --dev daemon
 
 Logs are written to the directory set in `main.json` → `yggdrasil.log_dir`.
 
+**Note**: Only one Yggdrasil daemon should run against a shared database environment at a time. Yggdrasil prevents duplicate daemon processes in the same local runtime with a process lock. If another machine or runtime is pointed at the same databases, checkpoint conflict warnings indicate that more than one daemon may be active, but this may lead to unexpected behaviour.
+
 ### `run-doc`
 
 **Warning**: `run-doc` used to be a core tool of an earlier version, but the core has now moved on. We've attempted to keep it afloat, but it might not work as expected anymore.

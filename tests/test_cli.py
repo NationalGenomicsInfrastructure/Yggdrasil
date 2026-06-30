@@ -1,8 +1,10 @@
 import sys
 import unittest
 from io import StringIO
-from unittest.mock import Mock, call, patch
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, call, patch
 
+from lib.core_utils.daemon_lock import DaemonLockError
 from yggdrasil.cli import main
 
 
@@ -93,6 +95,85 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_core.setup_watchers.assert_called_once()
             mock_asyncio_run.assert_called_once_with(mock_core.start())
 
+    def test_daemon_mode_acquires_local_lock(self):
+        """Test daemon mode acquires the local runtime lock before watchers start."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("asyncio.run"),
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/main.json")
+            mock_lock = MagicMock()
+            mock_core = Mock()
+            mock_core_class.return_value = mock_core
+
+            def acquire_lock(*args, **kwargs):
+                mock_core_class.assert_not_called()
+                return mock_lock
+
+            mock_acquire.side_effect = acquire_lock
+
+            main()
+
+            mock_acquire.assert_called_once_with(
+                dev_mode=False,
+                config_path=Path("/tmp/main.json"),
+            )
+            mock_lock.__enter__.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
+            mock_core.setup_watchers.assert_called_once()
+
+    def test_dev_daemon_mode_acquires_same_local_lock(self):
+        """Test --dev daemon also acquires the coarse local runtime lock."""
+        sys.argv = ["yggdrasil", "--dev", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("asyncio.run"),
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/dev_main.json")
+            mock_acquire.return_value = MagicMock()
+            mock_core_class.return_value = Mock()
+
+            main()
+
+            mock_acquire.assert_called_once_with(
+                dev_mode=True,
+                config_path=Path("/tmp/dev_main.json"),
+            )
+
+    def test_daemon_lock_failure_exits_before_watcher_setup(self):
+        """Test a held local lock exits before watchers are configured."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("asyncio.run") as mock_asyncio_run,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_acquire.side_effect = DaemonLockError(
+                Path("/tmp/yggdrasil/daemon.lock"),
+                {"pid": 12345},
+            )
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            mock_core_class.assert_not_called()
+            mock_asyncio_run.assert_not_called()
+
     def test_daemon_mode_with_dev_flag(self):
         """Test daemon mode with development flag."""
         sys.argv = ["yggdrasil", "--dev", "daemon"]
@@ -136,6 +217,25 @@ class TestYggdrasilCLI(unittest.TestCase):
                 force_overwrite=False,
             )
             mock_session.init_manual_submit.assert_called_once_with(False)
+
+    def test_run_doc_mode_does_not_acquire_daemon_lock(self):
+        """Test one-off run-doc mode does not take the daemon runtime lock."""
+        sys.argv = ["yggdrasil", "run-doc", "test_doc_id", "--plan-only"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_acquire.assert_not_called()
+            mock_core.create_plan_from_doc.assert_called_once()
 
     def test_run_doc_mode_with_manual_submit(self):
         """Test run-doc mode with manual submit flag uses plan-only."""

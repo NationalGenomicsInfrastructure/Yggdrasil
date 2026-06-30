@@ -2,6 +2,7 @@ import argparse
 import asyncio
 
 from lib.core_utils.config_loader import ConfigLoader
+from lib.core_utils.daemon_lock import DaemonLock, DaemonLockError
 from lib.core_utils.logging_utils import configure_logging, custom_logger
 from lib.core_utils.ygg_session import YggSession
 from lib.core_utils.yggdrasil_core import YggdrasilCore
@@ -131,30 +132,48 @@ Examples:
 
     logger.debug("Yggdrasil: Starting up...")
 
-    # 4) Prepare core (load config, init core, discover realms)
-    config = ConfigLoader().load_config("main.json")
-    core = YggdrasilCore(config)
-    core.setup_realms()
+    # 4) Load config before dispatching to the selected mode
+    config_loader = ConfigLoader()
+    config = config_loader.load_config("main.json")
 
     if args.mode == "daemon":
         if getattr(args, "manual_submit", False):
             parser.error("The --manual-submit flag is only valid in run-doc mode.")
 
-        # (future)Daemon: set up watchers and run forever
-        core.setup_watchers()
         try:
-            asyncio.run(core.start())
-        except KeyboardInterrupt:
-            logger.warning("[bold red blink] Shutting down Yggdrasil daemon... [/]")
-            try:
-                asyncio.run(core.stop())
-            except (asyncio.CancelledError, RuntimeError) as e:
-                # CancelledError: Tasks were cancelled during shutdown (expected)
-                # RuntimeError: Event loop issues during cleanup (can be ignored)
-                logger.debug(f"Shutdown exception (expected): {e}")
-            logger.info("Yggdrasil daemon stopped.")
+            with DaemonLock.acquire(
+                dev_mode=args.dev,
+                config_path=config_loader.loaded_path,
+            ):
+                core = YggdrasilCore(config)
+                core.setup_realms()
+                core.setup_watchers()
+                try:
+                    asyncio.run(core.start())
+                except KeyboardInterrupt:
+                    logger.warning(
+                        "[bold red blink] Shutting down Yggdrasil daemon... [/]"
+                    )
+                    try:
+                        asyncio.run(core.stop())
+                    except (asyncio.CancelledError, RuntimeError) as e:
+                        # CancelledError: Tasks were cancelled during shutdown (expected)
+                        # RuntimeError: Event loop issues during cleanup (can be ignored)
+                        logger.debug(f"Shutdown exception (expected): {e}")
+                    logger.info("Yggdrasil daemon stopped.")
+        except DaemonLockError as e:
+            logger.error(
+                "Another local Yggdrasil daemon is already running. "
+                "Lock path: %s. Existing metadata: %s",
+                e.lock_path,
+                e.existing_metadata,
+            )
+            raise SystemExit(1) from e
 
     elif args.mode == "run-doc":
+        core = YggdrasilCore(config)
+        core.setup_realms()
+
         # Validate mode selection
         if not args.plan_only and not args.run_once:
             # Default to plan-only with notice

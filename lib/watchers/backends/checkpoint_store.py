@@ -45,6 +45,12 @@ class CouchDBCheckpointStore(CheckpointStore):
 
     DOC_TYPE = "watcher_checkpoint"
     DOC_ID_PREFIX = "watcher_checkpoint:"
+    DEFAULT_SAVE_CONFLICT_RETRIES = 3
+    CONCURRENT_WRITER_WARNING = (
+        "Concurrent checkpoint writer detected; another Yggdrasil daemon may be "
+        "active against the same CouchDB environment. This deployment state is "
+        "unsupported."
+    )
 
     def __init__(
         self,
@@ -115,6 +121,29 @@ class CouchDBCheckpointStore(CheckpointStore):
             )
             return None
 
+    @staticmethod
+    def _is_conflict_error(exc: Exception) -> bool:
+        """
+        Return True when an exception represents a CouchDB update conflict.
+
+        Args:
+            exc: Exception raised while writing a checkpoint document.
+
+        Returns:
+            True if the exception carries a CouchDB/HTTP conflict status, False
+            otherwise.
+
+        The IBM SDK exposes the HTTP status as ``status_code`` on current
+        versions, while older call paths and some test doubles expose it as
+        ``code``. Checking the status attributes keeps conflict handling tied
+        to the CouchDB response instead of a particular exception class.
+        """
+        for attr_name in ("status_code", "code"):
+            status = getattr(exc, attr_name, None)
+            if status == 409:
+                return True
+        return False
+
     def save(self, checkpoint: Checkpoint) -> None:
         """
         Persist checkpoint.
@@ -123,53 +152,76 @@ class CouchDBCheckpointStore(CheckpointStore):
             checkpoint: The checkpoint to save. Will overwrite any existing
                         checkpoint with the same backend_key.
 
-        Raises:
-            Exception: If database write fails (logged but re-raised).
+        Non-409 database errors are logged and re-raised. 409 conflicts are
+        retried with a fresh _rev. If conflicts persist, the checkpoint is left
+        unsaved and the caller can continue with its in-memory position.
         """
         doc_id = self._make_doc_id(checkpoint.backend_key)
+        total_attempts = self.DEFAULT_SAVE_CONFLICT_RETRIES + 1
 
-        doc: dict[str, Any] = {
-            "_id": doc_id,
-            "type": self.DOC_TYPE,
-            "backend_key": checkpoint.backend_key,
-            "value": checkpoint.value,
-            "updated_at": checkpoint.updated_at,
-        }
+        for retry_count in range(total_attempts):
+            attempt = retry_count + 1
+            doc: dict[str, Any] = {
+                "_id": doc_id,
+                "type": self.DOC_TYPE,
+                "backend_key": checkpoint.backend_key,
+                "value": checkpoint.value,
+                "updated_at": checkpoint.updated_at,
+            }
 
-        try:
-            # Check if document exists to get _rev for update
-            existing = self.dbm.fetch_document_by_id(doc_id)
-            if existing and existing.get("value") == checkpoint.value:
+            try:
+                # Check if document exists to get _rev for update
+                existing = self.dbm.fetch_document_by_id(doc_id)
+                if existing and existing.get("value") == checkpoint.value:
+                    self._logger.debug(
+                        "Checkpoint unchanged for '%s'; skipping save",
+                        checkpoint.backend_key,
+                    )
+                    return
+                if existing and "_rev" in existing:
+                    doc["_rev"] = existing["_rev"]
+
+                # Use put_document for upsert semantics
+                # Cast to Any to satisfy Pylance (SDK expects Document | BinaryIO)
+                self.dbm.server.put_document(
+                    db=self.dbm.db_name,
+                    doc_id=doc_id,
+                    document=cast(Any, doc),
+                ).get_result()
+
                 self._logger.debug(
-                    "Checkpoint unchanged for '%s'; skipping save",
+                    "Saved checkpoint for '%s': value='%s'",
                     checkpoint.backend_key,
+                    checkpoint.value,
                 )
                 return
-            if existing and "_rev" in existing:
-                doc["_rev"] = existing["_rev"]
 
-            # Use put_document for upsert semantics
-            # Cast to Any to satisfy Pylance (SDK expects Document | BinaryIO)
-            self.dbm.server.put_document(
-                db=self.dbm.db_name,
-                doc_id=doc_id,
-                document=cast(Any, doc),
-            ).get_result()
+            except Exception as e:
+                if self._is_conflict_error(e):
+                    self._logger.warning(
+                        "%s backend_key='%s', attempt=%d/%d",
+                        self.CONCURRENT_WRITER_WARNING,
+                        checkpoint.backend_key,
+                        attempt,
+                        total_attempts,
+                    )
+                    continue
 
-            self._logger.debug(
-                "Saved checkpoint for '%s': value='%s'",
-                checkpoint.backend_key,
-                checkpoint.value,
-            )
+                self._logger.error(
+                    "Error saving checkpoint for '%s': %s",
+                    checkpoint.backend_key,
+                    e,
+                    exc_info=True,
+                )
+                raise
 
-        except Exception as e:
-            self._logger.error(
-                "Error saving checkpoint for '%s': %s",
-                checkpoint.backend_key,
-                e,
-                exc_info=True,
-            )
-            raise
+        self._logger.error(
+            "Failed to save checkpoint for '%s' after %d conflict retries; "
+            "continuing without persisting checkpoint value='%s'",
+            checkpoint.backend_key,
+            self.DEFAULT_SAVE_CONFLICT_RETRIES,
+            checkpoint.value,
+        )
 
 
 class InMemoryCheckpointStore(CheckpointStore):
