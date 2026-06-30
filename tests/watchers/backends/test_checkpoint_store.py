@@ -254,6 +254,107 @@ class TestCouchDBCheckpointStore(unittest.TestCase):
         doc = call_args.kwargs["document"]
         self.assertEqual(doc["value"], 12345)
 
+    def test_save_retries_on_conflict_and_logs_concurrent_writer_warning(self):
+        """Test save() retries 409 conflicts with a fresh _rev."""
+        mock_logger = MagicMock()
+        store = CouchDBCheckpointStore(db_manager=self.mock_dbm, logger=mock_logger)
+
+        self.mock_dbm.fetch_document_by_id.side_effect = [
+            {
+                "_id": "watcher_checkpoint:couchdb:projects",
+                "_rev": "1-oldrev",
+                "backend_key": "couchdb:projects",
+                "value": "old_value",
+            },
+            {
+                "_id": "watcher_checkpoint:couchdb:projects",
+                "_rev": "2-newrev",
+                "backend_key": "couchdb:projects",
+                "value": "old_value",
+            },
+        ]
+
+        mock_result = MagicMock()
+        mock_result.get_result.return_value = {"ok": True}
+        self.mock_dbm.server.put_document.side_effect = [
+            ApiException(code=409, message="conflict"),
+            mock_result,
+        ]
+
+        cp = Checkpoint(
+            backend_key="couchdb:projects",
+            value="new_value",
+            updated_at="2024-01-15T14:00:00Z",
+        )
+        store.save(cp)
+
+        self.assertEqual(self.mock_dbm.server.put_document.call_count, 2)
+        retry_doc = self.mock_dbm.server.put_document.call_args.kwargs["document"]
+        self.assertEqual(retry_doc["_rev"], "2-newrev")
+        self.assertIn(
+            CouchDBCheckpointStore.CONCURRENT_WRITER_WARNING,
+            mock_logger.warning.call_args.args,
+        )
+
+    def test_save_conflict_target_value_already_persisted_succeeds(self):
+        """Test a conflict is successful if refetch shows the desired value."""
+        store = CouchDBCheckpointStore(db_manager=self.mock_dbm)
+
+        self.mock_dbm.fetch_document_by_id.side_effect = [
+            {
+                "_id": "watcher_checkpoint:couchdb:projects",
+                "_rev": "1-oldrev",
+                "backend_key": "couchdb:projects",
+                "value": "old_value",
+            },
+            {
+                "_id": "watcher_checkpoint:couchdb:projects",
+                "_rev": "2-newrev",
+                "backend_key": "couchdb:projects",
+                "value": "new_value",
+            },
+        ]
+        self.mock_dbm.server.put_document.side_effect = ApiException(
+            code=409, message="conflict"
+        )
+
+        cp = Checkpoint(
+            backend_key="couchdb:projects",
+            value="new_value",
+            updated_at="2024-01-15T14:00:00Z",
+        )
+        store.save(cp)
+
+        self.mock_dbm.server.put_document.assert_called_once()
+
+    def test_save_conflict_retries_exhausted_does_not_raise(self):
+        """Test repeated 409 conflicts are non-fatal."""
+        mock_logger = MagicMock()
+        store = CouchDBCheckpointStore(db_manager=self.mock_dbm, logger=mock_logger)
+
+        self.mock_dbm.fetch_document_by_id.return_value = {
+            "_id": "watcher_checkpoint:couchdb:projects",
+            "_rev": "1-oldrev",
+            "backend_key": "couchdb:projects",
+            "value": "old_value",
+        }
+        self.mock_dbm.server.put_document.side_effect = ApiException(
+            code=409, message="conflict"
+        )
+
+        cp = Checkpoint(
+            backend_key="couchdb:projects",
+            value="new_value",
+            updated_at="2024-01-15T14:00:00Z",
+        )
+        store.save(cp)
+
+        self.assertEqual(
+            self.mock_dbm.server.put_document.call_count,
+            CouchDBCheckpointStore.DEFAULT_SAVE_CONFLICT_RETRIES + 1,
+        )
+        mock_logger.error.assert_called()
+
     def test_custom_db_manager(self):
         """Test CouchDBCheckpointStore can use custom db manager."""
         custom_dbm = MagicMock()
