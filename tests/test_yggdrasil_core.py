@@ -8,6 +8,10 @@ from lib.core_utils.event_types import EventType
 from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.core_utils.yggdrasil_core import YggdrasilCore
 from lib.watchers.abstract_watcher import YggdrasilEvent
+from lib.watchers.config_validation import (
+    WatcherConfigurationError,
+    WatcherConfigValidationIssue,
+)
 
 
 class TestYggdrasilCore(unittest.TestCase):
@@ -218,6 +222,31 @@ class TestYggdrasilCore(unittest.TestCase):
         mock_setup_plan.assert_called_once()
         expected_calls = [call("Setting up watchers..."), call("Watchers setup done.")]
         self.mock_logger.info.assert_has_calls(expected_calls, any_order=True)
+
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    def test_setup_watchers_validates_watcher_manager_before_plan_watcher(
+        self, mock_init_db, mock_setup_plan
+    ):
+        """WatcherManager config validation happens before PlanWatcher setup."""
+        core = YggdrasilCore(self.test_config, self.mock_logger)
+        core.watcher_manager = Mock()
+        issue = WatcherConfigValidationIssue(
+            kind="invalid_connection",
+            realms=("dmx_realm",),
+            backend="couchdb",
+            connection="demux_sample_info_db",
+            detail="connection is not configured",
+        )
+        core.watcher_manager.validate_configuration.side_effect = (
+            WatcherConfigurationError([issue])
+        )
+
+        with self.assertRaises(WatcherConfigurationError):
+            core.setup_watchers()
+
+        core.watcher_manager.validate_configuration.assert_called_once()
+        mock_setup_plan.assert_not_called()
 
     # =====================================================
     # HANDLER REGISTRATION AND SETUP TESTS
@@ -820,15 +849,24 @@ class TestYggdrasilCore(unittest.TestCase):
             core.engine = Mock()
             core.engine.run = Mock()
 
-            with patch(
-                "lib.core_utils.yggdrasil_core.is_plan_eligible", return_value=True
+            with (
+                patch(
+                    "lib.core_utils.yggdrasil_core.is_plan_eligible",
+                    return_value=True,
+                ),
+                patch(
+                    "lib.core_utils.yggdrasil_core.asyncio.to_thread",
+                    new_callable=AsyncMock,
+                ) as mock_to_thread,
             ):
                 # Act
                 await core._execute_approved_plan("pln_test_123")
 
                 # Assert
                 core.plan_dbm.fetch_plan.assert_called_once_with("pln_test_123")
-                core.engine.run.assert_called_once_with(mock_plan_model)
+                mock_to_thread.assert_awaited_once_with(
+                    core.engine.run, mock_plan_model
+                )
                 core.plan_dbm.update_executed_token.assert_called_once_with(
                     "pln_test_123", 1
                 )
@@ -894,10 +932,18 @@ class TestYggdrasilCore(unittest.TestCase):
             }
             core.plan_dbm.fetch_plan_as_model.return_value = Mock()
             core.engine = Mock()
-            core.engine.run = Mock(side_effect=Exception("Engine failed"))
+            core.engine.run = Mock()
 
-            with patch(
-                "lib.core_utils.yggdrasil_core.is_plan_eligible", return_value=True
+            with (
+                patch(
+                    "lib.core_utils.yggdrasil_core.is_plan_eligible",
+                    return_value=True,
+                ),
+                patch(
+                    "lib.core_utils.yggdrasil_core.asyncio.to_thread",
+                    new_callable=AsyncMock,
+                    side_effect=Exception("Engine failed"),
+                ),
             ):
                 # Act
                 await core._execute_approved_plan("pln_test_123")

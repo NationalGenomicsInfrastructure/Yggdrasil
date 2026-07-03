@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lib.core_utils.external_systems_resolver import resolve_connection
@@ -22,6 +23,7 @@ from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import CouchDBCheckpointStore
+from lib.watchers.config_validation import validate_watcher_config_wiring
 from lib.watchers.filter_eval import FilterResult, evaluate_filter, raw_event_to_dict
 
 if TYPE_CHECKING:
@@ -120,6 +122,7 @@ class WatcherManager:
         checkpoint_store: CheckpointStore | None = None,
         logger: logging.Logger | None = None,
         watcher_policy: dict[str, Any] | None = None,
+        config_path: str | Path | None = None,
     ):
         """
         Initialize the WatcherManager.
@@ -155,12 +158,14 @@ class WatcherManager:
                             ``observation_retry_delay_s`` (float, default 1.0).
                             If None or empty, hardcoded defaults are used.
                             Typically ``main_config.get("watchers", {})``.
+            config_path: Optional path to the loaded config file for diagnostics.
         """
         self.config = config
         self._on_event = on_event
         self.checkpoint_store = checkpoint_store or CouchDBCheckpointStore()
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._watcher_policy_override = watcher_policy
+        self.config_path = Path(config_path) if config_path is not None else None
 
         self._watcher_groups: dict[tuple[str, str], WatcherBackendGroup] = {}
         # BoundWatchSpecs grouped by backend group key
@@ -273,6 +278,18 @@ class WatcherManager:
         """Return a copy of the bound specs dict."""
         return {k: list(v) for k, v in self._bound_specs.items()}
 
+    def validate_configuration(self) -> None:
+        """Validate registered WatchSpecs against watcher/config wiring."""
+        bound_specs = [
+            bound_spec for specs in self._bound_specs.values() for bound_spec in specs
+        ]
+        validate_watcher_config_wiring(
+            bound_specs=bound_specs,
+            external_systems=self.config,
+            backend_registry=self._backend_registry,
+            config_path=self.config_path,
+        )
+
     # -------------------------------------------------------------------------
     # Configuration Resolution
     # -------------------------------------------------------------------------
@@ -377,10 +394,11 @@ class WatcherManager:
         group.backend_type.
 
         Raises:
-            ValueError: If backend type is unknown or mismatched
-            KeyError: If connection config is invalid
+            WatcherConfigurationError: If watcher/config wiring is invalid
+            KeyError: If connection config is invalid after validation
             RuntimeError: If env var resolution fails
         """
+        self.validate_configuration()
         policy = self._resolve_watcher_policy()
 
         for key, group in self._watcher_groups.items():

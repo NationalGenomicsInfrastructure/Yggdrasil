@@ -46,13 +46,21 @@ class YggdrasilCore:
     - (future) Semi-automatic (CLI) calls that bypass watchers
     """
 
-    def __init__(self, config: Mapping[str, Any], logger: logging.Logger | None = None):
+    def __init__(
+        self,
+        config: Mapping[str, Any],
+        logger: logging.Logger | None = None,
+        *,
+        config_path: str | Path | None = None,
+    ):
         """
         Args:
             config: A dictionary of global Yggdrasil settings.
             logger: If not provided, a default named logger is created.
+            config_path: Optional path to the loaded config file for diagnostics.
         """
         self.config = config
+        self.config_path = Path(config_path) if config_path is not None else None
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._running = False
 
@@ -513,6 +521,7 @@ class YggdrasilCore:
             on_event=self.handle_event,
             logger=self._logger,
             watcher_policy=self.config.get("watchers", {}),
+            config_path=self.config_path,
         )
 
         for bound_spec in bound_specs:
@@ -609,6 +618,8 @@ class YggdrasilCore:
         WatchSpecs in setup_realms() and handled by WatcherManager.
         """
         self._logger.info("Setting up watchers...")
+        if self.watcher_manager:
+            self.watcher_manager.validate_configuration()
         self._setup_plan_watcher()
         self._logger.info("Watchers setup done.")
 
