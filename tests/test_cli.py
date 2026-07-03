@@ -5,6 +5,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, call, patch
 
 from lib.core_utils.daemon_lock import DaemonLockError
+from lib.watchers.config_validation import (
+    WatcherConfigurationError,
+    WatcherConfigValidationIssue,
+)
 from yggdrasil.cli import main
 
 
@@ -173,6 +177,53 @@ class TestYggdrasilCLI(unittest.TestCase):
             self.assertEqual(context.exception.code, 1)
             mock_core_class.assert_not_called()
             mock_asyncio_run.assert_not_called()
+
+    def test_daemon_watcher_config_error_exits_cleanly(self):
+        """Watcher config errors are logged without starting the daemon."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        issue = WatcherConfigValidationIssue(
+            kind="invalid_connection",
+            realms=("dmx_realm",),
+            backend="couchdb",
+            connection="demux_sample_info_db",
+            detail="connection is not configured",
+        )
+        error = WatcherConfigurationError(
+            [issue],
+            config_path=Path("/tmp/main.json"),
+        )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("yggdrasil.cli.custom_logger") as mock_custom_logger,
+            patch("asyncio.run") as mock_asyncio_run,
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/main.json")
+            mock_acquire.return_value = MagicMock()
+            mock_logger = Mock()
+            mock_custom_logger.return_value = mock_logger
+            mock_core = Mock()
+            mock_core.setup_watchers.side_effect = error
+            mock_core_class.return_value = mock_core
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            self.assertIsNone(context.exception.__cause__)
+            mock_core_class.assert_called_once_with(
+                self.mock_config,
+                config_path=Path("/tmp/main.json"),
+            )
+            mock_core.setup_realms.assert_called_once()
+            mock_core.setup_watchers.assert_called_once()
+            mock_asyncio_run.assert_not_called()
+            mock_logger.error.assert_called_once_with("%s", error)
 
     def test_daemon_mode_with_dev_flag(self):
         """Test daemon mode with development flag."""

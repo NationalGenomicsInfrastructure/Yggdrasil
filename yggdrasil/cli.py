@@ -1,11 +1,13 @@
 import argparse
 import asyncio
+from pathlib import Path
 
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.daemon_lock import DaemonLock, DaemonLockError
 from lib.core_utils.logging_utils import configure_logging, custom_logger
 from lib.core_utils.ygg_session import YggSession
 from lib.core_utils.yggdrasil_core import YggdrasilCore
+from lib.watchers.config_validation import WatcherConfigurationError
 from yggdrasil.logo_utils import print_logo
 
 try:
@@ -135,6 +137,9 @@ Examples:
     # 4) Load config before dispatching to the selected mode
     config_loader = ConfigLoader()
     config = config_loader.load_config("main.json")
+    config_path = config_loader.loaded_path
+    if not isinstance(config_path, str | Path):
+        config_path = None
 
     if args.mode == "daemon":
         if getattr(args, "manual_submit", False):
@@ -143,9 +148,12 @@ Examples:
         try:
             with DaemonLock.acquire(
                 dev_mode=args.dev,
-                config_path=config_loader.loaded_path,
+                config_path=config_path,
             ):
-                core = YggdrasilCore(config)
+                if config_path is not None:
+                    core = YggdrasilCore(config, config_path=config_path)
+                else:
+                    core = YggdrasilCore(config)
                 core.setup_realms()
                 core.setup_watchers()
                 try:
@@ -161,6 +169,9 @@ Examples:
                         # RuntimeError: Event loop issues during cleanup (can be ignored)
                         logger.debug(f"Shutdown exception (expected): {e}")
                     logger.info("Yggdrasil daemon stopped.")
+        except WatcherConfigurationError as e:
+            logger.error("%s", e)
+            raise SystemExit(1) from None
         except DaemonLockError as e:
             logger.error(
                 "Another local Yggdrasil daemon is already running. "
@@ -171,7 +182,10 @@ Examples:
             raise SystemExit(1) from e
 
     elif args.mode == "run-doc":
-        core = YggdrasilCore(config)
+        if config_path is not None:
+            core = YggdrasilCore(config, config_path=config_path)
+        else:
+            core = YggdrasilCore(config)
         core.setup_realms()
 
         # Validate mode selection

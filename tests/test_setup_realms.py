@@ -384,6 +384,36 @@ class TestSetupRealms(unittest.TestCase):
             ("valid_target", "couchdb_handler"), core._handler_identity_registry
         )
 
+    @patch("importlib.metadata.entry_points", return_value=[])
+    @patch("lib.core_utils.yggdrasil_core.discover_realms")
+    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    def test_setup_realms_does_not_validate_watcher_connections(
+        self, _test_enabled, mock_discover, _mock_eps
+    ):
+        """setup_realms wires WatchSpecs but leaves daemon config validation to setup_watchers."""
+        spec = WatchSpec(
+            backend="couchdb",
+            connection="missing_daemon_only_db",
+            event_type=EventType.COUCHDB_DOC_CHANGED,
+            build_scope=lambda e: {"kind": "doc", "id": e.id},
+            build_payload=lambda e: {"doc": e.doc},
+            target_handlers=["couchdb_handler"],
+        )
+        desc = RealmDescriptor(
+            realm_id="daemon_only",
+            handler_classes=[_CouchDBDocHandler],
+            watchspecs=[spec],
+        )
+        mock_discover.return_value = [desc]
+
+        core = self._make_core()
+        core.setup_realms()
+
+        self.assertIsNotNone(core.watcher_manager)
+        self.assertIn(
+            ("daemon_only", "couchdb_handler"), core._handler_identity_registry
+        )
+
     # --- Legacy handler wrapping ---
 
     @patch("lib.core_utils.yggdrasil_core.discover_realms")

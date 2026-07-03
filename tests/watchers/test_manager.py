@@ -8,11 +8,16 @@ grouping/deduplication, and config resolution.
 import asyncio
 import unittest
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from lib.core_utils.event_types import EventType
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from lib.watchers.config_validation import WatcherConfigurationError
 from lib.watchers.manager import WatcherBackendGroup, WatcherManager
+from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 
 class MockWatcherBackend(WatcherBackend):
@@ -45,6 +50,24 @@ class MockWatcherBackend(WatcherBackend):
     async def stop(self) -> None:
         await super().stop()
         self._stopped = True
+
+
+def _make_bound_spec(
+    *,
+    realm_id: str = "test_realm",
+    backend: str = "couchdb",
+    connection: str = "projects_db",
+) -> BoundWatchSpec:
+    return BoundWatchSpec(
+        spec=WatchSpec(
+            backend=backend,
+            connection=connection,
+            event_type=EventType.COUCHDB_DOC_CHANGED,
+            build_scope=lambda event: {"kind": "doc", "id": event.id},
+            build_payload=lambda event: {"doc": event.doc},
+        ),
+        realm_id=realm_id,
+    )
 
 
 class TestWatcherBackendGroup(unittest.TestCase):
@@ -355,6 +378,71 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
         resolved = manager._resolve_connection_config("my_db")
         self.assertNotIn("start_seq", resolved)
         self.assertNotIn("poll_interval", resolved)
+
+
+class TestWatcherManagerConfigValidation(unittest.TestCase):
+    """Tests for WatcherManager watcher/config validation adapter."""
+
+    def setUp(self):
+        WatcherManager._backend_registry.clear()
+        WatcherManager.register_backend("couchdb", MockWatcherBackend)
+        self.config = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "https://couch.example.org",
+                    "auth": {},
+                }
+            },
+            "connections": {
+                "projects_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "projects"},
+                },
+            },
+        }
+        self.store = InMemoryCheckpointStore()
+
+    def tearDown(self):
+        WatcherManager._backend_registry.clear()
+
+    def test_validate_configuration_delegates_to_helper(self):
+        """validate_configuration passes registered BoundWatchSpecs to helper."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            config_path=Path("/tmp/main.json"),
+        )
+        bound_spec = _make_bound_spec()
+        manager.add_watchspec(bound_spec)
+
+        with patch(
+            "lib.watchers.manager.validate_watcher_config_wiring"
+        ) as mock_validate:
+            manager.validate_configuration()
+
+        mock_validate.assert_called_once()
+        kwargs = mock_validate.call_args.kwargs
+        self.assertEqual(kwargs["bound_specs"], [bound_spec])
+        self.assertEqual(kwargs["external_systems"], self.config)
+        self.assertEqual(kwargs["backend_registry"], WatcherManager._backend_registry)
+        self.assertEqual(kwargs["config_path"], Path("/tmp/main.json"))
+
+    def test_instantiate_watcher_backends_raises_watcher_config_error(self):
+        """Instantiation defensively validates registered WatchSpecs first."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+        )
+        manager.add_watchspec(_make_bound_spec(connection="missing_db"))
+
+        with self.assertRaises(WatcherConfigurationError) as ctx:
+            manager._instantiate_watcher_backends()
+
+        self.assertIn("missing_db", str(ctx.exception))
+        self.assertIsNone(
+            manager.get_watcher_groups()[("couchdb", "missing_db")].backend_instance
+        )
 
 
 class TestWatcherManagerBackendTypeValidation(unittest.TestCase):
