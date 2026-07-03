@@ -20,7 +20,16 @@ from lib.watchers.watchspec import BoundWatchSpec
 
 @dataclass(frozen=True)
 class WatcherConfigValidationIssue:
-    """One watcher/config wiring validation issue."""
+    """
+    One watcher/config wiring validation issue.
+
+    Attributes:
+        kind: Short machine-readable issue category (e.g. "unknown_backend").
+        realms: Realm IDs sharing this backend/connection pair.
+        backend: The watcher backend name declared in the WatchSpec.
+        connection: The external_systems connection name declared in the WatchSpec.
+        detail: Human-readable explanation of the problem.
+    """
 
     kind: str
     realms: tuple[str, ...]
@@ -29,7 +38,12 @@ class WatcherConfigValidationIssue:
     detail: str
 
     def format(self) -> str:
-        """Format this issue for operator-facing startup logs."""
+        """
+        Format this issue for operator-facing startup logs.
+
+        Returns:
+            A single-line human-readable description of the issue.
+        """
         if len(self.realms) == 1:
             realm_text = f"realm '{self.realms[0]}'"
         else:
@@ -42,7 +56,13 @@ class WatcherConfigValidationIssue:
 
 
 class WatcherConfigurationError(RuntimeError):
-    """Raised when daemon watcher config wiring is invalid."""
+    """
+    Raised when daemon watcher config wiring is invalid.
+
+    Attributes:
+        issues: The wiring issues that caused validation to fail.
+        config_path: Path to the config file being validated, if known.
+    """
 
     def __init__(
         self,
@@ -50,11 +70,19 @@ class WatcherConfigurationError(RuntimeError):
         *,
         config_path: str | Path | None = None,
     ) -> None:
+        """
+        Initialize the configuration error.
+
+        Args:
+            issues: The wiring issues that caused validation to fail.
+            config_path: Optional path to the loaded config file for diagnostics.
+        """
         self.issues = tuple(issues)
         self.config_path = Path(config_path) if config_path is not None else None
         super().__init__(self._format_message())
 
     def _format_message(self) -> str:
+        """Build the exception message from self.issues."""
         location = f" in {self.config_path}" if self.config_path else ""
         header = f"Watcher configuration error{location}"
 
@@ -151,6 +179,7 @@ def validate_watcher_config_wiring(
 def _group_specs(
     bound_specs: Iterable[BoundWatchSpec],
 ) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Group bound specs by (backend, connection), with sorted, deduped realm ids."""
     grouped: dict[tuple[str, str], list[str]] = {}
 
     for bound_spec in bound_specs:
@@ -166,11 +195,13 @@ def _group_specs(
 
 
 def _format_available(names: Iterable[str]) -> str:
+    """Return a comma-separated, sorted list of names, or "none" if empty."""
     formatted = ", ".join(sorted(str(name) for name in names))
     return formatted or "none"
 
 
 def _exception_message(exc: KeyError) -> str:
+    """Return the KeyError's message without its repr-style quoting."""
     if exc.args:
         return str(exc.args[0])
     return str(exc)

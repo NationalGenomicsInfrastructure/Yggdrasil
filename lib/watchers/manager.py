@@ -279,7 +279,12 @@ class WatcherManager:
         return {k: list(v) for k, v in self._bound_specs.items()}
 
     def validate_configuration(self) -> None:
-        """Validate registered WatchSpecs against watcher/config wiring."""
+        """
+        Validate registered WatchSpecs against watcher/config wiring.
+
+        Raises:
+            WatcherConfigurationError: If any wiring issue is found.
+        """
         bound_specs = [
             bound_spec for specs in self._bound_specs.values() for bound_spec in specs
         ]
