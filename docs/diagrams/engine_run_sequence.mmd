@@ -1,0 +1,42 @@
+sequenceDiagram
+  participant CLI as YggdrasilCore / run-doc
+  participant Eng as Engine
+  participant Fn as @step function
+  participant Ctx as StepContext
+  participant Emt as EventEmitter
+  participant WD as Work dir
+  participant Spool as Spool FS
+
+  CLI->>Eng: run(plan)
+  loop steps (topo order)
+    Eng->>WD: ensure step workdir
+    Eng->>Eng: fingerprint = fp(params + input digests)
+    Eng->>WD: read success.fingerprint
+    alt fingerprint unchanged
+      Eng->>Emt: emit(step.skipped, run_id)
+      Emt->>Spool: 0001_step_skipped.json
+      note right of Eng: skip execution
+    else run required
+      Eng->>Ctx: create (realm, plan_id, step_id, run_id, emitter, fingerprint)
+      Eng->>Fn: call(ctx, **params)
+      Ctx->>Emt: emit(step.started, params)
+      Emt->>Spool: 0001_step_started.json
+      Fn->>Ctx: ctx.add_artifact(...)
+      Ctx->>Emt: emit(step.artifact)
+      Emt->>Spool: 0002_step_artifact.json
+      alt step succeeds
+        Fn-->>Eng: StepResult(artifacts, metrics)
+        Ctx->>Emt: emit(step.succeeded)
+        Emt->>Spool: 0003_step_succeeded.json
+        Eng->>WD: write success.fingerprint
+      else step raises
+        Ctx->>Emt: emit(step.failed, kind=permanent|transient)
+        Emt->>Spool: 000N_step_failed.json
+        opt transient error
+          Eng->>Emt: emit(step.retry_unimplemented)
+          note right of Eng: retry not implemented yet —<br/>escalated to permanent
+        end
+        Eng--xCLI: raise (plan run stops, no fingerprint written)
+      end
+    end
+  end
