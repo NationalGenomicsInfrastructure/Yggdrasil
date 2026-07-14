@@ -1,10 +1,16 @@
+import logging
+import os
 import sys
 import unittest
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, call, patch
 
+from requests.exceptions import ConnectionError as RequestsConnectionError
+
 from lib.core_utils.daemon_lock import DaemonLockError
+from lib.core_utils.errors import ExternalSystemUnavailableError
+from lib.couchdb.couchdb_connection import CouchDBClientFactory
 from lib.watchers.config_validation import (
     WatcherConfigurationError,
     WatcherConfigValidationIssue,
@@ -223,6 +229,125 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
             mock_asyncio_run.assert_not_called()
+            mock_logger.error.assert_called_once_with("%s", error)
+
+    def test_daemon_external_system_unavailable_exits_cleanly(self):
+        """Unreachable external systems are logged without a traceback."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        error = ExternalSystemUnavailableError(
+            "CouchDB",
+            "http://localhost:5984",
+            hint="Check network/VPN connectivity.",
+        )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("yggdrasil.cli.custom_logger") as mock_custom_logger,
+            patch("asyncio.run") as mock_asyncio_run,
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/dev_main.json")
+            mock_acquire.return_value = MagicMock()
+            mock_logger = Mock()
+            mock_custom_logger.return_value = mock_logger
+            # Simulate connection failure during core construction
+            # (YggdrasilCore.__init__ -> OpsConsumerService -> OpsWriter)
+            mock_core_class.side_effect = error
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            self.assertIsNone(context.exception.__cause__)
+            mock_asyncio_run.assert_not_called()
+            # The actually-loaded config file is reported alongside the error
+            mock_logger.error.assert_called_once_with(
+                "%s (config file: %s)", error, Path("/tmp/dev_main.json")
+            )
+
+    def test_daemon_couchdb_failure_emits_one_error_record(self):
+        """The CLI is the sole ERROR-level reporter for connection failures."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        def fail_during_core_construction(*args, **kwargs):
+            return CouchDBClientFactory.create_client(
+                url="http://localhost:5984",
+                user_env="TEST_USER",
+                pass_env="TEST_PASS",
+            )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.configure_logging"),
+            patch(
+                "yggdrasil.cli.YggdrasilCore",
+                side_effect=fail_during_core_construction,
+            ),
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator"),
+            patch(
+                "lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1",
+                side_effect=RequestsConnectionError("Connection refused"),
+            ),
+            patch.dict(
+                os.environ,
+                {"TEST_USER": "admin", "TEST_PASS": "secret"},
+            ),
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/main.json")
+            mock_acquire.return_value = MagicMock()
+
+            with self.assertLogs(level="DEBUG") as captured:
+                with self.assertRaises(SystemExit) as context:
+                    main()
+
+        self.assertEqual(context.exception.code, 1)
+        error_records = [
+            record for record in captured.records if record.levelno == logging.ERROR
+        ]
+        self.assertEqual(len(error_records), 1)
+        self.assertEqual(error_records[0].name, "yggdrasil.cli")
+        self.assertIn("Cannot reach CouchDB", error_records[0].getMessage())
+
+        factory_records = [
+            record
+            for record in captured.records
+            if record.name == "lib.couchdb.couchdb_connection"
+            and "Failed to connect to CouchDB" in record.getMessage()
+        ]
+        self.assertEqual(len(factory_records), 1)
+        self.assertEqual(factory_records[0].levelno, logging.DEBUG)
+
+    def test_run_doc_external_system_unavailable_exits_cleanly(self):
+        """run-doc mode gets the same clean handling as daemon mode."""
+        sys.argv = ["yggdrasil", "run-doc", "DOC123"]
+
+        error = ExternalSystemUnavailableError(
+            "CouchDB",
+            "http://localhost:5984",
+        )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.custom_logger") as mock_custom_logger,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_logger = Mock()
+            mock_custom_logger.return_value = mock_logger
+            mock_core_class.side_effect = error
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            self.assertIsNone(context.exception.__cause__)
             mock_logger.error.assert_called_once_with("%s", error)
 
     def test_daemon_mode_with_dev_flag(self):
