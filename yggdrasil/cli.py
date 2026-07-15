@@ -4,6 +4,7 @@ from pathlib import Path
 
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.daemon_lock import DaemonLock, DaemonLockError
+from lib.core_utils.errors import ExternalSystemUnavailableError
 from lib.core_utils.logging_utils import configure_logging, custom_logger
 from lib.core_utils.ygg_session import YggSession
 from lib.core_utils.yggdrasil_core import YggdrasilCore
@@ -141,11 +142,11 @@ Examples:
     if not isinstance(config_path, str | Path):
         config_path = None
 
-    if args.mode == "daemon":
-        if getattr(args, "manual_submit", False):
-            parser.error("The --manual-submit flag is only valid in run-doc mode.")
+    try:
+        if args.mode == "daemon":
+            if getattr(args, "manual_submit", False):
+                parser.error("The --manual-submit flag is only valid in run-doc mode.")
 
-        try:
             with DaemonLock.acquire(
                 dev_mode=args.dev,
                 config_path=config_path,
@@ -169,53 +170,62 @@ Examples:
                         # RuntimeError: Event loop issues during cleanup (can be ignored)
                         logger.debug(f"Shutdown exception (expected): {e}")
                     logger.info("Yggdrasil daemon stopped.")
-        except WatcherConfigurationError as e:
-            logger.error("%s", e)
-            raise SystemExit(1) from None
-        except DaemonLockError as e:
-            logger.error(
-                "Another local Yggdrasil daemon is already running. "
-                "Lock path: %s. Existing metadata: %s",
-                e.lock_path,
-                e.existing_metadata,
-            )
-            raise SystemExit(1) from e
 
-    elif args.mode == "run-doc":
-        if config_path is not None:
-            core = YggdrasilCore(config, config_path=config_path)
+        elif args.mode == "run-doc":
+            if config_path is not None:
+                core = YggdrasilCore(config, config_path=config_path)
+            else:
+                core = YggdrasilCore(config)
+            core.setup_realms()
+
+            # Validate mode selection
+            if not args.plan_only and not args.run_once:
+                # Default to plan-only with notice
+                logger.info(
+                    "No mode specified; defaulting to --plan-only. "
+                    "Use --run-once to execute immediately."
+                )
+                args.plan_only = True
+
+            # Initialize session flags
+            YggSession.init_manual_submit(args.manual_submit)
+
+            # Dispatch to appropriate handler
+            if args.plan_only:
+                result = core.create_plan_from_doc(
+                    doc_id=args.doc_id,
+                    force_overwrite=args.force,
+                )
+                if not result:
+                    # Plan creation failed or aborted
+                    raise SystemExit(1)
+            else:  # --run-once
+                exit_code = core.run_once_with_watcher(
+                    doc_id=args.doc_id,
+                    force_overwrite=args.force,
+                    timeout_seconds=args.timeout,
+                )
+                raise SystemExit(exit_code)
+
+    except (WatcherConfigurationError, ExternalSystemUnavailableError) as e:
+        # Environment/config problems, not bugs: one concise operator-facing
+        # line; full traceback only at debug level (enabled by --dev).
+        # WatcherConfigurationError embeds its config path itself; for
+        # connectivity errors the resolved path is only known here.
+        if isinstance(e, ExternalSystemUnavailableError) and config_path is not None:
+            logger.error("%s (config file: %s)", e, config_path)
         else:
-            core = YggdrasilCore(config)
-        core.setup_realms()
-
-        # Validate mode selection
-        if not args.plan_only and not args.run_once:
-            # Default to plan-only with notice
-            logger.info(
-                "No mode specified; defaulting to --plan-only. "
-                "Use --run-once to execute immediately."
-            )
-            args.plan_only = True
-
-        # Initialize session flags
-        YggSession.init_manual_submit(args.manual_submit)
-
-        # Dispatch to appropriate handler
-        if args.plan_only:
-            result = core.create_plan_from_doc(
-                doc_id=args.doc_id,
-                force_overwrite=args.force,
-            )
-            if not result:
-                # Plan creation failed or aborted
-                raise SystemExit(1)
-        else:  # --run-once
-            exit_code = core.run_once_with_watcher(
-                doc_id=args.doc_id,
-                force_overwrite=args.force,
-                timeout_seconds=args.timeout,
-            )
-            raise SystemExit(exit_code)
+            logger.error("%s", e)
+        logger.debug("Startup failure detail:", exc_info=True)
+        raise SystemExit(1) from None
+    except DaemonLockError as e:
+        logger.error(
+            "Another local Yggdrasil daemon is already running. "
+            "Lock path: %s. Existing metadata: %s",
+            e.lock_path,
+            e.existing_metadata,
+        )
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

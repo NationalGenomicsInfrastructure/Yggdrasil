@@ -37,6 +37,7 @@ import lib.couchdb.couchdb_connection
 
 lib.couchdb.couchdb_connection.ApiException = MockApiException
 
+from lib.core_utils.errors import ExternalSystemUnavailableError
 from lib.couchdb.couchdb_connection import (
     CouchDBClientFactory,
     CouchDBHandler,
@@ -142,16 +143,19 @@ class TestCouchDBClientFactory(unittest.TestCase):
     @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     def test_create_client_connection_failure_raises(self, mock_auth, mock_cloudant):
-        """Test that connection failure raises ConnectionError."""
+        """Test that connection failure raises ExternalSystemUnavailableError."""
         mock_cloudant.side_effect = Exception("Connection refused")
 
-        with self.assertRaises(ConnectionError) as ctx:
+        with self.assertRaises(ExternalSystemUnavailableError) as ctx:
             CouchDBClientFactory.create_client(
                 url="http://localhost:5984",
                 user_env="TEST_USER",
                 pass_env="TEST_PASS",
             )
-        self.assertIn("Failed to connect", str(ctx.exception))
+        self.assertIn("Cannot reach CouchDB", str(ctx.exception))
+        self.assertEqual(ctx.exception.system, "CouchDB")
+        self.assertEqual(ctx.exception.endpoint, "http://localhost:5984")
+        self.assertIn("VPN", ctx.exception.hint or "")
 
     @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
     @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
@@ -240,14 +244,14 @@ class TestCouchDBHandler(unittest.TestCase):
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
     def test_init_raises_on_missing_db(self, mock_create_client):
-        """Test handler raises ConnectionError if database doesn't exist."""
+        """Test handler raises ExternalSystemUnavailableError if database doesn't exist."""
         mock_client = MagicMock()
         mock_create_client.return_value = mock_client
         mock_client.get_database_information.side_effect = MockApiException(
             "not found", code=404
         )
 
-        with self.assertRaises(ConnectionError) as ctx:
+        with self.assertRaises(ExternalSystemUnavailableError) as ctx:
             CouchDBHandler(
                 db_name="nonexistent_db",
                 url="http://localhost:5984",
@@ -255,6 +259,7 @@ class TestCouchDBHandler(unittest.TestCase):
                 pass_env="TEST_PASS",
             )
         self.assertIn("does not exist", str(ctx.exception))
+        self.assertIn("nonexistent_db", ctx.exception.hint or "")
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")

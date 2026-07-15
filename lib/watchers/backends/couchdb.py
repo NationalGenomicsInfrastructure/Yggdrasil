@@ -181,7 +181,8 @@ class CouchDBBackend(WatcherBackend):
             Configured CouchDBHandler instance for the target database.
 
         Raises:
-            ConnectionError: If database doesn't exist or connection fails
+            ExternalSystemUnavailableError: If database doesn't exist or
+                connection fails
             RuntimeError: If required env var is missing
             ValueError: If URL is missing scheme
         """

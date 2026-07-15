@@ -22,6 +22,7 @@ import requests
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant import CouchDbSessionAuthenticator, cloudant_v1
 
+from lib.core_utils.errors import ExternalSystemUnavailableError
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_models import ChangesBatch, ChangesRow
 
@@ -68,7 +69,7 @@ class CouchDBClientFactory:
         Raises:
             ValueError: If URL is missing scheme (http/https)
             RuntimeError: If required env var is missing
-            ConnectionError: If connection verification fails
+            ExternalSystemUnavailableError: If connection verification fails
         """
         # Validate URL has scheme
         if not url.startswith(("http://", "https://")):
@@ -127,8 +128,19 @@ class CouchDBClientFactory:
             return client
 
         except Exception as e:
-            logger.error("Failed to connect to CouchDB at %s: %s", url, e)
-            raise ConnectionError(f"Failed to connect to CouchDB at {url}") from e
+            # The CLI owns the operator-facing ERROR log for expected startup
+            # failures. Keep the boundary detail available in development mode
+            # without reporting the same failure twice in production.
+            logger.debug("Failed to connect to CouchDB at %s: %s", url, e)
+            raise ExternalSystemUnavailableError(
+                "CouchDB",
+                url,
+                hint=(
+                    "Check network/VPN connectivity and the "
+                    "'external_systems.endpoints.couchdb' endpoint in the "
+                    "Yggdrasil config."
+                ),
+            ) from e
 
 
 class CouchDBHandler:
@@ -169,7 +181,8 @@ class CouchDBHandler:
         Raises:
             ValueError: If URL is missing scheme
             RuntimeError: If required env var is missing
-            ConnectionError: If database doesn't exist or connection fails
+            ExternalSystemUnavailableError: If database doesn't exist or
+                connection fails
         """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.db_name = db_name
@@ -193,7 +206,11 @@ class CouchDBHandler:
             self.server.get_database_information(db=db_name)
         except ApiException as e:
             if e.status_code == 404:
-                raise ConnectionError(f"Database {db_name} does not exist") from e
+                raise ExternalSystemUnavailableError(
+                    "CouchDB",
+                    url,
+                    hint=f"Database '{db_name}' does not exist on the server.",
+                ) from e
             raise
 
     def fetch_document_by_id(self, doc_id: str) -> dict[str, Any] | None:
