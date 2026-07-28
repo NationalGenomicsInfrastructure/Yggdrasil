@@ -23,7 +23,7 @@ class TestDaemonLock(unittest.TestCase):
                 ) as lock:
                     metadata = json.loads(lock.lock_path.read_text())
 
-                self.assertEqual(lock.lock_path, Path(tmpdir) / "daemon.lock")
+                self.assertEqual(lock.lock_path, Path(tmpdir) / "daemon-dev.lock")
                 self.assertTrue(metadata["dev_mode"])
                 self.assertEqual(metadata["config_path"], "/tmp/dev_main.json")
                 self.assertIn("pid", metadata)
@@ -44,8 +44,25 @@ class TestDaemonLock(unittest.TestCase):
                     context.exception.lock_path, Path(tmpdir) / "daemon.lock"
                 )
                 self.assertIn("pid", context.exception.existing_metadata)
+                self.assertIn("prod mode", str(context.exception))
 
-    def test_dev_and_normal_use_same_local_lock_path(self):
+    def test_second_dev_acquire_fails_with_dev_mode_in_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                return_value=tmpdir,
+                create=True,
+            ):
+                with DaemonLock.acquire(dev_mode=True, config_path=None):
+                    with self.assertRaises(DaemonLockError) as context:
+                        DaemonLock.acquire(dev_mode=True, config_path=None)
+
+                self.assertEqual(
+                    context.exception.lock_path, Path(tmpdir) / "daemon-dev.lock"
+                )
+                self.assertIn("dev mode", str(context.exception))
+
+    def test_dev_and_prod_use_distinct_lock_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
                 "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
@@ -58,7 +75,23 @@ class TestDaemonLock(unittest.TestCase):
                 with DaemonLock.acquire(dev_mode=True, config_path=None) as dev:
                     dev_path = dev.lock_path
 
-                self.assertEqual(normal_path, dev_path)
+                self.assertEqual(normal_path, Path(tmpdir) / "daemon.lock")
+                self.assertEqual(dev_path, Path(tmpdir) / "daemon-dev.lock")
+                self.assertNotEqual(normal_path, dev_path)
+
+    def test_prod_and_dev_locks_held_concurrently(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                return_value=tmpdir,
+                create=True,
+            ):
+                # Both modes acquire and hold simultaneously — no error.
+                with DaemonLock.acquire(dev_mode=False, config_path=None):
+                    with DaemonLock.acquire(dev_mode=True, config_path=None) as dev:
+                        self.assertEqual(
+                            dev.lock_path, Path(tmpdir) / "daemon-dev.lock"
+                        )
 
     def test_fallback_runtime_dir_is_created_with_restrictive_permissions(self):
         with tempfile.TemporaryDirectory() as tmpdir:
