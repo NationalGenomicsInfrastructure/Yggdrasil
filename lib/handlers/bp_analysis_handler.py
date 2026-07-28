@@ -1,4 +1,10 @@
 # lib/handlers/project_handler.py
+#
+# DEAD CODE — not wired anywhere (no entry point or core path constructs
+# BestPracticeAnalysisHandler). Constructs YggdrasilDBManager directly,
+# bypassing the internal-storage bundle. Scheduled for removal with the
+# legacy project-realm / run-doc deprecation cleanup.
+# See docs/TECH_DEBT_LEDGER.md #15.
 
 import asyncio
 

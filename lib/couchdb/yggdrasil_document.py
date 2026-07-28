@@ -255,7 +255,7 @@ class YggdrasilDocument:
         return True
 
     # NOTE: This is not supposed to be used by Yggdrasil, but by the user interface
-    # NOTE: When a responsible reviews the sample, Genstat will update the QC status
+    # NOTE: A sample-review integration updates the QC status after review.
     def set_sample_qc_status(self, sample_id: str, qc_value: str) -> None:
         """
         Sets the QC status (Passed/Failed/Pending) for a sample.
