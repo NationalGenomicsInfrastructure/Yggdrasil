@@ -9,7 +9,10 @@ from unittest.mock import MagicMock, Mock, call, patch
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from lib.core_utils.daemon_lock import DaemonLockError
-from lib.core_utils.errors import ExternalSystemUnavailableError
+from lib.core_utils.errors import (
+    ExternalSystemUnavailableError,
+    InternalStorageConfigurationError,
+)
 from lib.couchdb.couchdb_connection import CouchDBClientFactory
 from lib.watchers.config_validation import (
     WatcherConfigurationError,
@@ -183,6 +186,26 @@ class TestYggdrasilCLI(unittest.TestCase):
             self.assertEqual(context.exception.code, 1)
             mock_core_class.assert_not_called()
             mock_asyncio_run.assert_not_called()
+
+    def test_invalid_internal_storage_config_exits_cleanly(self):
+        """Invalid internal_storage config exits 1 (no uncaught traceback)."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire"),
+            patch("asyncio.run"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core_class.side_effect = InternalStorageConfigurationError(
+                "internal_storage.backend='sqlite' is only supported in dev mode"
+            )
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
 
     def test_daemon_watcher_config_error_exits_cleanly(self):
         """Watcher config errors are logged without starting the daemon."""
