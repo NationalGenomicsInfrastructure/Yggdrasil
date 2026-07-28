@@ -105,9 +105,13 @@ class TestSetupRealms(unittest.TestCase):
         self.db_patcher = patch(
             "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
         )
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
+        self.mock_storage = self.storage_patcher.start().return_value
 
         ops_inst = Mock()
         ops_inst.start = Mock()
@@ -121,6 +125,7 @@ class TestSetupRealms(unittest.TestCase):
         self.ops_patcher.stop()
         self.engine_patcher.stop()
         self.db_patcher.stop()
+        self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
     def _make_core(self) -> YggdrasilCore:
@@ -472,9 +477,13 @@ class TestHandleEventRouting(unittest.TestCase):
         self.db_patcher = patch(
             "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
         )
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
+        self.mock_storage = self.storage_patcher.start().return_value
 
         ops_inst = Mock()
         ops_inst.start = Mock()
@@ -488,6 +497,7 @@ class TestHandleEventRouting(unittest.TestCase):
         self.ops_patcher.stop()
         self.engine_patcher.stop()
         self.db_patcher.stop()
+        self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
     def _make_core_with_handlers(self):
@@ -661,9 +671,13 @@ class TestGetRealmHelpers(unittest.TestCase):
         self.db_patcher = patch(
             "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
         )
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
+        self.mock_storage = self.storage_patcher.start().return_value
 
         ops_inst = Mock()
         ops_inst.start = Mock()
@@ -674,6 +688,7 @@ class TestGetRealmHelpers(unittest.TestCase):
         self.ops_patcher.stop()
         self.engine_patcher.stop()
         self.db_patcher.stop()
+        self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
     def test_get_realm_handler_ids(self):

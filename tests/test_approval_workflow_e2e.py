@@ -8,7 +8,7 @@ All tests use mocked components (no live CouchDB required).
 
 Test Scenarios:
 1. Auto-Run Plan: Handler → auto_run=True → immediate execution
-2. Approval Required: Handler → auto_run=False → Genstat approval → execution
+2. Approval Required: Handler → auto_run=False → external approval → execution
 3. Manual Re-Run: executed plan → increment run_token → re-execution
 4. Startup Recovery: restart → recover pending approved plans
 """
@@ -20,6 +20,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from lib.core_utils.singleton_decorator import SingletonMeta
+from lib.watchers.backends.base import RawWatchEvent
 
 
 class TestAutoRunPlanE2E(unittest.TestCase):
@@ -52,11 +53,12 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         shutil.rmtree(self.work_root, ignore_errors=True)
         shutil.rmtree(self.spool_dir, ignore_errors=True)
 
+    @patch("lib.core_utils.yggdrasil_core.build_internal_storage")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     @patch("lib.core_utils.yggdrasil_core.Engine")
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
     def test_auto_run_plan_executes_immediately(
-        self, mock_ops, mock_engine_cls, mock_init_db
+        self, mock_ops, mock_engine_cls, mock_init_db, mock_build_storage
     ):
         """Test that auto_run=True plans execute without human approval."""
         from yggdrasil.flow.model import Plan, StepSpec
@@ -125,7 +127,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
     2. Core persists with status='draft'
     3. PlanWatcher detects plan; filters (status != 'approved')
     4. Plan remains in draft
-    5. Genstat approves: updates status='approved'
+    5. An external actor approves: updates status='approved'
     6. PlanWatcher detects status change
     7. Plan executed
 
@@ -167,7 +169,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
         """Test that approving a plan makes it eligible."""
         from lib.core_utils.plan_eligibility import is_plan_eligible
 
-        # Plan approved by Genstat
+        # Plan approved by an external actor
         approved_plan_doc = {
             "_id": "pln_approval_001",
             "status": "approved",  # Now approved
@@ -215,7 +217,15 @@ class TestApprovalRequiredE2E(unittest.TestCase):
             },
         }
 
-        asyncio.run(watcher._evaluate_change(draft_change))
+        asyncio.run(
+            watcher._evaluate_change(
+                RawWatchEvent(
+                    id=draft_change["id"],
+                    doc=draft_change["doc"],
+                    seq=draft_change["seq"],
+                )
+            )
+        )
 
         # No events should be emitted for draft plans
         self.assertEqual(len(events_emitted), 0)
@@ -256,7 +266,15 @@ class TestApprovalRequiredE2E(unittest.TestCase):
             },
         }
 
-        asyncio.run(watcher._evaluate_change(approved_change))
+        asyncio.run(
+            watcher._evaluate_change(
+                RawWatchEvent(
+                    id=approved_change["id"],
+                    doc=approved_change["doc"],
+                    seq=approved_change["seq"],
+                )
+            )
+        )
 
         # Should emit one event
         self.assertEqual(len(events_emitted), 1)
@@ -269,7 +287,7 @@ class TestManualReRunE2E(unittest.TestCase):
 
     Flow:
     1. Plan executed (executed_run_token=1, run_token=1)
-    2. Genstat re-run: increments run_token=2
+    2. External re-run request: increments run_token=2
     3. PlanWatcher detects run_token > executed_run_token
     4. Plan executes again
     5. executed_run_token updated to 2
@@ -294,11 +312,11 @@ class TestManualReRunE2E(unittest.TestCase):
         """Test that incrementing run_token makes plan eligible again."""
         from lib.core_utils.plan_eligibility import is_plan_eligible
 
-        # After Genstat increments run_token
+        # After an external actor increments run_token
         rerun_plan = {
             "_id": "pln_rerun_001",
             "status": "approved",
-            "run_token": 2,  # Incremented by Genstat
+            "run_token": 2,  # Incremented by an external actor
             "executed_run_token": 1,  # Still at previous value
             "run_requested_at": "2026-01-16T14:00:00Z",
             "run_requested_by": "user@example.com",
