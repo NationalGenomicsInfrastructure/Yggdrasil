@@ -1,8 +1,15 @@
 """Local process lock for Yggdrasil daemon invocations.
 
-The lock prevents two daemon processes from running in the same local runtime.
-It is implemented with an advisory ``fcntl.flock`` held on an open lock file
-for the lifetime of the daemon process.
+One lock exists **per effective mode**: a production daemon holds
+``daemon.lock`` and a dev daemon (``--dev``) holds ``daemon-dev.lock``, so
+the two may run side by side on one machine while duplicate daemons in the
+same mode are rejected. The lock is implemented with an advisory
+``fcntl.flock`` held on an open lock file for the lifetime of the daemon
+process.
+
+The lock does not coordinate across OS users, containers, or hosts, and is
+intentionally not database-aware: pointing a prod and a dev daemon at the
+same CouchDB environment remains unsupported.
 """
 
 from __future__ import annotations
@@ -32,7 +39,13 @@ class DaemonLockError(RuntimeError):
             holding the lock.
     """
 
-    def __init__(self, lock_path: Path, existing_metadata: dict[str, Any] | None):
+    def __init__(
+        self,
+        lock_path: Path,
+        existing_metadata: dict[str, Any] | None,
+        *,
+        dev_mode: bool | None = None,
+    ):
         """
         Initialize the lock acquisition error.
 
@@ -40,10 +53,20 @@ class DaemonLockError(RuntimeError):
             lock_path: Path to the lock file that is already locked.
             existing_metadata: Metadata from the existing lock file, if it
                 could be parsed as JSON.
+            dev_mode: Effective mode of the failed acquisition, if known;
+                names the mode in the error message.
         """
         self.lock_path = lock_path
         self.existing_metadata = existing_metadata or {}
-        super().__init__(f"Yggdrasil daemon lock is already held: {lock_path}")
+        self.dev_mode = dev_mode
+        if dev_mode is None:
+            message = f"Yggdrasil daemon lock is already held: {lock_path}"
+        else:
+            mode = "dev" if dev_mode else "prod"
+            message = (
+                f"Yggdrasil daemon lock ({mode} mode) is already held: {lock_path}"
+            )
+        super().__init__(message)
 
 
 @dataclass
@@ -64,6 +87,12 @@ class DaemonLock:
     _file: Any
 
     LOCK_FILENAME = "daemon.lock"
+    DEV_LOCK_FILENAME = "daemon-dev.lock"
+
+    @classmethod
+    def _lock_filename(cls, dev_mode: bool) -> str:
+        """Return the per-mode lock filename."""
+        return cls.DEV_LOCK_FILENAME if dev_mode else cls.LOCK_FILENAME
 
     @classmethod
     def acquire(
@@ -80,8 +109,9 @@ class DaemonLock:
         the current process to the lock file and returns a held ``DaemonLock``.
 
         Args:
-            dev_mode: Whether the daemon was started with ``--dev``. Stored in
-                lock metadata for diagnostics only.
+            dev_mode: Whether the daemon was started with ``--dev``. Selects
+                the per-mode lock file (``daemon.lock`` vs
+                ``daemon-dev.lock``) and is stored in lock metadata.
             config_path: Resolved configuration path, if known. Stored in lock
                 metadata for diagnostics only.
 
@@ -98,7 +128,7 @@ class DaemonLock:
         """
         lock_dir = cls._runtime_dir()
         cls._prepare_runtime_dir(lock_dir)
-        lock_path = lock_dir / cls.LOCK_FILENAME
+        lock_path = lock_dir / cls._lock_filename(dev_mode)
 
         lock_file = lock_path.open("a+", encoding="utf-8")
         try:
@@ -109,7 +139,9 @@ class DaemonLock:
                 raise
             existing_metadata = cls._read_metadata(lock_file)
             lock_file.close()
-            raise DaemonLockError(lock_path, existing_metadata) from exc
+            raise DaemonLockError(
+                lock_path, existing_metadata, dev_mode=dev_mode
+            ) from exc
 
         metadata = cls._metadata(dev_mode=dev_mode, config_path=config_path)
         lock_file.seek(0)

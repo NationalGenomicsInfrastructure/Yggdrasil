@@ -102,14 +102,19 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 
 **Explanation:** `auto_run=False` in the `PlanDraft` sets initial status to `"draft"`. The plan waits for manual approval.
 
-**Resolution:** Approve manually (no UI is provided for this action yet, it has to be done directly into the database or implement your own solution)
+**Resolution:** Yggdrasil does not currently ship an approval UI or command.
+Use an operator-provided integration with the configured plan store to set
+`status="approved"`. For SQLite, that integration must also advance the
+plan change sequence transactionally; editing only the stored JSON will
+not notify PlanWatcher.
 
 ### Plan is `status="approved"` but Engine never runs it
 
 **Checks:**
 1. Confirm PlanWatcher is started: `grep "PlanWatcher" yggdrasil.log`
 2. Check `run_token > executed_run_token` in the plan document
-3. Verify `yggdrasil_plans` database exists and is accessible
+3. Verify the configured internal plan store (`yggdrasil_plans` database) exists and is accessible: the CouchDB
+   plans connection in production, or the SQLite file in dev mode.
 
 ---
 
@@ -193,12 +198,68 @@ def my_step(ctx: StepContext, **params) -> StepResult:
 
 ---
 
+## Daemon lock
+
+### "Another local Yggdrasil daemon is already running in … mode"
+
+One daemon may run **per mode** per user per host: `daemon.lock` (prod)
+and `daemon-dev.lock` (dev) in the user runtime directory. The error
+message and the lock metadata (pid, hostname, user, started_at) identify
+the holder.
+
+**Resolution:**
+
+1. Identify the holding process from the metadata in the error message.
+2. Stop it, or run your daemon in the other mode / on another machine.
+3. **Never delete a lock file while a daemon is running** — the advisory
+   `flock` dies with the process, and deleting a *held* file lets a second
+   daemon start. Stale lock files from exited daemons are harmless and can
+   stay.
+
+**Limits:** the lock does not coordinate across OS users, containers, or
+hosts, and it is intentionally not database-aware — it cannot detect two
+daemons sharing a CouchDB environment (the documentation and checkpoint
+conflict warnings are the safeguard there).
+
+---
+
+## Internal storage (dev SQLite)
+
+### Daemon refuses to start: invalid `internal_storage` configuration
+
+Explicit configuration errors are fatal by design; Yggdrasil never falls
+back to another storage backend. The message names the offending role,
+connection, or path.
+
+### "not an Yggdrasil internal-storage database" / schema version errors
+
+The SQLite file failed lifecycle validation (unrelated file, malformed
+content, or unsupported schema version). The dev database is disposable:
+move the file aside — or delete it — and restart to create fresh state.
+Never point the config at a file you care about; Yggdrasil refuses
+symlinks and foreign-owned files.
+
+### Approved a plan but the dev daemon does nothing
+
+Check that the stored plan has `status="approved"` and
+`run_token > executed_run_token`. Also confirm that PlanWatcher is
+running and that the approval was recorded as an observable change by
+the configured backend.
+
+A daemon with no checkpoint can miss a plan approved before it started.
+After confirming PlanWatcher is running, the operator-provided storage
+integration can re-emit an observable change for that plan. Do this only
+when the plan is definitely not already executing, because re-emitting
+an in-flight plan may schedule it twice.
+
+---
+
 ## Event spool
 
 ### No event files appearing in `$YGG_EVENT_SPOOL`
 
 **Checks:**
-1. Confirm `YGG_EVENT_SPOOL` is set (defaults to `/tmp/ygg_events`)
+1. Confirm `YGG_EVENT_SPOOL` is set (defaults to `/tmp/ygg_events`, or `/tmp/ygg_events_dev` under `--dev`)
 2. Verify the directory is writable: `ls -la $YGG_EVENT_SPOOL`
 
 ### Finding events for a specific plan

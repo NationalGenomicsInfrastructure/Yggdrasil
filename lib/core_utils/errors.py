@@ -11,6 +11,19 @@ clients, watcher backends) and handled centrally (the CLI).
 from __future__ import annotations
 
 
+class InternalStorageConfigurationError(RuntimeError):
+    """The ``internal_storage`` configuration block is invalid.
+
+    Raised during startup configuration resolution (``lib/storage/config.py``)
+    when an explicit ``internal_storage`` block references unknown connections,
+    a non-CouchDB endpoint, requests SQLite outside dev mode, or supplies an
+    invalid SQLite path. Explicit configuration errors are fatal by design —
+    Yggdrasil never silently falls back to another storage backend. The CLI
+    catches this at startup to print a concise operator message instead of a
+    full traceback.
+    """
+
+
 class ExternalSystemUnavailableError(ConnectionError):
     """An external system required by Yggdrasil could not be reached.
 

@@ -11,8 +11,8 @@ Two key files:
 
 | File | Purpose |
 |---|---|
-| `main.json` | Global settings: logging, external systems, polling intervals |
-| `dev_main.json` | Dev-mode overrides (merged on top of `main.json` when `--dev` is passed) |
+| `main.json` | Global settings: logging, internal storage, external systems, polling intervals |
+| `dev_main.json` | Dev-mode configuration. When `--dev` is passed, it **replaces `main.json`**. Any config file with a `dev_` twin is swapped the same way. |
 
 ---
 
@@ -134,16 +134,98 @@ Sensitive credentials should be set as environment variables, not stored in conf
 |---|---|
 | `YGG_COUCH_USER` | CouchDB username |
 | `YGG_COUCH_PASS` | CouchDB password |
-| `YGG_WORK_ROOT` | Central workspace root for all plan and step working directories (default: `/tmp/ygg_work`). Set by the operator before starting the daemon. |
-| `YGG_EVENT_SPOOL` | Root directory where `FileSpoolEmitter` writes structured event JSON files (default: `/tmp/ygg_events`). Set by the operator before starting the daemon. |
-| `OPS_DB` | Operations database name for event consumers (default: `yggdrasil_ops`) |
+| `YGG_WORK_ROOT` | Central workspace root for all plan and step working directories (default: `/tmp/ygg_work`; `/tmp/ygg_work_dev` under `--dev`). Set by the operator before starting the daemon. Precedence: `main.json → work_root` → `$YGG_WORK_ROOT` → mode default. |
+| `YGG_EVENT_SPOOL` | Root directory where `FileSpoolEmitter` writes structured event JSON files (default: `/tmp/ygg_events`; `/tmp/ygg_events_dev` under `--dev`). Set by the operator before starting the daemon. |
+| `OPS_DB` | **Deprecated.** Operations database name (default: `yggdrasil_ops`). Honored only when `main.json` has no `internal_storage` block; explicit configuration ignores it. |
 
-`YGG_WORK_ROOT` and `YGG_EVENT_SPOOL` are resolved once at daemon startup and apply to all realms. Realm code does not read these variables — step functions receive the resolved paths via `ctx.workdir` and `ctx.scope_dir`, and emit events via `ctx.emitter`.
+`YGG_WORK_ROOT` and `YGG_EVENT_SPOOL` are resolved once at daemon startup and apply to all realms. Realm code does not read these variables — step functions receive the resolved paths via `ctx.workdir` and `ctx.scope_dir`, and emit events via `ctx.emitter`. Explicit values are exact overrides and are never rewritten; only the *defaults* differ by mode so that a *prod* and a *dev* daemon on the same machine do not share caches or spools.
+
+---
+
+## Internal storage
+
+Yggdrasil Core keeps its *internal* state — plan documents, watcher
+checkpoints, and operations snapshots — behind a backend-neutral storage
+boundary configured by the top-level `internal_storage` block.
+
+**Production (CouchDB, explicit).** Each logical database role, names one
+`external_systems` connection; the URL, credentials env-var names, and
+database name all come from the referenced connection — never duplicated
+here:
+
+```json
+"internal_storage": {
+    "backend": "couchdb",
+    "couchdb": {
+        "connections": {
+            "coordination": "yggdrasil_db",
+            "plans": "yggdrasil_plans_db",
+            "operations": "yggdrasil_ops_db"
+        }
+    }
+}
+```
+
+**Dev and testing (SQLite, explicit).** Accepted only in dev mode
+(`--dev`). All internal state lives in one disposable local file; deleting
+it yields fresh state at the next startup:
+
+```json
+"internal_storage": {
+    "backend": "sqlite",
+    "sqlite": { "path": null }
+}
+```
+
+`"path": null` selects `$YGG_HOME/internal_state/dev/yggdrasil.sqlite3`
+(or the bundled workspace when `YGG_HOME` is unset); an explicit path must
+be absolute. Invalid configuration is fatal — Yggdrasil never silently
+falls back to another backend. Network filesystems are unsupported for the
+SQLite file (WAL requires reliable host-local storage).
+
+If the block is absent, the legacy implicit CouchDB construction applies
+(deprecated; a warning is logged, and explicit configuration will be
+required in a future release).
+
+**Manual plan approval.** Plans created with `auto_run=False` remain in
+`status="draft"` until an external actor approves them. Yggdrasil does not
+currently ship an approval UI or command. Operators who need manual
+approval must provide their own integration with the configured plan
+store.
+
+Approval changes `status` to `"approved"`. Requesting another execution
+increments `run_token`; a plan is eligible only while `run_token` is
+greater than `executed_run_token`. A SQLite integration must also advance
+the plan change sequence transactionally so PlanWatcher observes the
+update. Editing only the stored JSON is insufficient, and SQLite tooling
+must be kept compatible with Yggdrasil's internal schema.
+
+External data sources are unaffected by the storage backend. Realm watch
+sources and realm `data_access` providers still resolve through
+`external_systems`. A dev SQLite daemon therefore still needs the external
+systems required by its enabled realms to be reachable.
+
+### Running prod and dev side by side
+
+One daemon may run **per mode** per user per host (`daemon.lock` /
+`daemon-dev.lock`). For safe coexistence on one machine:
+
+- **Internal state**: point dev at SQLite (above), or at a *different*
+  CouchDB server. Database names (`yggdrasil`,
+  `yggdrasil_plans`, `yggdrasil_ops`) are fixed, so distinct endpoints —
+  not renamed connections — are the reliable boundary. Yggdrasil does not
+  detect a shared database; running two daemons against the same CouchDB
+  environment is unsupported.
+- **Work root and event spool**: isolated automatically via the
+  `_dev`-suffixed mode defaults. If you set `YGG_WORK_ROOT` /
+  `YGG_EVENT_SPOOL` explicitly, use distinct values per daemon.
+- **Logs**: the shared log directory is safe — filenames carry a mode
+  marker and the PID.
 
 ---
 
 ## Logging
 
-- CLI `--dev` enables DEBUG logging and uses the dev config (if present).
+- CLI `--dev` enables DEBUG logging and loads `dev_<name>.json` in place of `<name>.json` (if present).
 - Default is INFO.
-- Logs are written to the directory configured as `yggdrasil.log_dir` in `main.json` (one file per run), and optionally to console.
+- Logs are written to the directory configured as `yggdrasil.log_dir` in `main.json` (one file per process: `yggdrasil_<timestamp>_<pid>.log`, with a `dev_` marker in dev mode), and optionally to console.

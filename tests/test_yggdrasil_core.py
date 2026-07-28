@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import unittest
-from unittest.mock import AsyncMock, Mock, call, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 from lib.core_utils.event_types import EventType
 from lib.core_utils.singleton_decorator import SingletonMeta
@@ -54,6 +54,14 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_ops_service_class = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
 
+        # Patch internal-storage bundle construction (no real backends)
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
+        self.mock_build_storage = self.storage_patcher.start()
+        self.mock_storage = MagicMock()
+        self.mock_build_storage.return_value = self.mock_storage
+
         # Configure the OpsConsumerService mock instance with async methods
         self.mock_ops_service_instance = Mock()
         self.mock_ops_service_instance.start = Mock()
@@ -86,6 +94,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Stop patchers
         self.ops_patcher.stop()
         self.engine_patcher.stop()
+        self.storage_patcher.stop()
         # Clear singleton state after each test
         SingletonMeta._instances.clear()
 
@@ -139,31 +148,24 @@ class TestYggdrasilCore(unittest.TestCase):
             self.assertEqual(core2.config, self.test_config)
             self.assertEqual(core2._logger, self.mock_logger)
 
-    @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDBManager")
     @patch("lib.core_utils.yggdrasil_core.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.PlanDBManager")
-    def test_init_db_managers_success(
-        self, mock_plan_dbm_class, mock_pdm_class, mock_ydm_class
-    ):
-        """Test successful database manager initialization."""
+    def test_init_db_managers_success(self, mock_pdm_class):
+        """Plan store comes from the bundle; ProjectDBManager stays lazy."""
         # Arrange
         mock_pdm_instance = Mock()
-        mock_ydm_instance = Mock()
-        mock_plan_dbm_instance = Mock()
         mock_pdm_class.return_value = mock_pdm_instance
-        mock_ydm_class.return_value = mock_ydm_instance
-        mock_plan_dbm_class.return_value = mock_plan_dbm_instance
 
         # Act
         core = YggdrasilCore(self.test_config, self.mock_logger)
 
-        # Assert
-        self.assertEqual(core.pdm, mock_pdm_instance)
-        self.assertEqual(core.ydm, mock_ydm_instance)
-        self.assertEqual(core.plan_dbm, mock_plan_dbm_instance)
+        # Assert: plan store wired from the internal-storage bundle
+        self.assertIs(core.plan_dbm, self.mock_storage.plans)
+
+        # ProjectDBManager is NOT constructed during initialization...
+        mock_pdm_class.assert_not_called()
+        # ...only on first access (run-doc paths)
+        self.assertIs(core.pdm, mock_pdm_instance)
         mock_pdm_class.assert_called_once()
-        mock_ydm_class.assert_called_once()
-        mock_plan_dbm_class.assert_called_once()
 
         expected_calls = [
             call("Initializing DB managers..."),
@@ -172,15 +174,10 @@ class TestYggdrasilCore(unittest.TestCase):
         ]
         self.mock_logger.info.assert_has_calls(expected_calls)
 
-    @patch("lib.core_utils.yggdrasil_core.PlanDBManager")
-    @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDBManager")
-    @patch("lib.core_utils.yggdrasil_core.ProjectDBManager")
-    def test_init_db_managers_exception(
-        self, mock_pdm_class, mock_ydm_class, mock_plan_dbm_class
-    ):
-        """Test database manager initialization with exception."""
-        # Arrange - make ProjectDBManager raise exception
-        mock_pdm_class.side_effect = Exception("DB connection failed")
+    def test_init_storage_exception_propagates(self):
+        """Internal-storage construction failure aborts initialization."""
+        # Arrange - make bundle construction raise
+        self.mock_build_storage.side_effect = Exception("DB connection failed")
 
         # Act & Assert
         with self.assertRaises(Exception) as context:

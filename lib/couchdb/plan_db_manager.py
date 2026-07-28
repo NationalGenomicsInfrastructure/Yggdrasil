@@ -9,8 +9,6 @@ separate from operational data (yggdrasil_ops) and project data (projects).
 """
 
 import logging
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 
 from ibm_cloud_sdk_core.api_exception import ApiException
@@ -19,46 +17,26 @@ from ibmcloudant.cloudant_v1 import Document
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
+from lib.storage.plan_documents import (
+    VALID_EXECUTION_AUTHORITIES,
+    build_plan_document,
+    json_safe,
+    plan_model_from_document,
+    plan_summary_from_document,
+    utc_now_iso,
+    validate_execution_authority,
+)
 from yggdrasil.flow.model import Plan
 
 logger = custom_logger(__name__)
 
-# Valid values for execution_authority field
-VALID_EXECUTION_AUTHORITIES = frozenset({"daemon", "run_once"})
+__all__ = ["PlanDBManager", "VALID_EXECUTION_AUTHORITIES"]
 
-
-def _json_safe(value: Any) -> Any:
-    """Recursively coerce plan documents into JSON-serializable structures.
-
-    CouchDB client calls ``json.dumps`` under the hood. Realm planners can
-    sometimes return pathlib.Path (or other non-JSON types) inside params or
-    preview payloads. This helper walks the structure and converts:
-    - Path -> str
-    - set/tuple -> list
-    - dict/list elements recursively
-    """
-
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(v) for v in value]
-    return value
-
-
-def _validate_execution_authority(authority: str) -> None:
-    """Raise ValueError if execution_authority is invalid."""
-    if authority not in VALID_EXECUTION_AUTHORITIES:
-        raise ValueError(
-            f"Invalid execution_authority: {authority!r}. "
-            f"Must be one of: {sorted(VALID_EXECUTION_AUTHORITIES)}"
-        )
-
-
-def _utc_now_iso() -> str:
-    """Return current UTC timestamp in ISO-8601 format."""
-    return datetime.now(UTC).isoformat(timespec="seconds")
+# Backwards-compatible aliases; canonical definitions live in
+# lib/storage/plan_documents.py, shared with the SQLite backend.
+_json_safe = json_safe
+_validate_execution_authority = validate_execution_authority
+_utc_now_iso = utc_now_iso
 
 
 class PlanDBManager(CouchDBHandler):
@@ -94,9 +72,10 @@ class PlanDBManager(CouchDBHandler):
         url: str | None = None,
         user_env: str | None = None,
         pass_env: str | None = None,
+        db_name: str = "yggdrasil_plans",
         logger: logging.Logger | None = None,
     ) -> None:
-        """Initialize connection to yggdrasil_plans database."""
+        """Initialize connection to the plans database."""
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         params = resolve_couchdb_params(
             endpoint=endpoint,
@@ -106,7 +85,7 @@ class PlanDBManager(CouchDBHandler):
         )
 
         super().__init__(
-            "yggdrasil_plans",
+            db_name,
             url=params.url,
             user_env=params.user_env,
             pass_env=params.pass_env,
@@ -156,8 +135,8 @@ class PlanDBManager(CouchDBHandler):
             ValueError: If execution_authority is invalid or plan.plan_id is missing
             ApiException: On database errors
         """
-        # Validate inputs
-        _validate_execution_authority(execution_authority)
+        # Validate inputs before touching the database
+        validate_execution_authority(execution_authority)
         doc_id = plan.plan_id
         if not doc_id:
             raise ValueError("plan.plan_id is required for persistence")
@@ -166,38 +145,28 @@ class PlanDBManager(CouchDBHandler):
         existing = self.fetch_document_by_id(doc_id)
         rev = existing.get("_rev") if existing else None
 
-        now = _utc_now_iso()
+        # Canonical document shape shared with the SQLite backend
+        plan_doc = build_plan_document(
+            plan,
+            realm,
+            scope,
+            auto_run=auto_run,
+            execution_authority=execution_authority,
+            execution_owner=execution_owner,
+            preview=preview,
+            source_doc_id=source_doc_id,
+            source_doc_rev=source_doc_rev,
+            notes=notes,
+            existing=existing,
+        )
 
-        plan_doc: dict[str, Any] = {
-            "_id": doc_id,
-            "realm": realm,
-            "scope": scope,
-            "status": "approved" if auto_run else "draft",
-            "plan": plan.to_dict(),
-            "preview": preview or {},
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": execution_authority,
-            "execution_owner": execution_owner,
-            "created_at": existing.get("created_at", now) if existing else now,
-            "updated_at": now,
-        }
-
-        # Include _rev for conflict-safe update
+        # Include _rev for conflict-safe update (backend-specific field)
         if rev:
             plan_doc["_rev"] = rev
 
-        # Optional fields
-        if source_doc_id:
-            plan_doc["source_doc_id"] = source_doc_id
-        if source_doc_rev:
-            plan_doc["source_doc_rev"] = source_doc_rev
-        if notes:
-            plan_doc["notes"] = notes
-
-        # Persist to database (after ensuring JSON-serializable payload)
+        # Persist to database (build_plan_document returns JSON-safe content)
         try:
-            serializable_doc = cast(Document, _json_safe(plan_doc))
+            serializable_doc = cast(Document, plan_doc)
             self.server.put_document(
                 db=self.db_name,
                 doc_id=doc_id,
@@ -241,20 +210,7 @@ class PlanDBManager(CouchDBHandler):
         doc = self.fetch_document_by_id(doc_id)
         if not doc:
             return None
-
-        plan_data = doc.get("plan")
-        if not plan_data:
-            self._logger.warning("Plan document '%s' has no 'plan' field", doc_id)
-            return None
-
-        try:
-            # Note: Path reconstruction is handled by Engine via coerce_params_to_signature_types()
-            # (from yggdrasil.flow.utils.typing_coerce) based on step function type hints.
-            # Params remain as strings in the persisted document.
-            return Plan.from_dict(plan_data)
-        except (KeyError, TypeError) as e:
-            self._logger.error("Failed to deserialize plan '%s': %s", doc_id, e)
-            return None
+        return plan_model_from_document(doc, self._logger)
 
     def update_executed_token(
         self,
@@ -325,7 +281,7 @@ class PlanDBManager(CouchDBHandler):
         """
         Query all approved plans that are pending execution.
 
-        Used for startup recovery when checkpoint is missing.
+        Reserved for future daemon-startup recovery.
         Returns plans where: status='approved' AND run_token > executed_run_token
 
         Note: This is a full scan (O(n)). For large databases, consider
@@ -435,12 +391,4 @@ class PlanDBManager(CouchDBHandler):
         doc = self.fetch_document_by_id(doc_id)
         if not doc:
             return None
-        return {
-            "status": doc.get("status", "unknown"),
-            "execution_authority": doc.get("execution_authority", "daemon"),
-            "execution_owner": doc.get("execution_owner"),
-            "updated_at": doc.get("updated_at", "unknown"),
-            "realm": doc.get("realm", "unknown"),
-            "run_token": doc.get("run_token", 0),
-            "executed_run_token": doc.get("executed_run_token", -1),
-        }
+        return plan_summary_from_document(doc)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
+from lib.core_utils.runtime_paths import resolve_work_root
 from yggdrasil.flow.errors import PermanentStepError, TransientStepError
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import Plan, StepResult, StepSpec
@@ -111,9 +112,9 @@ class Engine:
         logger: logging.Logger | None = None,
     ):
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
-        self.work_root = Path(
-            work_root or os.environ.get("YGG_WORK_ROOT") or "/tmp/ygg_work"
-        )
+        # Default resolution ($YGG_WORK_ROOT → mode default) is centralized
+        # in lib.core_utils.runtime_paths.
+        self.work_root = Path(work_root) if work_root else resolve_work_root()
         self.emitter = emitter or FileSpoolEmitter()
 
     def _scope_dir(self, plan_dir: Path) -> Path:

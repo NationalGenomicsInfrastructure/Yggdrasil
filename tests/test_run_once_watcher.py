@@ -9,13 +9,16 @@ Tests the CLI's --run-once execution mode which:
 """
 
 import asyncio
+import signal
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from lib.core_utils.event_types import EventType
 from lib.core_utils.yggdrasil_core import (  # type: ignore[attr-defined]
     YggdrasilCore,
     _generate_run_once_owner,
 )
+from lib.watchers.abstract_watcher import YggdrasilEvent
 
 
 class TestGenerateRunOnceOwner(unittest.TestCase):
@@ -47,11 +50,16 @@ class TestCheckPlanOverwrite(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
+        self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
         self.mock_plan_dbm = MagicMock()
 
     def tearDown(self):
         """Clean up singleton."""
+        self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
@@ -136,10 +144,15 @@ class TestRunOnceWithWatcher(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
+        self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
 
     def tearDown(self):
         """Clean up singleton."""
+        self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
     @patch("lib.ops.sinks.couch.OpsWriter")
@@ -409,11 +422,16 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
+        self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
         self.mock_plan_dbm = MagicMock()
 
     def tearDown(self):
         """Clean up singleton."""
+        self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
     @patch("lib.core_utils.yggdrasil_core.PlanWatcher")
@@ -436,6 +454,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
         mock_watcher = MagicMock()
         mock_watcher.start = AsyncMock()  # Never emits events
         mock_watcher.stop = AsyncMock()
+        mock_watcher.recover_pending_plans = AsyncMock(return_value=[])
         mock_watcher_cls.return_value = mock_watcher
 
         core = YggdrasilCore(self.mock_config)
@@ -457,6 +476,160 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
 
         # Assert
         self.assertEqual(result, 1)
+        mock_watcher.recover_pending_plans.assert_awaited_once_with(
+            plan_ids=pending_plan_ids
+        )
+
+    @patch("lib.core_utils.yggdrasil_core.PlanWatcher")
+    @patch("lib.core_utils.yggdrasil_core.is_plan_eligible")
+    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
+    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
+    @patch("lib.core_utils.yggdrasil_core.Engine")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    def test_interrupt_during_recovery_skips_remaining_plans(
+        self,
+        mock_init_db,
+        mock_engine_class,
+        mock_emitter,
+        mock_ops,
+        mock_eligible,
+        mock_watcher_cls,
+    ):
+        """Ctrl+C during the recovery pass finishes the current plan but
+        skips subsequent recovered plans (they stay pending)."""
+        mock_eligible.return_value = True
+        execution_owner = "run_once:test-uuid"
+
+        def _event(plan_id: str) -> YggdrasilEvent:
+            doc = {
+                "_id": plan_id,
+                "status": "approved",
+                "run_token": 1,
+                "executed_run_token": 0,
+                "execution_authority": "run_once",
+                "execution_owner": execution_owner,
+            }
+            return YggdrasilEvent(
+                EventType.PLAN_EXECUTION,
+                {"plan_doc_id": plan_id, "plan_doc": doc},
+                "test",
+            )
+
+        # recover_pending_plans drives the real on_event callback for two
+        # plans; the callback is captured from the PlanWatcher constructor.
+        def _recover_side_effect(*, plan_ids):
+            self.assertEqual(plan_ids, ["pln_1", "pln_2"])
+            on_event = mock_watcher_cls.call_args.kwargs["on_event"]
+            on_event(_event("pln_1"))
+            on_event(_event("pln_2"))
+            return []
+
+        mock_watcher = MagicMock()
+        mock_watcher.start = AsyncMock()
+        mock_watcher.stop = AsyncMock()
+        mock_watcher.recover_pending_plans = AsyncMock(side_effect=_recover_side_effect)
+        mock_watcher_cls.return_value = mock_watcher
+
+        core = YggdrasilCore(self.mock_config)
+        core.plan_dbm = self.mock_plan_dbm
+        self.mock_plan_dbm.fetch_plan_as_model.return_value = MagicMock()
+
+        # The first executed plan raises SIGINT (delivered to the loop's own
+        # interrupt handler, installed before recovery); the second must be
+        # skipped by the interrupt guard.
+        executed: list[str] = []
+
+        def _engine_run(plan):
+            executed.append("run")
+            if len(executed) == 1:
+                signal.raise_signal(signal.SIGINT)
+
+        core.engine.run.side_effect = _engine_run
+
+        original = signal.getsignal(signal.SIGINT)
+        try:
+            result = asyncio.run(
+                core._run_once_watcher_loop(
+                    pending_plan_ids=["pln_1", "pln_2"],
+                    execution_owner=execution_owner,
+                    timeout_seconds=5.0,
+                )
+            )
+        finally:
+            signal.signal(signal.SIGINT, original)
+
+        # Only the first recovered plan executed; the second was skipped.
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(core.engine.run.call_count, 1)
+        self.assertEqual(result, 130)
+
+    @patch("lib.core_utils.yggdrasil_core.PlanWatcher")
+    @patch("lib.core_utils.yggdrasil_core.is_plan_eligible")
+    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
+    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
+    @patch("lib.core_utils.yggdrasil_core.Engine")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    def test_interrupt_while_loading_plan_prevents_execution(
+        self,
+        mock_init_db,
+        mock_engine_class,
+        mock_emitter,
+        mock_ops,
+        mock_eligible,
+        mock_watcher_cls,
+    ):
+        """Ctrl+C while loading a plan prevents the subsequent Engine call."""
+        mock_eligible.return_value = True
+        execution_owner = "run_once:test-uuid"
+        plan_doc = {
+            "_id": "pln_1",
+            "status": "approved",
+            "run_token": 1,
+            "executed_run_token": 0,
+            "execution_authority": "run_once",
+            "execution_owner": execution_owner,
+        }
+
+        def _recover_side_effect(*, plan_ids):
+            self.assertEqual(plan_ids, ["pln_1"])
+            on_event = mock_watcher_cls.call_args.kwargs["on_event"]
+            on_event(
+                YggdrasilEvent(
+                    EventType.PLAN_EXECUTION,
+                    {"plan_doc_id": "pln_1", "plan_doc": plan_doc},
+                    "test",
+                )
+            )
+            return []
+
+        mock_watcher = MagicMock()
+        mock_watcher.start = AsyncMock()
+        mock_watcher.stop = AsyncMock()
+        mock_watcher.recover_pending_plans = AsyncMock(side_effect=_recover_side_effect)
+        mock_watcher_cls.return_value = mock_watcher
+
+        core = YggdrasilCore(self.mock_config)
+        core.plan_dbm = self.mock_plan_dbm
+        core.engine.run.reset_mock(side_effect=True)
+
+        def _fetch_plan_as_model(plan_id):
+            self.assertEqual(plan_id, "pln_1")
+            signal.raise_signal(signal.SIGINT)
+            return MagicMock()
+
+        self.mock_plan_dbm.fetch_plan_as_model.side_effect = _fetch_plan_as_model
+
+        result = asyncio.run(
+            core._run_once_watcher_loop(
+                pending_plan_ids=["pln_1"],
+                execution_owner=execution_owner,
+                timeout_seconds=5.0,
+            )
+        )
+
+        core.engine.run.assert_not_called()
+        self.mock_plan_dbm.update_executed_token.assert_not_called()
+        self.assertEqual(result, 130)
 
 
 class TestCreateRunOncePlanForHandler(unittest.TestCase):
@@ -465,11 +638,16 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
+        self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
         self.mock_plan_dbm = MagicMock()
 
     def tearDown(self):
         """Clean up singleton."""
+        self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
@@ -500,19 +678,16 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
 
         self.assertEqual(result, [])
 
-    @patch("lib.core_utils.yggdrasil_core.PlanDBManager")
     @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
     @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
     @patch("lib.core_utils.yggdrasil_core.Engine")
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_returns_plan_doc_id_on_success(
-        self, mock_init_db, mock_engine, mock_emitter, mock_ops, mock_plan_dbm_cls
+        self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
         """Test that method returns plan_doc_id on successful creation."""
         core = YggdrasilCore(self.mock_config)
 
-        # Mock the PlanDBManager class to return our mock instance
-        mock_plan_dbm_cls.return_value = self.mock_plan_dbm
         core.plan_dbm = (
             self.mock_plan_dbm
         )  # Assign mock since _init_db_managers is patched

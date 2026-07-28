@@ -55,6 +55,7 @@ class YggdrasilDBManager(CouchDBHandler):
         url: str | None = None,
         user_env: str | None = None,
         pass_env: str | None = None,
+        db_name: str = "yggdrasil",
         logger: logging.Logger | None = None,
     ) -> None:
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
@@ -66,7 +67,7 @@ class YggdrasilDBManager(CouchDBHandler):
         )
 
         super().__init__(
-            "yggdrasil",
+            db_name,
             url=params.url,
             user_env=params.user_env,
             pass_env=params.pass_env,

@@ -20,7 +20,7 @@ python -m yggdrasil.cli [--dev] {daemon | run-doc} [OPTIONS]
 
 | Flag    | Description |
 |---------|-------------|
-| `--dev` | Enable *development mode*: DEBUG-level logging, dev-mode configuration overrides (loads `dev_main.json` on top of `main.json`), enables the test realm |
+| `--dev` | Enable *development mode*: DEBUG-level logging, dev configuration (`main.json` is replaced by `dev_main.json` when present), enables the test realm |
 
 `--dev` must come **before** the subcommand:
 
@@ -49,9 +49,9 @@ yggdrasil daemon
 yggdrasil --dev daemon
 ```
 
-Logs are written to the directory set in `main.json` → `yggdrasil.log_dir`.
+Logs are written to the directory set in `main.json` → `yggdrasil.log_dir`, one file per process: `yggdrasil_<timestamp>_<pid>.log` (`yggdrasil_dev_<timestamp>_<pid>.log` in dev mode).
 
-**Note**: Only one Yggdrasil daemon should run against a shared database environment at a time. Yggdrasil prevents duplicate daemon processes in the same local runtime with a process lock. If another machine or runtime is pointed at the same databases, checkpoint conflict warnings indicate that more than one daemon may be active, but this may lead to unexpected behaviour.
+**Note**: One daemon may run **per mode** per user per host: a production daemon holds `daemon.lock` and a dev daemon holds `daemon-dev.lock` (advisory locks in the user runtime directory), so `yggdrasil daemon` and `yggdrasil --dev daemon` can run side by side while duplicates of the same mode are rejected. **Coexistence is only safe when the two daemons use different internal storage** (see [Running prod and dev side by side](configuration.md#running-prod-and-dev-side-by-side)) — the lock is intentionally not database-aware, and only one daemon should run against a shared database environment at a time. If another machine or runtime is pointed at the same databases, checkpoint conflict warnings indicate that more than one daemon may be active, but this may lead to unexpected behaviour.
 
 ### `run-doc`
 

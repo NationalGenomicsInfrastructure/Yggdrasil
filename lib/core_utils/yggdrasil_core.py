@@ -1,7 +1,6 @@
 import asyncio
 import importlib.metadata
 import logging
-import os
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -10,11 +9,12 @@ from typing import Any
 from lib.core_utils.event_types import EventType
 from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.plan_eligibility import is_plan_eligible
+from lib.core_utils.runtime_paths import resolve_event_spool, resolve_work_root
 from lib.core_utils.singleton_decorator import singleton
-from lib.couchdb.plan_db_manager import PlanDBManager
 from lib.couchdb.project_db_manager import ProjectDBManager
 from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
+from lib.storage import InternalStorageBundle, build_internal_storage
 from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.manager import WatcherManager
 from lib.watchers.plan_watcher import PlanWatcher
@@ -52,17 +52,28 @@ class YggdrasilCore:
         logger: logging.Logger | None = None,
         *,
         config_path: str | Path | None = None,
+        storage: InternalStorageBundle | None = None,
     ):
         """
         Args:
             config: A dictionary of global Yggdrasil settings.
             logger: If not provided, a default named logger is created.
             config_path: Optional path to the loaded config file for diagnostics.
+            storage: Optional internal-storage bundle injection (tests).
+                Defaults to resolving the ``internal_storage`` config block.
         """
         self.config = config
         self.config_path = Path(config_path) if config_path is not None else None
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._running = False
+
+        # Internal storage boundary (plans, plan changes, checkpoints, ops
+        # snapshots). Resolved once; all internal persistence goes through it.
+        self.storage = storage or build_internal_storage(config)
+
+        # ProjectDBManager is external (projects DB) and NOT part of internal
+        # storage; it is constructed lazily and only used by run-doc paths.
+        self._pdm: ProjectDBManager | None = None
 
         # Watchers: a list of classes that inherit from AbstractWatcher
         self.watchers: list = []
@@ -84,15 +95,21 @@ class YggdrasilCore:
         # WatcherManager (Phase 2; set by setup_realms)
         self.watcher_manager: Any = None
 
-        # Ops consumer service (for writing plan_status to CouchDB)
-        self.ops_consumer = OpsConsumerService(interval_sec=2.0)
+        # Ops consumer service (writes plan_status snapshots via the bundle)
+        self.ops_consumer = OpsConsumerService(
+            interval_sec=2.0, writer=self.storage.ops_snapshots
+        )
+
+        # Machine-local runtime paths, resolved once and reused everywhere
+        # (engine, planning contexts, spool drain) so one process cannot
+        # split across two roots.
+        self.work_root = resolve_work_root(config)
+        self.event_spool = resolve_event_spool()
 
         # Engine for plan execution (handlers now return plans; core executes them)
         self.engine = Engine(
-            work_root=config.get("work_root") or os.environ.get("YGG_WORK_ROOT"),
-            emitter=FileSpoolEmitter(
-                spool_dir=os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events")
-            ),
+            work_root=self.work_root,
+            emitter=FileSpoolEmitter(spool_dir=self.event_spool),
         )
 
         self._init_db_managers()
@@ -143,25 +160,34 @@ class YggdrasilCore:
 
         return plan_doc_id
 
+    @property
+    def pdm(self) -> ProjectDBManager:
+        """Lazily constructed ProjectDBManager (external 'projects' DB).
+
+        Only the run-doc paths use it; normal daemon operation never
+        constructs it. It is not part of internal storage.
+        """
+        if self._pdm is None:
+            self._logger.info("Initializing ProjectDBManager (run-doc path)...")
+            self._pdm = ProjectDBManager()
+        return self._pdm
+
+    @pdm.setter
+    def pdm(self, value: ProjectDBManager) -> None:
+        """Allow explicit injection (tests)."""
+        self._pdm = value
+
     def _init_db_managers(self):
         """
-        Initializes database managers or other central resources.
+        Wire database access for Core.
 
-        Managers initialized:
-        - pdm: ProjectDBManager for 'projects' database
-        - ydm: YggdrasilDBManager for 'yggdrasil' database
-        - plan_dbm: PlanDBManager for 'yggdrasil_plans' database
-
-        Each manager reads CouchDB connection config from main.json and
-        creates its own CloudantV1 client via CouchDBClientFactory.
+        - plan_dbm: PlanStore from the internal-storage bundle
+        - pdm: ProjectDBManager is lazy (see the ``pdm`` property) and only
+          constructed by the run-doc paths.
         """
         self._logger.info("Initializing DB managers...")
 
-        from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
-
-        self.pdm = ProjectDBManager()
-        self.ydm = YggdrasilDBManager()
-        self.plan_dbm = PlanDBManager()
+        self.plan_dbm = self.storage.plans
 
         self._logger.info("DB managers initialized.")
 
@@ -195,11 +221,8 @@ class YggdrasilCore:
     def _make_planning_ctx(
         self, handler, scope: dict[str, Any], *, doc: dict[str, Any], reason: str
     ) -> PlanningContext:
-        work_root = Path(os.getenv("YGG_WORK_ROOT", "/tmp/ygg_work"))
-        scope_dir = work_root / handler.realm_id / scope["id"]
-        emitter = FileSpoolEmitter(
-            spool_dir=os.getenv("YGG_EVENT_SPOOL", "/tmp/ygg_events")
-        )
+        scope_dir = self.work_root / handler.realm_id / scope["id"]
+        emitter = FileSpoolEmitter(spool_dir=self.event_spool)
         # ops_db = os.getenv("OPS_DB", "yggdrasil_ops")
         return handler.build_planning_context(
             scope=scope,
@@ -519,6 +542,7 @@ class YggdrasilCore:
         self.watcher_manager = WatcherManager(
             config=self.config.get("external_systems", {}),
             on_event=self.handle_event,
+            checkpoint_store=self.storage.checkpoints,
             logger=self._logger,
             watcher_policy=self.config.get("watchers", {}),
             config_path=self.config_path,
@@ -639,6 +663,9 @@ class YggdrasilCore:
         plan_watcher = PlanWatcher(
             on_event=self._handle_plan_execution_event,
             poll_interval_sec=poll_interval,
+            plan_store=self.storage.plans,
+            change_source=self.storage.plan_changes,
+            checkpoint_store=self.storage.checkpoints,
             execution_authority_filter="daemon",  # Skip run_once plans
         )
         self.register_watcher(plan_watcher)
@@ -760,19 +787,13 @@ class YggdrasilCore:
             # Token NOT updated → plan remains eligible for retry
 
     async def _recover_approved_plans(self) -> None:
-        """
-        Startup recovery: execute any approved plans that were missed.
+        """Queue all eligible plans through the configured daemon watcher.
 
-        This is called when the PlanWatcher checkpoint is missing or invalid.
-        It queries all eligible plans and executes them.
-
-        The recovery process:
-        1. Query all approved pending plans
-        2. Execute each via _execute_approved_plan()
-        3. Initialize checkpoint after recovery
-
-        Note: This is a fallback mechanism. Normal operation uses the
-        _changes feed via PlanWatcher for incremental updates.
+        This helper is not currently called by :meth:`start` (see Tech Debt
+        #17). The watcher's recovery scan emits callbacks, which queue
+        execution; this method neither inspects nor initializes a checkpoint.
+        A future startup caller must coordinate the scan with the live change
+        cursor and deduplicate any overlap.
         """
         if not hasattr(self, "_plan_watcher") or self._plan_watcher is None:
             self._logger.warning("No PlanWatcher configured; skipping recovery")
@@ -967,7 +988,7 @@ class YggdrasilCore:
         Create and persist a plan from a project document (no execution).
 
         This is the --plan-only mode: creates a plan with execution_authority='daemon'
-        for later approval via Genstat and execution by the daemon.
+        for later approval by an external actor and execution by the daemon.
 
         Args:
             doc_id: Project document ID
@@ -1043,7 +1064,7 @@ class YggdrasilCore:
                     )
                     self._logger.info(
                         "✓ Plan '%s' created (status=draft, authority=daemon). "
-                        "Awaiting approval via Genstat.",
+                        "Awaiting external approval.",
                         plan_doc_id,
                     )
                     persisted_ids.append(plan_doc_id)
@@ -1084,7 +1105,6 @@ class YggdrasilCore:
             int: Exit code (0=success, 1=error, 130=interrupted)
         """
         from lib.ops.consumer import FileSpoolConsumer
-        from lib.ops.sinks.couch import OpsWriter
 
         # Generate unique owner token for this entire session
         execution_owner = _generate_run_once_owner()
@@ -1147,12 +1167,8 @@ class YggdrasilCore:
         # ─────────────────────────────────────────────────────────────────
         # Phase 3: Consume event spool
         # ─────────────────────────────────────────────────────────────────
-        spool_root = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
-        self._logger.info("Consuming event spool at %s", spool_root)
-        FileSpoolConsumer(
-            spool_root,
-            OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops")),
-        ).consume()
+        self._logger.info("Consuming event spool at %s", self.event_spool)
+        FileSpoolConsumer(self.event_spool, self.storage.ops_snapshots).consume()
 
         return exit_code
 
@@ -1287,6 +1303,14 @@ class YggdrasilCore:
             """
             nonlocal error_occurred
 
+            # Stop launching new plans once interrupted. The plan already
+            # running (if any) finishes; subsequent recovered/live plans are
+            # skipped and left pending in the DB for manual handling. Matters
+            # most for the synchronous recovery pass, which would otherwise
+            # execute every recovered plan before the interrupt is observed.
+            if interrupted:
+                return
+
             payload = event.payload or {}
             plan_doc_id = payload.get("plan_doc_id")
             plan_doc = payload.get("plan_doc")
@@ -1314,7 +1338,7 @@ class YggdrasilCore:
                 _check_all_completed()
                 return
 
-            # Check if ownership was transferred (Genstat changed execution_authority)
+            # Check whether an external actor transferred execution ownership.
             if plan_doc.get("execution_authority") != "run_once":
                 self._logger.info(
                     "Plan '%s' transferred to daemon; marking completed (no action)",
@@ -1355,6 +1379,8 @@ class YggdrasilCore:
                     return
 
                 run_token = plan_doc.get("run_token", 0)
+                if interrupted:
+                    return
                 self.engine.run(plan)
                 self._logger.info("✓ Plan '%s' execution completed", plan_doc_id)
 
@@ -1380,6 +1406,9 @@ class YggdrasilCore:
         scoped_watcher = PlanWatcher(
             on_event=on_plan_eligible,
             poll_interval_sec=2.0,  # Responsive for interactive use
+            plan_store=self.storage.plans,
+            change_source=self.storage.plan_changes,
+            checkpoint_store=self.storage.checkpoints,
             execution_owner_filter=execution_owner,
             # NOTE: No execution_authority_filter; we check origin in callback
         )
@@ -1393,6 +1422,15 @@ class YggdrasilCore:
         original_handler = signal.signal(signal.SIGINT, handle_interrupt)
 
         try:
+            # Recovery pass before the live watcher starts: plans were saved
+            # in Phase 1, so a fresh change cursor (resolved at "now") would
+            # never observe them. Explicit IDs avoid a whole-database scan;
+            # the owner filter remains a defense-in-depth boundary. Kept
+            # inside the try (after the interrupt handler is installed) so
+            # Ctrl+C during recovered execution still routes to the
+            # controlled shutdown + spool drain below.
+            await scoped_watcher.recover_pending_plans(plan_ids=pending_plan_ids)
+
             # Start watcher task
             watcher_task = asyncio.create_task(scoped_watcher.start())
 

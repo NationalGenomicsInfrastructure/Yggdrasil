@@ -4,7 +4,10 @@ from pathlib import Path
 
 from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.daemon_lock import DaemonLock, DaemonLockError
-from lib.core_utils.errors import ExternalSystemUnavailableError
+from lib.core_utils.errors import (
+    ExternalSystemUnavailableError,
+    InternalStorageConfigurationError,
+)
 from lib.core_utils.logging_utils import configure_logging, custom_logger
 from lib.core_utils.ygg_session import YggSession
 from lib.core_utils.yggdrasil_core import YggdrasilCore
@@ -207,7 +210,11 @@ Examples:
                 )
                 raise SystemExit(exit_code)
 
-    except (WatcherConfigurationError, ExternalSystemUnavailableError) as e:
+    except (
+        WatcherConfigurationError,
+        ExternalSystemUnavailableError,
+        InternalStorageConfigurationError,
+    ) as e:
         # Environment/config problems, not bugs: one concise operator-facing
         # line; full traceback only at debug level (enabled by --dev).
         # WatcherConfigurationError embeds its config path itself; for
@@ -220,8 +227,11 @@ Examples:
         raise SystemExit(1) from None
     except DaemonLockError as e:
         logger.error(
-            "Another local Yggdrasil daemon is already running. "
-            "Lock path: %s. Existing metadata: %s",
+            "Another local Yggdrasil daemon is already running in %s mode. "
+            "Lock path: %s. Existing metadata: %s. "
+            "(Prod and dev daemons may run side by side; duplicates of the "
+            "same mode may not.)",
+            "dev" if args.dev else "prod",
             e.lock_path,
             e.existing_metadata,
         )

@@ -95,7 +95,7 @@ class OpsWriter(CouchDBHandler):
             "notes": draft.notes,
             "preview": draft.preview,
             "auto_run": draft.auto_run,
-            "approved": False,  # flipped by a human in Genstat / ops UI
+            "approved": False,  # flipped by a human through an operations UI
             "approvals_required": draft.approvals_required,
             "plan": {
                 "plan_id": plan.plan_id,

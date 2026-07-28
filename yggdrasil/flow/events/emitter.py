@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
+from lib.core_utils.runtime_paths import resolve_event_spool
 from yggdrasil.flow.utils.jsonify import to_jsonable
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
@@ -15,11 +15,10 @@ class EventEmitter(Protocol):
 
 
 class FileSpoolEmitter:
-    def __init__(self, spool_dir: str | None = None):
-        # TODO: Decide between env var `YGG_EVENT_SPOOL` or reading from config
-        self.root = Path(
-            spool_dir or os.environ.get("YGG_EVENT_SPOOL") or "/tmp/ygg_events"
-        )
+    def __init__(self, spool_dir: str | Path | None = None):
+        # Default resolution ($YGG_EVENT_SPOOL → mode default) is centralized
+        # in lib.core_utils.runtime_paths.
+        self.root = Path(spool_dir) if spool_dir else resolve_event_spool()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def emit(self, event: dict[str, Any]) -> None:

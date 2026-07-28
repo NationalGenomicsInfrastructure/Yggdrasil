@@ -9,6 +9,7 @@ from lib.core_utils.logging_utils import (
     configure_logging,
     custom_logger,
 )
+from lib.core_utils.ygg_session import YggSession
 
 
 class TestLoggingUtils(unittest.TestCase):
@@ -24,6 +25,14 @@ class TestLoggingUtils(unittest.TestCase):
         # Backup original logging handlers and level
         self.original_handlers = logging.getLogger().handlers.copy()
         self.original_level = logging.getLogger().level
+
+        # Force a known YggSession mode (filename carries a dev marker)
+        self._saved_session_state = (
+            YggSession._YggSession__dev_mode,
+            YggSession._YggSession__dev_already_set,
+        )
+        YggSession._YggSession__dev_mode = False
+        YggSession._YggSession__dev_already_set = False
 
         # Clear existing handlers
         logging.getLogger().handlers = []
@@ -63,6 +72,12 @@ class TestLoggingUtils(unittest.TestCase):
         logging.getLogger().handlers = self.original_handlers
         logging.getLogger().level = self.original_level
 
+        # Restore YggSession state
+        (
+            YggSession._YggSession__dev_mode,
+            YggSession._YggSession__dev_already_set,
+        ) = self._saved_session_state
+
         # Stop all patches
         self.patcher_config_loader.stop()
         self.patcher_datetime.stop()
@@ -78,7 +93,8 @@ class TestLoggingUtils(unittest.TestCase):
 
                 expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
                 expected_log_file = (
-                    expected_log_dir / "yggdrasil_2021-01-01_12.00.00.log"
+                    expected_log_dir
+                    / f"yggdrasil_2021-01-01_12.00.00_{os.getpid()}.log"
                 )
                 expected_log_level = logging.INFO
                 # Accept either the rich or non-rich format
@@ -169,7 +185,9 @@ class TestLoggingUtils(unittest.TestCase):
     def test_configure_logging_logs_to_correct_file(self):
         configure_logging()
         expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
-        expected_log_file = expected_log_dir / "yggdrasil_2021-01-01_12.00.00.log"
+        expected_log_file = (
+            expected_log_dir / f"yggdrasil_2021-01-01_12.00.00_{os.getpid()}.log"
+        )
         self.mock_filehandler.assert_called_once_with(expected_log_file)
 
     def test_custom_logger_returns_logger(self):
@@ -290,7 +308,9 @@ class TestLoggingUtils(unittest.TestCase):
         configure_logging()
         expected_timestamp = "2021-01-01_12.00.00"
         expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
-        expected_log_file = expected_log_dir / f"yggdrasil_{expected_timestamp}.log"
+        expected_log_file = (
+            expected_log_dir / f"yggdrasil_{expected_timestamp}_{os.getpid()}.log"
+        )
         self.mock_filehandler.assert_called_with(expected_log_file)
 
     @patch("lib.core_utils.logging_utils.datetime")
@@ -302,7 +322,21 @@ class TestLoggingUtils(unittest.TestCase):
         configure_logging()
         expected_timestamp = "2022-02-02_14.30.00"
         expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
-        expected_log_file = expected_log_dir / f"yggdrasil_{expected_timestamp}.log"
+        expected_log_file = (
+            expected_log_dir / f"yggdrasil_{expected_timestamp}_{os.getpid()}.log"
+        )
+        self.mock_filehandler.assert_called_with(expected_log_file)
+
+    def test_configure_logging_dev_mode_filename_marker(self):
+        YggSession._YggSession__dev_mode = True
+        YggSession._YggSession__dev_already_set = True
+
+        configure_logging(debug=True)
+
+        expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
+        expected_log_file = (
+            expected_log_dir / f"yggdrasil_dev_2021-01-01_12.00.00_{os.getpid()}.log"
+        )
         self.mock_filehandler.assert_called_with(expected_log_file)
 
     def test_configure_logging_invalid_configs_type(self):

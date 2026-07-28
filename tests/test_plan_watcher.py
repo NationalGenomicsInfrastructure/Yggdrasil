@@ -11,7 +11,18 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from lib.core_utils.event_types import EventType
+from lib.watchers.backends.base import RawWatchEvent
 from lib.watchers.plan_watcher import PlanWatcher
+
+
+def _raw(change: dict) -> RawWatchEvent:
+    """Convert a CouchDB-style change dict to the RawWatchEvent shape."""
+    return RawWatchEvent(
+        id=str(change.get("id", "")),
+        doc=change.get("doc"),
+        seq=change.get("seq"),
+        deleted=bool(change.get("deleted", False)),
+    )
 
 
 class MockApiException(Exception):
@@ -109,7 +120,7 @@ class TestPlanWatcher(unittest.TestCase):
         """Test that design documents are skipped."""
         change = {"id": "_design/views", "seq": "1", "doc": {"views": {}}}
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -117,7 +128,7 @@ class TestPlanWatcher(unittest.TestCase):
         """Test that deleted documents are skipped."""
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "deleted": True}
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -125,7 +136,7 @@ class TestPlanWatcher(unittest.TestCase):
         """Test that changes without doc are skipped."""
         change = {"id": "pln_tenx_P12345_v1", "seq": "1"}  # no 'doc' field
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -140,7 +151,7 @@ class TestPlanWatcher(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": eligible_doc}
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         # Verify emit was called
         self.mock_on_event.assert_called_once()
@@ -160,7 +171,7 @@ class TestPlanWatcher(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": draft_doc}
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -175,7 +186,7 @@ class TestPlanWatcher(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": executed_doc}
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -190,7 +201,7 @@ class TestPlanWatcher(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": rerun_doc}
 
-        asyncio.run(self.watcher._evaluate_change(change))
+        asyncio.run(self.watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_called_once()
 
@@ -205,6 +216,7 @@ class TestPlanWatcher(unittest.TestCase):
         asyncio.run(self.watcher.recover_pending_plans())
 
         self.mock_plan_db.query_approved_pending.assert_called_once()
+        self.mock_plan_db.fetch_plan.assert_not_called()
 
     def test_recover_pending_plans_emits_for_each(self):
         """Test that recovery emits events for all eligible plans."""
@@ -240,6 +252,76 @@ class TestPlanWatcher(unittest.TestCase):
 
         self.assertEqual(result, [])
         self.mock_on_event.assert_not_called()
+
+    def test_scoped_recovery_fetches_only_requested_eligible_plans(self):
+        """Scoped recovery avoids a full scan and keeps all safety filters."""
+        owner = "run_once:this-session"
+        watcher = PlanWatcher(
+            on_event=self.mock_on_event,
+            poll_interval_sec=0.1,
+            execution_authority_filter="run_once",
+            execution_owner_filter=owner,
+        )
+        documents = {
+            "matching": {
+                "_id": "matching",
+                "status": "approved",
+                "run_token": 1,
+                "executed_run_token": 0,
+                "execution_authority": "run_once",
+                "execution_owner": owner,
+            },
+            "ineligible": {
+                "_id": "ineligible",
+                "status": "draft",
+                "run_token": 1,
+                "executed_run_token": 0,
+                "execution_authority": "run_once",
+                "execution_owner": owner,
+            },
+            "wrong-owner": {
+                "_id": "wrong-owner",
+                "status": "approved",
+                "run_token": 1,
+                "executed_run_token": 0,
+                "execution_authority": "run_once",
+                "execution_owner": "run_once:other-session",
+            },
+            "wrong-authority": {
+                "_id": "wrong-authority",
+                "status": "approved",
+                "run_token": 1,
+                "executed_run_token": 0,
+                "execution_authority": "daemon",
+                "execution_owner": owner,
+            },
+        }
+
+        def _fetch_plan(plan_id):
+            if plan_id == "failed":
+                raise RuntimeError("temporary fetch failure")
+            return documents.get(plan_id)
+
+        self.mock_plan_db.fetch_plan.side_effect = _fetch_plan
+        plan_ids = [
+            "matching",
+            "ineligible",
+            "wrong-owner",
+            "wrong-authority",
+            "missing",
+            "failed",
+            "matching",
+        ]
+
+        result = asyncio.run(watcher.recover_pending_plans(plan_ids=plan_ids))
+
+        self.mock_plan_db.query_approved_pending.assert_not_called()
+        self.assertEqual(
+            [call.args[0] for call in self.mock_plan_db.fetch_plan.call_args_list],
+            plan_ids[:-1],
+        )
+        self.assertEqual(result, [documents["matching"]])
+        self.mock_on_event.assert_called_once()
 
     # ==========================================
     # start/stop Tests
@@ -448,7 +530,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
 
         async def test():
             for change in changes:
-                await watcher._evaluate_change(change)
+                await watcher._evaluate_change(_raw(change))
 
         asyncio.run(test())
 
@@ -501,7 +583,7 @@ class TestPlanWatcherIntegration(unittest.TestCase):
             watcher._running = True
             async for change in watcher.changes_fetcher.fetch_changes(since="0"):
                 new_seq = change.get("seq")
-                await watcher._evaluate_change(change)
+                await watcher._evaluate_change(_raw(change))
                 if new_seq:
                     watcher.checkpoint_store.save(Mock(value=new_seq))
             watcher._running = False
@@ -578,7 +660,7 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": run_once_doc}
 
-        asyncio.run(watcher._evaluate_change(change))
+        asyncio.run(watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -599,7 +681,7 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": daemon_doc}
 
-        asyncio.run(watcher._evaluate_change(change))
+        asyncio.run(watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_called_once()
 
@@ -623,7 +705,7 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": my_doc}
 
-        asyncio.run(watcher._evaluate_change(change))
+        asyncio.run(watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_called_once()
 
@@ -647,7 +729,7 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": other_doc}
 
-        asyncio.run(watcher._evaluate_change(change))
+        asyncio.run(watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -668,7 +750,7 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         }
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": legacy_doc}
 
-        asyncio.run(watcher._evaluate_change(change))
+        asyncio.run(watcher._evaluate_change(_raw(change)))
 
         self.mock_on_event.assert_not_called()
 
@@ -698,12 +780,12 @@ class TestPlanWatcherFiltering(unittest.TestCase):
 
         asyncio.run(
             watcher._evaluate_change(
-                {"id": "pln_tenx_P1_v1", "seq": "1", "doc": daemon_doc}
+                _raw({"id": "pln_tenx_P1_v1", "seq": "1", "doc": daemon_doc})
             )
         )
         asyncio.run(
             watcher._evaluate_change(
-                {"id": "pln_tenx_P2_v1", "seq": "2", "doc": run_once_doc}
+                _raw({"id": "pln_tenx_P2_v1", "seq": "2", "doc": run_once_doc})
             )
         )
 
