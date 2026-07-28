@@ -77,7 +77,8 @@ See [Configuration](configuration.md) for required config files.
 # Start the daemon (watches CouchDB and file-system sources)
 yggdrasil daemon
 
-# Or in dev mode (DEBUG logging, dev config overrides)
+# Or in dev mode (DEBUG logging; dev_main.json replaces main.json;
+# safe alongside a prod daemon when internal storage differs)
 yggdrasil --dev daemon
 ```
 

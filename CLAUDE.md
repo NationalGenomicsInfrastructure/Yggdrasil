@@ -32,7 +32,7 @@ Event flow, end to end:
 3. **WatcherManager** (`lib/watchers/manager.py`) consumes BoundWatchSpecs, resolves connection config, deduplicates backends per `(backend, connection)`, evaluates each spec's `filter_expr`, builds payload/scope, and fans out `YggdrasilEvent`s to core. Startup wiring is validated by `lib/watchers/config_validation.py` (raises `WatcherConfigurationError`).
 4. **Watcher backends** (`lib/watchers/backends/`) produce backend-agnostic `RawWatchEvent`s and persist resume positions via `CheckpointStore` (`InMemoryCheckpointStore` available for tests). Realm logic stays out of backends; the architecture is one-way — no ack/return path from realms back to backends.
 5. **Handlers** (subclass `yggdrasil.flow.base_handler.BaseHandler`) declare `event_type: ClassVar[EventType]`, implement `derive_scope()` and async `generate_plan_drafts()`. Handlers generate plan *intent* (`PlanDraft`), never execute work directly.
-6. Core persists plans in the `yggdrasil_plans` CouchDB database; **PlanWatcher** triggers execution, and the **Engine** (`yggdrasil.flow`) runs plans with per-step workdirs, fingerprint-based caching, `@step`-decorated functions receiving a `StepContext`, and event emission to `$YGG_EVENT_SPOOL`.
+6. Core persists plans through the injected `InternalStorageBundle` (CouchDB in production; SQLite only when explicitly configured and running in dev mode or tests). **PlanWatcher** consumes the bundle's backend-neutral change source, and the **Engine** (`yggdrasil.flow`) runs plans with per-step workdirs, fingerprint-based caching, `@step`-decorated functions receiving a `StepContext`, and event emission to `$YGG_EVENT_SPOOL`.
 
 Namespacing: `yggdrasil/*` is the public API, `lib/*` is internal implementation. External code imports from `yggdrasil.*` only.
 
@@ -40,6 +40,7 @@ Namespacing: `yggdrasil/*` is the public API, `lib/*` is internal implementation
 
 - `ConfigLoader` resolves config files from `yggdrasil_workspace/common/configurations/` or the current dir; the daemon loads `main.json`.
 - Watcher/connection wiring lives under `main.json → external_systems` (endpoints + connections), resolved by `lib/core_utils/external_systems_resolver.py`.
+- `main.json → internal_storage` selects internal persistence; explicit CouchDB roles reference named `external_systems` connections.
 - DB managers get CouchDB params through `resolve_couchdb_params` (`lib/couchdb/couchdb_defaults.py`).
 - `YggSession` singleton tracks dev-mode / manual-submission flags set by CLI flags.
 
