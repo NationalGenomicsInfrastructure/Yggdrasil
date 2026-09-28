@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import unicodedata
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
@@ -251,6 +252,56 @@ def _find_cycle(steps: list[StepSpec]) -> list[str] | None:
                 stack.pop()
 
     return None
+
+
+def _work_dir_problem(step_id: object) -> str | None:
+    """Say why a step ID cannot name a work directory of its own, if it cannot.
+
+    A step's work directory is ``<work_root>/<plan_id>/<step_id>``, each
+    ``/``-separated part of the ID one directory level. The raw ID is checked,
+    because converting it to a path first would erase the evidence: a path
+    drops empty and ``.`` parts, so ``lane/./process`` or ``lane//process``
+    would silently share ``lane/process``'s work directory and be reused from
+    its success marker, while ``..`` parts or an absolute ID would put the
+    directory outside the plan's, even outside the work root. Nested IDs such
+    as ``lane_1/process`` and every other character stay valid, and accepted
+    IDs keep the work directories they always had.
+
+    Args:
+        step_id: The step's ID.
+
+    Returns:
+        str | None: What is wrong with it; None if it is usable.
+    """
+    if not isinstance(step_id, str):
+        return f"it is of type {type(step_id).__name__}, not a string"
+    if step_id.startswith("/"):
+        return "it is an absolute path"
+    if "\x00" in step_id:
+        return "it contains a NUL character, which no file name can hold"
+    parts = step_id.split("/")
+    if "" in parts:
+        return "it has an empty part, from a repeated or trailing '/'"
+    if "." in parts or ".." in parts:
+        return "it has a '.' or '..' part"
+    return None
+
+
+def _caseless(step_id: str) -> str:
+    """Return the form in which step IDs differing only by case are equal.
+
+    Letter case, and how accented characters are encoded, are ignored
+    (Unicode canonical caseless matching), as a case-insensitive filesystem
+    such as macOS's default ignores them in file names.
+
+    Args:
+        step_id: The step's ID.
+
+    Returns:
+        str: The ID, case-folded and decomposed.
+    """
+    decomposed = unicodedata.normalize("NFD", step_id)
+    return unicodedata.normalize("NFD", decomposed.casefold())
 
 
 def _validate_param_binding(spec: StepSpec, fn: Any) -> None:
@@ -649,20 +700,35 @@ class Engine:
         self-dependency and every edge of a cycle satisfy "this ID exists in the
         plan", so the old existence check could never detect either.
 
+        A step ID also names the step's work directory, so it must name one of
+        its own (see :func:`_work_dir_problem`), and two IDs must not differ
+        only by letter case: a case-insensitive filesystem would give both
+        steps one directory. IDs keep their spelling; nothing is normalized.
+
         Args:
             plan: The plan to validate.
 
         Raises:
-            PreflightValidationError: If any step ID is empty or duplicated, a
-                dependency is unknown, a step depends on itself, or the graph
-                contains a cycle.
+            PreflightValidationError: If any step ID is empty, duplicated,
+                unusable as a work directory, or differs from another only by
+                letter case; a dependency is unknown; a step depends on itself;
+                or the graph contains a cycle.
         """
         by_id: dict[str, StepSpec] = {}
+        by_caseless: dict[str, str] = {}
         for position, spec in enumerate(plan.steps):
             if not spec.step_id:
                 raise PreflightValidationError(
                     f"Step at position {position} in plan '{plan.plan_id}' has an "
                     f"empty step_id. Every step needs a unique, nonempty identity."
+                )
+            problem = _work_dir_problem(spec.step_id)
+            if problem is not None:
+                raise PreflightValidationError(
+                    f"Step ID {spec.step_id!r} in plan '{plan.plan_id}' cannot name "
+                    f"a work directory of its own: {problem}. A step ID must be a "
+                    f"relative path whose '/'-separated parts are nonempty and "
+                    f"neither '.' nor '..', such as 'lane_1/process'."
                 )
             if spec.step_id in by_id:
                 raise PreflightValidationError(
@@ -670,6 +736,16 @@ class Engine:
                     f"Step IDs must be unique; dependencies cannot name one of two "
                     f"identically identified steps."
                 )
+            caseless = _caseless(spec.step_id)
+            if caseless in by_caseless:
+                raise PreflightValidationError(
+                    f"Step IDs {by_caseless[caseless]!r} and {spec.step_id!r} in "
+                    f"plan '{plan.plan_id}' differ only by letter case. A "
+                    f"case-insensitive filesystem, such as macOS's default, would "
+                    f"give both steps one work directory, so step IDs must differ "
+                    f"in more than case."
+                )
+            by_caseless[caseless] = spec.step_id
             by_id[spec.step_id] = spec
 
         for spec in plan.steps:

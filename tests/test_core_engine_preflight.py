@@ -216,6 +216,191 @@ class TestGraphValidation(PreflightTestCase):
         self.assertEqual(len(messages), 1)
 
 
+class TestStepIdsNameWorkDirectories(PreflightTestCase):
+    """A step ID names the step's work directory, so it must name one of its own.
+
+    An ID a path would normalize onto another step's directory, or resolve
+    outside the plan's, is rejected before anything runs, under either policy.
+    So is an ID that differs from another only by letter case, which a
+    case-insensitive filesystem would give the same directory. Every other ID,
+    nested or not, is accepted and keeps the work directory it always had.
+    """
+
+    POLICIES = ("fail_fast", "continue_independent")
+
+    def setUp(self):
+        super().setUp()
+        # The work root is nested in this test's temporary directory, so that
+        # an ID resolving upwards or an absolute one, were preflight ever to
+        # let it through, would still land inside that directory.
+        self.sandbox = self.work_root
+        self.work_root = self.sandbox / "outer" / "work"
+        self.engine = Engine(work_root=self.work_root, emitter=self.mock_emitter)
+        # IDs a path would normalize, resolve elsewhere, or could not hold.
+        self.unusable = (
+            str(self.sandbox / "absolute"),
+            "lane/",
+            "lane//process",
+            "lane/./process",
+            "./lane",
+            "lane/.",
+            ".",
+            "..",
+            "lane/..",
+            "lane/../other",
+            "../../escaped",
+            "lane\x00process",
+        )
+
+    def final_step(self, step_id: object) -> StepSpec:
+        """A step that would write the marker, placed after a valid step."""
+        return StepSpec(
+            step_id=step_id,  # type: ignore[arg-type]
+            name="final",
+            fn_ref=SIDE_EFFECT_REF,
+            params={"target": str(self.marker)},
+        )
+
+    def files_under(self, root: Path) -> dict[str, tuple[bytes, int]]:
+        """Every file below root, with its content and modification time."""
+        return {
+            str(path.relative_to(root)): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        }
+
+    def test_ids_a_path_would_normalize_or_resolve_are_rejected(self):
+        for step_id in self.unusable:
+            for policy in self.POLICIES:
+                with self.subTest(step_id=step_id, policy=policy):
+                    plan = self.plan(
+                        self.side_effect_spec(),
+                        self.final_step(step_id),
+                        failure_policy=policy,
+                    )
+
+                    self.assert_rejected_without_side_effects(
+                        plan,
+                        repr(step_id),
+                        "cannot name a work directory of its own",
+                        "'lane_1/process'",
+                    )
+
+    def test_an_id_that_is_not_a_string_is_rejected(self):
+        plan = self.plan(self.side_effect_spec(), self.final_step(7))
+
+        self.assert_rejected_without_side_effects(plan, "of type int")
+
+    def test_ids_differing_only_by_letter_case_are_rejected(self):
+        for first, second in (
+            ("Lane", "lane"),
+            ("lane_1/Process", "lane_1/process"),
+            ("STEP.JSON", "step.json"),
+            # The same letter, composed and decomposed.
+            ("caf\u00e9", "cafe\u0301"),
+        ):
+            for policy in self.POLICIES:
+                with self.subTest(ids=(first, second), policy=policy):
+                    plan = self.plan(
+                        self.side_effect_spec(first),
+                        self.final_step(second),
+                        failure_policy=policy,
+                    )
+
+                    self.assert_rejected_without_side_effects(
+                        plan, repr(first), repr(second), "differ only by letter case"
+                    )
+
+    def test_rejection_leaves_earlier_work_untouched(self):
+        for policy in self.POLICIES:
+            with self.subTest(policy=policy):
+                # An earlier attempt left its plan snapshot, work directories
+                # and success markers.
+                self.engine.run(
+                    self.plan(
+                        self.side_effect_spec("lane_1/process"),
+                        failure_policy=policy,
+                    )
+                )
+                # (The second policy's run reuses the first one's success.)
+                self.marker.unlink(missing_ok=True)
+                before = self.files_under(self.work_root)
+                self.assertIn("preflight_plan/plan.json", before)
+                self.assertIn(
+                    "preflight_plan/lane_1/process/success.fingerprint", before
+                )
+
+                with self.assertRaises(PreflightValidationError):
+                    self.engine.run(
+                        self.plan(
+                            self.side_effect_spec("lane_1/process"),
+                            self.final_step("lane_1/./process"),
+                            failure_policy=policy,
+                        )
+                    )
+
+                self.assertEqual(self.files_under(self.work_root), before)
+                self.assertFalse(self.marker.exists())
+
+    def test_nothing_is_written_outside_the_work_root(self):
+        for step_id in ("../../escaped", str(self.sandbox / "absolute")):
+            for policy in self.POLICIES:
+                with self.subTest(step_id=step_id, policy=policy):
+                    with self.assertRaises(PreflightValidationError):
+                        self.engine.run(
+                            self.plan(
+                                self.side_effect_spec(),
+                                self.final_step(step_id),
+                                failure_policy=policy,
+                            )
+                        )
+
+                    # Not even the work root was created.
+                    self.assertEqual(sorted(p.name for p in self.sandbox.iterdir()), [])
+
+    def test_ordinary_relative_ids_are_accepted_with_their_work_directories(self):
+        step_ids = [
+            "lane_1",
+            "lane_1/process",
+            "1.lane",
+            "a%b",
+            "lane_1/0001_step_started.json",
+            " spaced ",
+            "Lane_2",
+            "lane_3",
+            "..lane",
+            "lane..",
+            "lane\\process",
+        ]
+        for policy in self.POLICIES:
+            with self.subTest(policy=policy):
+                plan = Plan(
+                    plan_id=f"accepted_{policy}",
+                    realm="test",
+                    scope={"kind": "project", "id": "P1"},
+                    steps=[
+                        StepSpec(
+                            step_id=step_id,
+                            name=step_id,
+                            fn_ref="tests.test_core_engine_preflight:plain_step",
+                            params={},
+                        )
+                        for step_id in step_ids
+                    ],
+                    failure_policy=policy,
+                )
+
+                self.engine.run(plan)
+
+                for step_id in step_ids:
+                    work_dir = self.work_root.joinpath(
+                        plan.plan_id, *step_id.split("/")
+                    )
+                    self.assertTrue(
+                        (work_dir / "success.fingerprint").is_file(), step_id
+                    )
+
+
 class TestPolicyValidation(PreflightTestCase):
     """The plan-level failure policy is validated before anything runs."""
 
