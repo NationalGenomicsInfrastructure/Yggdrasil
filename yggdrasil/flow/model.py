@@ -13,6 +13,38 @@ class StepSpec:
     deps: list[str] = field(default_factory=list)
     scope: dict[str, Any] = field(default_factory=dict)
     inputs: dict[str, str] = field(default_factory=dict)
+    # Required output artifact paths this step produces, keyed by artifact key:
+    # absolute, or relative to the step's own work directory. The step is reused
+    # only while all of them exist (see yggdrasil.flow.outputs).
+    outputs: dict[str, str] = field(default_factory=dict)
+
+
+FAIL_FAST_POLICY = "fail_fast"
+CONTINUE_INDEPENDENT_POLICY = "continue_independent"
+VALID_FAILURE_POLICIES = frozenset({FAIL_FAST_POLICY, CONTINUE_INDEPENDENT_POLICY})
+DEFAULT_FAILURE_POLICY = FAIL_FAST_POLICY
+
+
+def validate_failure_policy(policy: str) -> None:
+    """Raise ValueError if failure_policy is invalid.
+
+    An *omitted* policy is never seen here: ``Plan.failure_policy`` defaults
+    to ``"fail_fast"`` and ``Plan.from_dict`` supplies the same default for
+    legacy documents, so omission is indistinguishable from an explicit
+    ``"fail_fast"``. An explicitly supplied unknown value is rejected rather
+    than silently downgraded.
+
+    Args:
+        policy: The failure policy to validate.
+
+    Raises:
+        ValueError: If policy is not one of VALID_FAILURE_POLICIES.
+    """
+    if policy not in VALID_FAILURE_POLICIES:
+        raise ValueError(
+            f"Invalid failure_policy: {policy!r}. "
+            f"Must be one of: {sorted(VALID_FAILURE_POLICIES)}"
+        )
 
 
 @dataclass
@@ -21,6 +53,8 @@ class Plan:
     realm: str
     scope: dict[str, Any]
     steps: list[StepSpec] = field(default_factory=list)
+    # "fail_fast" (default) or "continue_independent"; see VALID_FAILURE_POLICIES.
+    failure_policy: str = DEFAULT_FAILURE_POLICY
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -47,9 +81,11 @@ class Plan:
                     "deps": s.deps,
                     "scope": s.scope,
                     "inputs": s.inputs,
+                    "outputs": s.outputs,
                 }
                 for s in self.steps
             ],
+            "failure_policy": self.failure_policy,
         }
 
     @classmethod
@@ -69,9 +105,11 @@ class Plan:
                       proper validation)
 
         Note:
-            Missing optional fields (deps, scope, inputs) are populated with defaults
-            (empty lists/dicts) rather than raising errors. This defensive approach
-            handles partial or legacy documents gracefully.
+            Missing optional fields (deps, scope, inputs, outputs) are populated with
+            defaults (empty lists/dicts) rather than raising errors. This defensive
+            approach handles partial or legacy documents gracefully. A missing
+            failure_policy defaults to "fail_fast", so every already-persisted plan
+            document keeps exactly the stop-on-first-failure behavior it has today.
 
         Example:
             >>> plan_dict = {
@@ -102,6 +140,7 @@ class Plan:
                 deps=s.get("deps", []),
                 scope=s.get("scope", {}),
                 inputs=s.get("inputs", {}),
+                outputs=s.get("outputs", {}),
             )
             for s in data.get("steps", [])
         ]
@@ -110,6 +149,7 @@ class Plan:
             realm=data["realm"],
             scope=data.get("scope", {}),
             steps=steps,
+            failure_policy=data.get("failure_policy", DEFAULT_FAILURE_POLICY),
         )
 
 

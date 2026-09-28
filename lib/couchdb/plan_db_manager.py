@@ -13,10 +13,13 @@ from typing import Any, cast
 
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant.cloudant_v1 import Document
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import RequestException, SSLError, Timeout
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
+from lib.storage.errors import PlanStoreError, RevisionConflictError
 from lib.storage.plan_documents import (
     VALID_EXECUTION_AUTHORITIES,
     build_plan_document,
@@ -26,11 +29,23 @@ from lib.storage.plan_documents import (
     utc_now_iso,
     validate_execution_authority,
 )
+from lib.storage.plan_updates import (
+    ExecutionFinalization,
+    FinalizationResult,
+    finalize_execution,
+    initialize_plan_generation,
+)
 from yggdrasil.flow.model import Plan
 
 logger = custom_logger(__name__)
 
 __all__ = ["PlanDBManager", "VALID_EXECUTION_AUTHORITIES"]
+
+# Responses that mean "busy or restarting, ask again" rather than "this
+# request is wrong". Matches the statuses the Cloudant SDK itself treats as
+# transient, so disabling its retries does not change which failures are
+# considered worth another attempt — only who decides to make one.
+RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Backwards-compatible aliases; canonical definitions live in
 # lib/storage/plan_documents.py, shared with the SQLite backend.
@@ -48,6 +63,8 @@ class PlanDBManager(CouchDBHandler):
     - Fetching plan documents by ID
     - Querying approved pending plans (for startup recovery)
     - Updating execution tokens after successful runs
+    - Assigning a legacy plan its first generation
+    - Finalizing finished execution requests
 
     Plan Document Schema:
     {
@@ -57,8 +74,10 @@ class PlanDBManager(CouchDBHandler):
         "status": "draft" | "approved",
         "plan": { ... serialized Plan ... },
         "preview": { ... optional preview data ... },
+        "plan_generation": "<opaque ID, fresh on every save_plan>",
         "run_token": 0,
         "executed_run_token": -1,
+        "last_finalized_execution": { ... set by finalize_execution ... },
         "created_at": "ISO-8601",
         "updated_at": "ISO-8601",
         ...
@@ -75,7 +94,17 @@ class PlanDBManager(CouchDBHandler):
         db_name: str = "yggdrasil_plans",
         logger: logging.Logger | None = None,
     ) -> None:
-        """Initialize connection to the plans database."""
+        """Initialize connection to the plans database.
+
+        The client is built without the SDK's automatic retries. Every retry
+        of a plan-document write belongs to the caller that owns the attempt
+        bound, and has to refetch and recheck generation, token and authority
+        before writing again. A transport retry does neither: it would repeat
+        a PUT that the shared finalizer intends to attempt exactly once, and
+        turn a caller's bounded number of attempts into a multiple of it.
+        Reads are left to the same rule for one policy per client; the plan
+        change feed built on this handler runs its own bounded retry loop.
+        """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         params = resolve_couchdb_params(
             endpoint=endpoint,
@@ -90,6 +119,7 @@ class PlanDBManager(CouchDBHandler):
             user_env=params.user_env,
             pass_env=params.pass_env,
             logger=self._logger,
+            enable_retries=False,
         )
 
     def save_plan(
@@ -109,8 +139,12 @@ class PlanDBManager(CouchDBHandler):
         """
         Persist a plan document to the database.
 
-        Creates or overwrites the plan document. On regeneration, this resets
-        execution tokens to ensure the new plan is eligible for execution.
+        Creates or regenerates the plan document with a fresh
+        ``plan_generation``. On regeneration, this resets execution tokens to
+        ensure the new plan is eligible for execution. The write carries the
+        ``_rev`` that was read (none for a new plan), so CouchDB rejects it if
+        another writer got there first; the conflict is raised, not retried,
+        because this call's planning intent may be older than the winner's.
 
         The document ID is taken from ``plan.plan_id``, which is owned by the
         realm/planner. PlanDBManager is a generic CRUD layer and never derives
@@ -133,7 +167,9 @@ class PlanDBManager(CouchDBHandler):
 
         Raises:
             ValueError: If execution_authority is invalid or plan.plan_id is missing
-            ApiException: On database errors
+            RevisionConflictError: If another writer created or changed the plan
+                document after it was read (CouchDB 409). Nothing was written.
+            ApiException: On other database errors
         """
         # Validate inputs before touching the database
         validate_execution_authority(execution_authority)
@@ -183,6 +219,14 @@ class PlanDBManager(CouchDBHandler):
 
         except ApiException as e:
             self._logger.error("Failed to save plan '%s': %s", doc_id, e)
+            if e.status_code == 409:
+                raise RevisionConflictError(
+                    f"Cannot save plan '{doc_id}': it was "
+                    f"{'changed' if rev else 'created'} by another writer after "
+                    "it was read",
+                    doc_id=doc_id,
+                    expected_rev=rev,
+                ) from e
             raise
 
     def fetch_plan(self, doc_id: str) -> dict[str, Any] | None:
@@ -224,6 +268,9 @@ class PlanDBManager(CouchDBHandler):
 
         Uses optimistic locking (_rev) to prevent race conditions.
         Retries on conflict (409) up to max_retries times.
+
+        This update does not check the plan generation or record an outcome;
+        :meth:`finalize_execution` does both.
 
         Args:
             doc_id: The plan document ID
@@ -276,6 +323,185 @@ class PlanDBManager(CouchDBHandler):
             max_retries,
         )
         return False
+
+    def ensure_plan_generation(self, doc_id: str) -> dict[str, Any] | None:
+        """
+        Return the current plan document, giving a legacy one a generation.
+
+        See :func:`lib.storage.plan_updates.initialize_plan_generation`.
+
+        Args:
+            doc_id: The plan document ID
+
+        Returns:
+            dict or None: The current document with its ``plan_generation``,
+                or None if the plan does not exist
+
+        Raises:
+            RevisionConflictError: If the document kept changing without
+                gaining a generation
+            PlanStoreError: If CouchDB fails or cannot be reached
+        """
+        return initialize_plan_generation(
+            doc_id,
+            fetch=self._fetch_plan_document,
+            replace=self._replace_plan_document,
+            logger=self._logger,
+        )
+
+    def finalize_execution(self, request: ExecutionFinalization) -> FinalizationResult:
+        """
+        Record a finished execution request in its plan document.
+
+        See :func:`lib.storage.plan_updates.finalize_execution`. The generation,
+        token and authority checks run on every read, so a write that CouchDB
+        would accept at the current ``_rev`` is still refused on behalf of a
+        superseded request.
+
+        Args:
+            request: The finished request to record
+
+        Returns:
+            FinalizationResult: How this one attempt resolved
+
+        Raises:
+            PlanStoreError: If CouchDB fails or cannot be reached
+        """
+        return finalize_execution(
+            request,
+            fetch=self._fetch_plan_document,
+            replace=self._replace_plan_document,
+            logger=self._logger,
+        )
+
+    def _plan_store_error(
+        self, doc_id: str, action: str, exc: Exception
+    ) -> PlanStoreError:
+        """
+        Wrap a CouchDB failure as a backend-neutral plan-store error.
+
+        Only two kinds of failure are offered for retry: the responses CouchDB
+        returns while it is overloaded or restarting, and a request that timed
+        out or whose connection failed. Everything else would fail again the
+        same way — a rejected credential, a missing database, a malformed
+        request, an unusable URL or header, a redirect loop — and so would a
+        TLS failure, since certificates and handshakes do not fix themselves;
+        ``SSLError`` is a ``ConnectionError`` in Requests, so it is excluded
+        before connections are considered transient. A transport failure this
+        code does not recognize is left non-retryable too, rather than
+        assuming the most convenient explanation for it.
+
+        Args:
+            doc_id: The plan document ID
+            action: "read" or "write", for the message
+            exc: The CouchDB or transport exception to wrap
+
+        Returns:
+            PlanStoreError: Carrying the message and retry classification
+        """
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            retryable = status in RETRYABLE_STATUS_CODES
+        elif isinstance(exc, SSLError):
+            retryable = False
+        else:
+            retryable = isinstance(exc, Timeout | RequestsConnectionError)
+        return PlanStoreError(
+            f"CouchDB failed to {action} plan '{doc_id}': {exc}",
+            retryable=retryable,
+        )
+
+    def _fetch_plan_document(self, doc_id: str) -> dict[str, Any] | None:
+        """
+        Fetch a plan document for a conditional update.
+
+        Reads the document directly rather than through
+        :meth:`fetch_document_by_id`, which reports a malformed response as a
+        missing document. A conditional update must not confuse the two: a
+        missing plan tells the caller its execution request was superseded and
+        can never be recorded, which a proxy returning a non-document body is
+        no evidence of.
+
+        Args:
+            doc_id: The plan document ID
+
+        Returns:
+            dict or None: The document with ``_rev``, or None if CouchDB
+                reports it does not exist
+
+        Raises:
+            PlanStoreError: If CouchDB fails, cannot be reached, or answers
+                with something other than a document
+        """
+        try:
+            document = self.server.get_document(
+                db=self.db_name,
+                doc_id=doc_id,
+            ).get_result()
+        except ApiException as exc:
+            if exc.status_code == 404:
+                self._logger.debug(
+                    "Plan '%s' not found in database '%s'", doc_id, self.db_name
+                )
+                return None
+            raise self._plan_store_error(doc_id, "read", exc) from exc
+        except RequestException as exc:
+            raise self._plan_store_error(doc_id, "read", exc) from exc
+
+        if not isinstance(document, dict):
+            raise PlanStoreError(
+                f"CouchDB answered with {type(document).__name__} instead of a "
+                f"document for plan '{doc_id}'; the plan's existence is unknown"
+            )
+        return document
+
+    def _replace_plan_document(
+        self, doc_id: str, body: dict[str, Any], expected_rev: str
+    ) -> str:
+        """
+        Replace a plan document only if CouchDB still holds expected_rev.
+
+        Args:
+            doc_id: The plan document ID
+            body: The complete new document body
+            expected_rev: The ``_rev`` the body was derived from
+
+        Returns:
+            str: The new ``_rev``
+
+        Raises:
+            RevisionConflictError: If the document is no longer at expected_rev
+            PlanStoreError: If CouchDB fails or cannot be reached; the write
+                may or may not have been applied
+        """
+        document = dict(body)
+        document["_id"] = doc_id
+        document["_rev"] = expected_rev
+        try:
+            response = self.server.put_document(
+                db=self.db_name,
+                doc_id=doc_id,
+                document=cast(Document, json_safe(document)),
+            ).get_result()
+        except ApiException as exc:
+            if exc.status_code == 409:
+                raise RevisionConflictError(
+                    f"Cannot replace plan '{doc_id}' at revision {expected_rev}: "
+                    "it has changed since it was read",
+                    doc_id=doc_id,
+                    expected_rev=expected_rev,
+                ) from exc
+            raise self._plan_store_error(doc_id, "write", exc) from exc
+        except RequestException as exc:
+            raise self._plan_store_error(doc_id, "write", exc) from exc
+
+        new_rev = response.get("rev") if isinstance(response, dict) else None
+        if not isinstance(new_rev, str):
+            raise PlanStoreError(
+                f"CouchDB accepted the write of plan '{doc_id}' but returned no "
+                "revision"
+            )
+        return new_rev
 
     def query_approved_pending(self) -> list[dict[str, Any]]:
         """

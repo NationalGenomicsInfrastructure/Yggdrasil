@@ -1,18 +1,70 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
+import sys
+import unicodedata
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.runtime_paths import resolve_work_root
-from yggdrasil.flow.errors import PermanentStepError, TransientStepError
+from yggdrasil.core.execution_ids import (
+    AttemptReserver,
+    ExecutionIdAllocator,
+    reserve_execution_id,
+)
+from yggdrasil.core.scheduler import DependencyScheduler
+from yggdrasil.flow.attempt import AttemptContext
+from yggdrasil.flow.data_access import DataAccess, DataAccessTraceContext
+from yggdrasil.flow.errors import (
+    AttemptCancelledError,
+    EventPublicationError,
+    OrchestrationError,
+    PermanentStepError,
+    PreflightValidationError,
+    StepError,
+    TransientStepError,
+)
+from yggdrasil.flow.events.attempt_records import (
+    ATTEMPT_REPORT_EVENT,
+    ATTEMPT_STARTED_EVENT,
+    STEP_BLOCKED_EVENT,
+    SpoolAttemptDirectories,
+    SpoolAttemptHistory,
+    attempt_spool_path,
+    is_record_key,
+    record_filename,
+    step_event_filename,
+)
+from yggdrasil.flow.events.correlation import ExecutionCorrelation
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
-from yggdrasil.flow.model import Plan, StepResult, StepSpec
+from yggdrasil.flow.model import (
+    CONTINUE_INDEPENDENT_POLICY,
+    FAIL_FAST_POLICY,
+    Plan,
+    StepResult,
+    StepSpec,
+    validate_failure_policy,
+)
+from yggdrasil.flow.outcomes import (
+    AttemptDiagnostic,
+    AttemptReport,
+    StepFailure,
+    StepOutcome,
+    TerminationReason,
+)
+from yggdrasil.flow.outputs import (
+    find_missing_outputs,
+    resolve_declared_outputs,
+    validate_output_declarations,
+)
 from yggdrasil.flow.step import StepContext
 from yggdrasil.flow.utils.callable_ref import resolve_callable
 from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
@@ -20,6 +72,13 @@ from yggdrasil.flow.utils.typing_coerce import coerce_params_to_signature_types
 from yggdrasil.flow.utils.ygg_time import utcnow_compact, utcnow_iso
 
 logger = custom_logger(__name__)
+
+# The reason a step.skipped event gives: the step's earlier success was reused.
+CACHE_HIT_REASON = "cache_hit"
+
+# File in a step's work directory recording the fingerprint of its last
+# successful execution; what makes that success reusable.
+SUCCESS_MARKER = "success.fingerprint"
 
 
 # ------------ Utilities ------------
@@ -37,6 +96,54 @@ def _short(h: str, n: int = 4) -> str:
 
 def _new_run_id() -> str:
     return f"run_{utcnow_compact()}_{uuid.uuid4().hex[:6]}"
+
+
+def _step_failure(step_id: str, exc: Exception) -> StepFailure:
+    """Describe a contained step failure the way the step wrapper reports it.
+
+    Mirrors the ``step.failed`` payload: a StepError carries its kind, code and
+    advice, and any other exception counts as permanent. The exception class is
+    kept as well, because ``str(exc)`` alone often loses it.
+
+    Args:
+        step_id: The step that failed.
+        exc: The exception it failed with.
+
+    Returns:
+        StepFailure: The failure detail for the attempt report.
+    """
+    if isinstance(exc, StepError):
+        return StepFailure(
+            step_id=step_id,
+            error=str(exc),
+            kind="transient" if isinstance(exc, TransientStepError) else "permanent",
+            code=exc.code,
+            advice=exc.advice,
+            error_type=type(exc).__name__,
+        )
+    return StepFailure(step_id=step_id, error=str(exc), error_type=type(exc).__name__)
+
+
+def _unplanned_stop_reason(exc: BaseException) -> TerminationReason:
+    """Classify an attempt exit that no deliberate early exit accounted for.
+
+    Preflight rejection, cancellation and fail-fast termination each name their
+    own reason before raising, so anything reaching this function was not one of
+    them. An Exception here is infrastructure failing, or an engine defect
+    outside any step's failure containment; either way the attempt could not be
+    carried out reliably. Anything that is not an Exception - KeyboardInterrupt,
+    SystemExit - is an external interruption.
+
+    Args:
+        exc: The exception ending the attempt.
+
+    Returns:
+        TerminationReason: ORCHESTRATION_ERROR for an Exception, CANCELLED for
+        any other BaseException.
+    """
+    if isinstance(exc, Exception):
+        return TerminationReason.ORCHESTRATION_ERROR
+    return TerminationReason.CANCELLED
 
 
 def _looks_like_path(v: Any) -> bool:
@@ -57,15 +164,310 @@ def _lint_missing_inputs(spec: StepSpec, fn: Any) -> None:
         )
 
 
+# Sentinel bound in place of the StepContext when checking that a step's params
+# match its signature. Never called, never passed to author code.
+_CTX_PLACEHOLDER = object()
+
+
+@contextmanager
+def _orchestration_boundary(
+    description: str, *, error_type: type[OrchestrationError] = OrchestrationError
+) -> Iterator[None]:
+    """Classify failures of engine-owned bookkeeping as OrchestrationError.
+
+    Wraps operations on Yggdrasil's own state — the plan file, step
+    directories, cache markers, event publication — so that when they fail the
+    attempt aborts instead of the failure being contained as a realm's ordinary
+    step failure. Deliberately not used around author code: a realm's own file
+    or DataAccess error is not systemic merely because it is an OSError.
+
+    Args:
+        description: What was being attempted, for the error message.
+        error_type: The OrchestrationError type to raise; EventPublicationError
+            when the wrapped operation is event publication.
+
+    Yields:
+        None: Control to the wrapped operation.
+
+    Raises:
+        OrchestrationError: If the wrapped operation fails, as ``error_type``.
+            An exception that already is ``error_type`` is re-raised unchanged,
+            so nested boundaries do not wrap the same failure twice. Any other
+            exception is wrapped, including a broader OrchestrationError: an
+            emitter that raises a plain OrchestrationError has still failed to
+            publish, and must surface as an EventPublicationError so the engine
+            stops reporting through it.
+    """
+    try:
+        yield
+    except error_type:
+        raise
+    except Exception as exc:
+        raise error_type(f"{description}: {exc}") from exc
+
+
+def _find_cycle(steps: list[StepSpec]) -> list[str] | None:
+    """Return one dependency cycle, or None if the graph is acyclic.
+
+    Iterative depth-first search that visits steps and their dependencies in
+    original plan order, so the cycle reported for a given plan is always the
+    same one — an operator comparing two runs sees a stable diagnostic.
+
+    Args:
+        steps: The plan's steps, in plan order.
+
+    Returns:
+        list[str] | None: The cycle as a path whose first and last entries are
+        the same step ID, or None when no cycle exists.
+    """
+    deps_by_id = {spec.step_id: spec.deps for spec in steps}
+    # 0 = unvisited, 1 = on the current path, 2 = fully explored
+    state: dict[str, int] = {}
+
+    for root in deps_by_id:
+        if state.get(root, 0) != 0:
+            continue
+        # Each frame is (step_id, iterator over its remaining dependencies).
+        stack: list[tuple[str, Iterator[str]]] = [(root, iter(deps_by_id[root]))]
+        path: list[str] = [root]
+        state[root] = 1
+
+        while stack:
+            node, remaining = stack[-1]
+            advanced = False
+            for dep in remaining:
+                if dep not in deps_by_id:
+                    continue  # unknown deps are reported separately
+                if state.get(dep, 0) == 1:
+                    return path[path.index(dep) :] + [dep]
+                if state.get(dep, 0) == 0:
+                    state[dep] = 1
+                    path.append(dep)
+                    stack.append((dep, iter(deps_by_id[dep])))
+                    advanced = True
+                    break
+            if not advanced:
+                state[node] = 2
+                path.pop()
+                stack.pop()
+
+    return None
+
+
+def _work_dir_problem(step_id: str) -> str | None:
+    """Say why a step ID cannot name a work directory of its own, if it cannot.
+
+    A step's work directory is ``<work_root>/<plan_id>/<step_id>``, each
+    ``/``-separated part of the ID one directory level. The raw ID is checked,
+    because converting it to a path first would erase the evidence: a path
+    drops empty and ``.`` parts, so ``lane/./process`` or ``lane//process``
+    would silently share ``lane/process``'s work directory and be reused from
+    its success marker, while ``..`` parts or an absolute ID would put the
+    directory outside the plan's, even outside the work root. Nested IDs such
+    as ``lane_1/process`` and every other character stay valid, and accepted
+    IDs keep the work directories they always had.
+
+    Args:
+        step_id: The step's ID.
+
+    Returns:
+        str | None: What is wrong with it; None if it is usable.
+    """
+    if step_id.startswith("/"):
+        return "it is an absolute path"
+    if "\x00" in step_id:
+        return "it contains a NUL character, which no file name can hold"
+    parts = step_id.split("/")
+    if "" in parts:
+        return "it has an empty part, from a repeated or trailing '/'"
+    if "." in parts or ".." in parts:
+        return "it has a '.' or '..' part"
+    return None
+
+
+def _caseless(step_id: str) -> str:
+    """Return the form in which step IDs a filesystem may not tell apart are equal.
+
+    Letter case and Unicode normalization, i.e. how accented characters are
+    encoded, are ignored (Unicode canonical caseless matching), as a
+    case-insensitive filesystem such as macOS's default ignores them in file
+    names. Used only to compare IDs; IDs keep their original spelling.
+
+    Args:
+        step_id: The step's ID.
+
+    Returns:
+        str: The ID, case-folded and decomposed.
+    """
+    decomposed = unicodedata.normalize("NFD", step_id)
+    return unicodedata.normalize("NFD", decomposed.casefold())
+
+
+def _validate_param_binding(spec: StepSpec, fn: Any) -> None:
+    """Reject params that cannot bind to a step's signature.
+
+    Catches missing required arguments and unexpected keywords without invoking
+    the step body, so a malformed later step cannot be discovered only after
+    earlier steps have already run. Best effort: a signature that cannot be
+    introspected is skipped rather than rejected, and binding checks names, not
+    types.
+
+    Args:
+        spec: The step whose params are checked.
+        fn: The resolved step callable.
+
+    Raises:
+        PreflightValidationError: If spec.params cannot bind to fn's signature.
+    """
+    try:
+        # functools.wraps sets __wrapped__, so this is the real step signature,
+        # not the decorator's (ctx, **kwargs).
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        # Not introspectable (builtins, some C callables). Leave it to call time
+        # rather than rejecting a plan we cannot actually prove is malformed.
+        return
+
+    try:
+        signature.bind(_CTX_PLACEHOLDER, **spec.params)
+    except TypeError as exc:
+        raise PreflightValidationError(
+            f"Params for step '{spec.step_id}' do not match "
+            f"'{spec.fn_ref}'{signature}: {exc}"
+        ) from exc
+
+
+def _parse_fn_ref(fn_ref: str) -> tuple[str, str] | None:
+    """Split a step reference into (module, attribute) without importing it.
+
+    Mirrors the two syntaxes ``resolve_callable`` accepts, so the module name
+    used for diagnosis is the one that will actually be imported: "pkg.mod:fn"
+    imports "pkg.mod", and "pkg.mod.fn" also imports "pkg.mod".
+
+    Args:
+        fn_ref: The step's function reference.
+
+    Returns:
+        tuple[str, str] | None: (module_name, attribute), or None when fn_ref is
+        not a usable reference at all.
+    """
+    if ":" in fn_ref:
+        module_name, attribute = fn_ref.split(":", 1)
+    elif "." in fn_ref:
+        module_name, attribute = fn_ref.rsplit(".", 1)
+    else:
+        return None
+    if not module_name or not attribute:
+        return None
+    return module_name, attribute
+
+
+def _resolve_step_callable(spec: StepSpec) -> Callable[..., Any]:
+    """Resolve one step's callable, distinguishing defects from infrastructure.
+
+    Only a *confirmed* defect in the reference becomes a preflight rejection.
+    Resolving a reference imports a module, and importing runs arbitrary code:
+    a module that raises while initializing is a broken environment, not a
+    malformed plan. Getting that wrong is costly rather than merely untidy,
+    because a preflight rejection is definitive and would retire an execution
+    request that a later attempt could have completed.
+
+    The three stages are therefore diagnosed separately, and each needs its own
+    positive evidence:
+
+    1. Reference syntax, checked here before anything is imported.
+    2. Module import - a plan defect only when the missing module is the one
+       the reference names, never when some dependency of a real module is
+       missing.
+    3. Attribute lookup - a plan defect only once the module has actually
+       imported. An exception raised *during* import leaves no module behind in
+       sys.modules, which is what separates the two cases.
+
+    Anything else, and every ambiguous case, stays nonterminal.
+
+    Args:
+        spec: The step whose fn_ref is resolved.
+
+    Returns:
+        Callable: The resolved step function.
+
+    Raises:
+        PreflightValidationError: If fn_ref is not a usable reference, names a
+            module that does not exist, or names an attribute that an
+            otherwise-importable module does not define.
+        OrchestrationError: If resolution fails for any other reason, including
+            any failure raised while importing a real module.
+    """
+    if not isinstance(spec.fn_ref, str):
+        raise PreflightValidationError(
+            f"Malformed fn_ref for step '{spec.step_id}': expected a "
+            f"'module:function' string, got {type(spec.fn_ref).__name__}."
+        )
+
+    parsed = _parse_fn_ref(spec.fn_ref)
+    if parsed is None:
+        raise PreflightValidationError(
+            f"Malformed fn_ref for step '{spec.step_id}': {spec.fn_ref!r} "
+            f"is not a 'module:function' or 'module.function' reference."
+        )
+    module_name, attribute = parsed
+
+    try:
+        return resolve_callable(spec.fn_ref)
+    except ModuleNotFoundError as exc:
+        # exc.name is the module that could not be found. It is the reference's
+        # own module (or a package prefix of it) when the reference is wrong,
+        # and some other module when a real module has a broken dependency.
+        missing = exc.name or ""
+        if missing and (
+            module_name == missing or module_name.startswith(f"{missing}.")
+        ):
+            raise PreflightValidationError(
+                f"Unresolvable fn_ref for step '{spec.step_id}': "
+                f"'{spec.fn_ref}' names module '{missing}', which does not exist."
+            ) from exc
+        # Includes a missing exc.name: no evidence, so keep it nonterminal.
+        raise OrchestrationError(
+            f"Importing the module for step '{spec.step_id}' "
+            f"(fn_ref='{spec.fn_ref}') failed: {exc}"
+        ) from exc
+    except AttributeError as exc:
+        if module_name in sys.modules:
+            # The module imported, so this came from the attribute lookup.
+            raise PreflightValidationError(
+                f"Unresolvable fn_ref for step '{spec.step_id}': module "
+                f"'{module_name}' does not define '{attribute}'."
+            ) from exc
+        # Raised while the module was initializing: a broken environment.
+        raise OrchestrationError(
+            f"Importing the module for step '{spec.step_id}' "
+            f"(fn_ref='{spec.fn_ref}') failed: {exc!r}"
+        ) from exc
+    except Exception as exc:
+        raise OrchestrationError(
+            f"Resolving the callable for step '{spec.step_id}' "
+            f"(fn_ref='{spec.fn_ref}') failed: {exc!r}"
+        ) from exc
+
+
 def _default_fingerprint(spec: StepSpec, fn: Any) -> str:
     """
-    Fingerprint = sha256(JSON of params + digests of declared inputs).
+    Fingerprint = sha256(JSON of params + digests of declared inputs
+    + declared outputs, when there are any).
     Inputs are either:
       - spec.inputs (planner-provided), or
       - fn._input_keys taken from params (decorator-declared), or
       - none (params-only fallback).
+
+    Output declarations are hashed as written, not resolved, so changing a
+    step's declared output contract invalidates that step's own reuse. They are
+    added only when present: hashing an empty mapping would change the
+    fingerprint of every step that declares no outputs, invalidating every
+    existing success marker for no behavioral reason.
     """
     enriched: dict[str, Any] = {"params": spec.params}
+    if spec.outputs:
+        enriched["outputs"] = spec.outputs
 
     # (a) planner-provided inputs
     declared: dict[str, str] = dict(spec.inputs)
@@ -93,16 +495,68 @@ def _default_fingerprint(spec: StepSpec, fn: Any) -> str:
     return f"sha256:{_json_sha256(enriched)}"
 
 
+def _replace_marker(marker: Path, fingerprint: str) -> None:
+    """Replace a step's success marker atomically.
+
+    The fingerprint is written to a uniquely named temporary file beside the
+    marker, which ``os.replace`` then renames over it: atomic on POSIX for a
+    single writer within one filesystem. A reader, or a process that crashes
+    part-way, sees either the previous state or the complete new marker, never a
+    partial one. On failure the temporary file is removed and the previous state
+    is left as it was.
+
+    Nothing is fsynced, so neither this replacement nor the invalidation that
+    precedes a step's execution is durable across power loss or filesystem
+    failure, and nothing attempts to roll back after one. The temporary file is
+    created through ``open`` rather than ``tempfile``, so the marker keeps the
+    umask-derived permissions it always had.
+
+    Args:
+        marker: The marker path.
+        fingerprint: The fingerprint the marker records.
+
+    Raises:
+        OSError: If the temporary file cannot be written or renamed into place.
+    """
+    temporary = marker.with_name(f".{marker.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(temporary, "x", encoding="utf-8") as handle:
+            handle.write(fingerprint)
+        os.replace(temporary, marker)
+    except BaseException:
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
+        raise
+
+
 # ------------ Engine ------------
 
 
 class Engine:
     """
-    Minimal sequential executor with:
+    Sequential, dependency-driven plan executor with:
+    - whole-plan preflight before any side effect
+    - dependency scheduling: a step starts only once every step it depends on
+      has succeeded or been reused, earliest in plan order first
+    - failure policies: ``fail_fast`` stops at the first step failure;
+      ``continue_independent`` blocks only the steps that depend on it
     - plan dir + plan.json
     - per-step workdir
-    - fingerprint + cache skip (file-based)
-    - event spool emission via StepContext (handled by @step decorator)
+    - fingerprint + cache skip (file-based): a ready step is reused only when
+      its success marker matches its fingerprint and every declared output
+      exists; otherwise its marker is invalidated before it runs again, and
+      replaced atomically once it succeeds
+    - event spool emission via StepContext (handled by @step decorator), plus
+      the engine's own records of each attempt: when it started, which steps
+      a failure blocked, and how it ended. Every event of an attempt carries
+      the attempt's execution ID, allocated by :attr:`execution_ids` and
+      reserved through :attr:`attempt_reserver`, and a file spool keeps each
+      attempt's events in that attempt's own directory.
+
+    An Engine is long-lived and shared across plans, so it holds no attempt
+    state: each attempt's outcomes live in its AttemptContext and a scheduler
+    built for that attempt alone. What its attempts share is the execution-ID
+    allocator, which orders them, and the reserver, which keeps them apart.
     """
 
     def __init__(
@@ -110,12 +564,92 @@ class Engine:
         work_root: str | Path | None = None,
         emitter: EventEmitter | None = None,
         logger: logging.Logger | None = None,
+        execution_ids: ExecutionIdAllocator | None = None,
+        attempt_reserver: AttemptReserver | None = None,
     ):
+        """Initialize the engine.
+
+        Args:
+            work_root: Root of the plan and step work directories; resolved
+                from ``$YGG_WORK_ROOT`` or the mode default when omitted.
+            emitter: Where events are published; a FileSpoolEmitter on the
+                resolved event spool when omitted.
+            logger: Logger; a class logger is created when omitted.
+            execution_ids: Allocates each attempt's execution ID. When omitted,
+                an allocator is built that reads back the attempts recorded in
+                the emitter's spool, if the emitter is a FileSpoolEmitter, and
+                keeps ordering within this engine only for any other emitter.
+                It never looks for a spool the emitter does not write to. Pass
+                one explicitly to choose its history, or to control its clock.
+            attempt_reserver: Claims each new attempt's execution ID before the
+                attempt publishes anything. When omitted, a FileSpoolEmitter's
+                own spool is used, whatever allocator was passed, so a file
+                spool always keeps its attempts apart; any other emitter gets
+                none, and nothing is reserved. Pass one explicitly to reserve
+                in a spool the emitter reaches indirectly, such as one inside
+                a TeeEmitter.
+        """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         # Default resolution ($YGG_WORK_ROOT → mode default) is centralized
         # in lib.core_utils.runtime_paths.
         self.work_root = Path(work_root) if work_root else resolve_work_root()
         self.emitter = emitter or FileSpoolEmitter()
+        spool = (
+            self.emitter.root if isinstance(self.emitter, FileSpoolEmitter) else None
+        )
+        if execution_ids is None:
+            execution_ids = ExecutionIdAllocator(
+                SpoolAttemptHistory(spool) if spool is not None else None
+            )
+        self.execution_ids = execution_ids
+        if attempt_reserver is None and spool is not None:
+            attempt_reserver = SpoolAttemptDirectories(spool)
+        self.attempt_reserver = attempt_reserver
+
+    def reserve_execution_id(self, plan: Plan) -> tuple[str, bool]:
+        """Allocate and reserve the execution ID of a new attempt at a plan.
+
+        The one way an attempt's ID is chosen, shared by :meth:`run` and the
+        operational callers, so every attempt is both ordered by
+        :attr:`execution_ids` and reserved through :attr:`attempt_reserver`,
+        exactly once. Blocks on the plan's history and on the reservation:
+        call it off the event loop.
+
+        Args:
+            plan: The plan about to be attempted.
+
+        Returns:
+            tuple[str, bool]: The execution ID, and whether it was reserved;
+            False only when this engine has no reserver.
+
+        Raises:
+            ReservationExhaustedError: If every candidate ID was already taken.
+            Exception: Whatever reading the history or reserving raised.
+        """
+        return reserve_execution_id(
+            self.execution_ids, self.attempt_reserver, plan.realm, plan.plan_id
+        )
+
+    def _emit_engine_event(self, description: str, event: dict[str, Any]) -> None:
+        """Publish an engine-level event directly, classifying failure.
+
+        Some engine events have no StepContext to route through — the attempt
+        records, the cache-hit skip, the blocked-step record and the
+        retry-unimplemented diagnostic are emitted from the engine itself. They
+        are the same reporting infrastructure as ctx.emit() and get the same
+        classification.
+
+        Args:
+            description: What was being published, for the error message.
+            event: The event payload.
+
+        Raises:
+            EventPublicationError: If the emitter fails to publish.
+        """
+        with _orchestration_boundary(
+            f"Publishing {description}", error_type=EventPublicationError
+        ):
+            self.emitter.emit(event)
 
     def _scope_dir(self, plan_dir: Path) -> Path:
         return plan_dir.parent
@@ -127,84 +661,765 @@ class Engine:
         return plan_dir / spec.step_id
 
     def _write_plan_file(self, plan: Plan, plan_dir: Path) -> None:
-        plan_dir.mkdir(parents=True, exist_ok=True)
-        (plan_dir / "plan.json").write_text(
-            json.dumps(
-                {
-                    "plan_id": plan.plan_id,
-                    "realm": plan.realm,
-                    "scope": plan.scope,
-                    "steps": [spec.__dict__ for spec in plan.steps],
-                },
-                indent=2,
-                sort_keys=True,
-                default=str,
+        """Write the plan snapshot into the plan directory.
+
+        Args:
+            plan: The plan being executed.
+            plan_dir: Directory for this plan's execution state.
+
+        Raises:
+            OrchestrationError: If the snapshot cannot be written.
+        """
+        with _orchestration_boundary(f"Writing plan.json for plan '{plan.plan_id}'"):
+            plan_dir.mkdir(parents=True, exist_ok=True)
+            (plan_dir / "plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_id": plan.plan_id,
+                        "realm": plan.realm,
+                        "scope": plan.scope,
+                        "steps": [spec.__dict__ for spec in plan.steps],
+                        "failure_policy": plan.failure_policy,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                    default=str,
+                )
             )
-        )
 
     def _topo_validate(self, plan: Plan) -> None:
-        seen: set[str] = set()
-        by_id: dict[str, StepSpec] = {s.step_id: s for s in plan.steps}
-        for spec in plan.steps:
-            missing = [d for d in spec.deps if d not in seen and d not in by_id]
-            if missing:
-                raise ValueError(f"Unknown deps in {spec.step_id}: {missing}")
-            # only enforce order weakly: deps must appear somewhere in plan
-            seen.add(spec.step_id)
+        """Validate the plan's dependency graph.
 
-    def run(self, plan: Plan) -> None:
-        plan_dir = self._plan_dir(plan)
-        self._write_plan_file(plan, plan_dir)
+        Checks step identity, dependency references, and acyclicity. Forward
+        references stay valid: the engine schedules a valid graph rather than
+        requiring the serialized list to be topologically sorted.
+
+        Each of these was unenforceable before. Duplicate IDs were silently
+        collapsed by a dict comprehension that kept the last one; a
+        self-dependency and every edge of a cycle satisfy "this ID exists in the
+        plan", so the old existence check could never detect either.
+
+        A step ID must be a nonempty string. It also names the step's work
+        directory, so it must name one of its own (see
+        :func:`_work_dir_problem`), and step IDs must remain distinct when
+        letter case and Unicode normalization are ignored: a case-insensitive
+        filesystem would give two IDs that are not one directory. Accepted IDs
+        retain their original spelling; nothing is normalized.
+
+        Args:
+            plan: The plan to validate.
+
+        Raises:
+            PreflightValidationError: If any step ID is not a string, is
+                empty, is duplicated, is unusable as a work directory, or is not
+                distinct from another when letter case and Unicode normalization
+                are ignored; a dependency is unknown; a step depends on itself;
+                or the graph contains a cycle.
+        """
+        by_id: dict[str, StepSpec] = {}
+        by_caseless: dict[str, str] = {}
+        for position, spec in enumerate(plan.steps):
+            # A plan read from a malformed document can carry anything here,
+            # and nothing below may use it before it is known to be a string.
+            if not isinstance(spec.step_id, str):
+                raise PreflightValidationError(
+                    f"Step at position {position} in plan '{plan.plan_id}' has a "
+                    f"step_id of type {type(spec.step_id).__name__}, not a "
+                    f"string: {spec.step_id!r}. Every step needs a unique, "
+                    f"nonempty string identity."
+                )
+            if not spec.step_id:
+                raise PreflightValidationError(
+                    f"Step at position {position} in plan '{plan.plan_id}' has an "
+                    f"empty step_id. Every step needs a unique, nonempty identity."
+                )
+            problem = _work_dir_problem(spec.step_id)
+            if problem is not None:
+                raise PreflightValidationError(
+                    f"Step ID {spec.step_id!r} in plan '{plan.plan_id}' cannot name "
+                    f"a work directory of its own: {problem}. A step ID must be a "
+                    f"relative path whose '/'-separated parts are nonempty and "
+                    f"neither '.' nor '..', such as 'lane_1/process'."
+                )
+            if spec.step_id in by_id:
+                raise PreflightValidationError(
+                    f"Duplicate step_id '{spec.step_id}' in plan '{plan.plan_id}'. "
+                    f"Step IDs must be unique; dependencies cannot name one of two "
+                    f"identically identified steps."
+                )
+            caseless = _caseless(spec.step_id)
+            if caseless in by_caseless:
+                # ascii() shows how two IDs that may look alike differ.
+                raise PreflightValidationError(
+                    f"Step IDs {ascii(by_caseless[caseless])} and "
+                    f"{ascii(spec.step_id)} in plan '{plan.plan_id}' are the same "
+                    f"when letter case and "
+                    f"Unicode normalization are ignored, so a case-insensitive "
+                    f"filesystem, such as macOS's default, would give both steps "
+                    f"one work directory. Step IDs must remain distinct when "
+                    f"letter case and Unicode normalization are ignored."
+                )
+            by_caseless[caseless] = spec.step_id
+            by_id[spec.step_id] = spec
+
+        for spec in plan.steps:
+            missing = [d for d in spec.deps if d not in by_id]
+            if missing:
+                raise PreflightValidationError(
+                    f"Unknown deps in {spec.step_id}: {missing}"
+                )
+            if spec.step_id in spec.deps:
+                raise PreflightValidationError(
+                    f"Self-dependency in {spec.step_id}: a step cannot require its "
+                    f"own success as a prerequisite."
+                )
+
+        cycle = _find_cycle(plan.steps)
+        if cycle:
+            raise PreflightValidationError(
+                f"Dependency cycle in plan '{plan.plan_id}': "
+                f"{' -> '.join(cycle)}. No step in a cycle can ever become runnable."
+            )
+
+    def _preflight(self, plan: Plan) -> dict[str, Callable[..., Any]]:
+        """Validate the whole plan before any step's side effects begin.
+
+        Runs graph validation, policy validation, output-declaration validation,
+        and callable resolution/registration/binding as one pass, so that every
+        structural problem is found before the first step runs. Callable resolution used to
+        happen per step, interleaved with execution, which meant a bad reference
+        on the *last* step was discovered only after every earlier step had
+        already run.
+
+        Resolved callables are returned rather than re-resolved during execution:
+        resolution is the engine's single lookup of each step's function.
+
+        Args:
+            plan: The plan about to be executed.
+
+        Returns:
+            dict[str, Callable]: Resolved step callables, keyed by step ID.
+
+        Raises:
+            PreflightValidationError: If the plan is structurally invalid, its
+                failure policy is unknown, a step's output declarations are
+                malformed, or a step's callable is unresolvable, non-callable,
+                undecorated, or cannot bind its params.
+            OrchestrationError: If resolving a callable fails for a reason that
+                is not a defect of the plan, such as a real module raising while
+                being imported.
+        """
         self._topo_validate(plan)
 
-        for spec in plan.steps:
-            step_dir = self._step_dir(plan_dir, spec)
-            step_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            validate_failure_policy(plan.failure_policy)
+        except ValueError as exc:
+            raise PreflightValidationError(f"Plan '{plan.plan_id}': {exc}") from exc
 
-            fn = resolve_callable(spec.fn_ref)
+        resolved: dict[str, Callable[..., Any]] = {}
+        for spec in plan.steps:
+            try:
+                validate_output_declarations(spec.outputs)
+            except ValueError as exc:
+                raise PreflightValidationError(
+                    f"Malformed outputs for step '{spec.step_id}' in plan "
+                    f"'{plan.plan_id}': {exc}"
+                ) from exc
+            fn = _resolve_step_callable(spec)
+            if not callable(fn):
+                raise PreflightValidationError(
+                    f"Step '{spec.step_id}' resolves to a non-callable "
+                    f"{type(fn).__name__} (fn_ref='{spec.fn_ref}'). Carrying step "
+                    f"metadata does not make an object executable."
+                )
             if not hasattr(fn, "_step_name"):
-                raise ValueError(
+                raise PreflightValidationError(
                     f"Undecorated step function detected for step '{spec.step_id}' "
                     f"(fn_ref='{spec.fn_ref}'). "
                     f"Decorate it with '@step' from 'yggdrasil.flow.step'."
                 )
-            _lint_missing_inputs(spec, fn)
+            _validate_param_binding(spec, fn)
+            resolved[spec.step_id] = fn
+        return resolved
 
-            run_id = _new_run_id()
+    def run(self, plan: Plan) -> AttemptReport | None:
+        """Execute a plan's steps in dependency order.
 
-            # compute fingerprint and check cache // pass fn so we can read _input_keys
-            fingerprint = _default_fingerprint(spec, fn)
-            fp_file = step_dir / "success.fingerprint"
+        Preflight runs before anything is written to the work root, so a
+        rejected plan leaves existing plan snapshots, artifacts and cache
+        markers untouched. The attempt is still recorded in the event spool.
 
-            if fp_file.exists() and fp_file.read_text().strip() == fingerprint:
-                # emit a 'skipped' event
-                self.emitter.emit(
-                    {
-                        "type": "step.skipped",
-                        "realm": plan.realm,
-                        "scope": plan.scope,
-                        "plan_id": plan.plan_id,
-                        "step_id": spec.step_id,
-                        "step_name": spec.name,
-                        "fingerprint": fingerprint,
-                        "seq": 1,
-                        "eid": str(uuid.uuid4()),
-                        "ts": utcnow_iso(),
-                        "_spool_path": {
-                            "realm": plan.realm,
-                            "plan_id": plan.plan_id,
-                            "step_id": spec.step_id,
-                            "run_id": run_id,
-                            "filename": "0001_step_skipped.json",
-                        },
-                    }
-                )
-                continue
+        The attempt's execution ID comes from :meth:`reserve_execution_id`,
+        the helper operational callers use too, so an attempt started here is
+        ordered against every other attempt at the plan and never shares its
+        directory with one. Allocating and reserving it reads the plan's
+        attempt history and creates the attempt's directory, which blocks.
 
-            # build context and call the step function
-            from yggdrasil.flow.data_access import DataAccess, DataAccessTraceContext
+        The return contract depends on the plan's failure policy. Static typing
+        cannot express that, so it is dispatched at runtime:
 
-            trace_ctx = DataAccessTraceContext(
+        - ``fail_fast``: returns None on success and raises on the first step
+          failure, exactly as before failure policies existed.
+        - ``continue_independent``: runs everything whose prerequisites
+          succeeded and returns the drained report. Its outcome may well be
+          failed — a returned report is not in itself a successful execution.
+
+        Callers that need the report under both policies, or after an attempt
+        that raised, use :meth:`_run_attempt` with a context of their own.
+
+        Args:
+            plan: The plan to execute.
+
+        Returns:
+            AttemptReport | None: The drained report for a
+            ``continue_independent`` plan; None for a successful ``fail_fast``
+            plan.
+
+        Raises:
+            PreflightValidationError: If the plan is rejected by preflight.
+            OrchestrationError: If engine bookkeeping or event publication
+                fails, or no execution ID can be allocated and reserved. In the
+                last case no attempt starts, and nothing is published.
+            StepError: If a step fails under ``fail_fast``. A TransientStepError
+                surfaces as a PermanentStepError, because retries are not
+                implemented.
+            Exception: Any other exception a step raised under ``fail_fast``,
+                unchanged.
+        """
+        with _orchestration_boundary(
+            f"Allocating an execution ID for plan '{plan.plan_id}'"
+        ):
+            execution_id, reserved = self.reserve_execution_id(plan)
+        context = AttemptContext.for_plan(
+            plan, execution_id=execution_id, execution_id_reserved=reserved
+        )
+        report = self._run_attempt(plan, context=context)
+        if report.failure_policy == CONTINUE_INDEPENDENT_POLICY:
+            return report
+        return None
+
+    def _run_attempt(self, plan: Plan, *, context: AttemptContext) -> AttemptReport:
+        """Run one execution attempt, recording what happens into its context.
+
+        The one scheduler and the one exit path for both failure policies. The
+        policy changes only the response to an ordinary step failure: under
+        ``fail_fast`` the attempt stops; under ``continue_independent`` the
+        failure is recorded, every step depending on it is blocked, and all
+        other runnable work continues.
+
+        A normal return means the attempt drained: every planned step reached a
+        terminal outcome. Every other ending raises, but only after the report
+        in ``context`` has been closed with the outcomes determined so far, the
+        diagnostics, and a termination reason that tells the endings apart — and
+        after that report has been published. The caller therefore holds a
+        readable report whichever way the attempt ends. Publishing the report
+        never consumes an execution request; that decision belongs to the caller.
+
+        Cancellation is cooperative: it is checked only between steps, and only
+        while runnable work remains, so it never interrupts a running step and a
+        signal arriving after the last step does not undo a drained attempt.
+
+        Before anything else, the attempt's execution ID is reserved if its
+        context says it is not yet: a caller that built the context with an ID
+        of its own gets it claimed here, exclusively, and never renamed. An ID
+        already taken is refused, so no attempt writes into another's records.
+
+        What the attempt publishes, in order, all stamped with its correlation:
+
+        1. ``plan.attempt_started``, before preflight and before any step runs:
+           the attempt's identity and planned step inventory. An attempt that
+           runs no step at all — rejected, or with no steps — is still visible:
+           the record is what makes a reader treat the attempt as observed.
+        2. Each step's own events, as it is reused or executed.
+        3. One ``step.blocked`` per step a failure blocks, published as soon
+           as the scheduler blocks it and before another step starts, with the
+           blockers known at that moment. A later failure can add blockers to a
+           step already blocked; that is recorded only in the report, never by
+           a second ``step.blocked``.
+        4. ``plan.attempt_report``, once, on the way out: the closed report,
+           whose blocker diagnostics are the complete, authoritative ones.
+
+        Args:
+            plan: The plan to execute.
+            context: A fresh context opened for ``plan``, used by no other attempt.
+
+        Returns:
+            AttemptReport: The drained report, ``context.report``. Its outcome is
+            failed if any step failed or was blocked.
+
+        Raises:
+            PreflightValidationError: If preflight rejects the plan
+                (PREFLIGHT_REJECTED).
+            AttemptCancelledError: If cancellation was signaled while runnable
+                work remained (CANCELLED).
+            OrchestrationError: If infrastructure failed or a scheduler invariant
+                was violated (ORCHESTRATION_ERROR); or if ``context`` does not
+                belong to a fresh attempt at ``plan``, or its execution ID
+                cannot be reserved, in which case the report is left untouched
+                and nothing runs or is published.
+            EventPublicationError: If publishing the report itself failed. The
+                report then says ORCHESTRATION_ERROR, with the ending it was
+                closed with kept as context (see
+                :meth:`AttemptReport.record_publication_failure`). When the
+                attempt was already ending with an exception, that exception is
+                named in the message and kept in the chain.
+            StepError: Under ``fail_fast``, the first step failure (FAILED_FAST).
+                A TransientStepError surfaces as a PermanentStepError.
+            Exception: Under ``fail_fast``, any other first step failure,
+                unchanged (FAILED_FAST).
+            BaseException: An interruption such as KeyboardInterrupt, unchanged
+                (CANCELLED).
+
+        A cancelled attempt — cooperatively or by interruption — always
+        propagates its cancellation, even if publishing its report also failed.
+        That failure is then recorded in the report and attached to the
+        exception as a note, and the report stays CANCELLED, so the report and
+        the exception never disagree about how the attempt ended.
+        """
+        self._check_attempt_context(plan, context)
+        self._reserve_given_execution_id(plan, context)
+        report = context.report
+        correlation = context.correlation
+        scheduler: DependencyScheduler | None = None
+        # Set immediately before each deliberate early exit. An exception that
+        # escapes with this still unset is an unplanned abort.
+        stop_reason: TerminationReason | None = None
+
+        try:
+            self._publish_attempt_started(plan, context)
+            try:
+                resolved = self._preflight(plan)
+            except PreflightValidationError:
+                stop_reason = TerminationReason.PREFLIGHT_REJECTED
+                raise
+
+            plan_dir = self._plan_dir(plan)
+            self._write_plan_file(plan, plan_dir)
+            scheduler = DependencyScheduler(plan.steps, report)
+            # Preflight has established that step IDs are unique.
+            specs = {spec.step_id: spec for spec in plan.steps}
+
+            while scheduler.has_runnable():
+                if context.cancellation_requested:
+                    stop_reason = TerminationReason.CANCELLED
+                    raise AttemptCancelledError(
+                        f"Attempt '{report.execution_id}' for plan '{plan.plan_id}' "
+                        f"was cancelled; no further steps were started."
+                    )
+
+                spec = scheduler.start_next()
+                try:
+                    outcome = self._execute_step(
+                        plan, spec, resolved[spec.step_id], plan_dir, correlation
+                    )
+                except OrchestrationError:
+                    raise
+                except Exception as exc:
+                    scheduler.record_failure(_step_failure(spec.step_id, exc))
+                    if plan.failure_policy == FAIL_FAST_POLICY:
+                        stop_reason = TerminationReason.FAILED_FAST
+                        if isinstance(exc, TransientStepError):
+                            # Treat transient as permanent until retries are implemented.
+                            raise PermanentStepError(
+                                f"Retry not implemented for transient failure: {exc}"
+                            ) from exc
+                        raise
+                    # Still inside the handler, so if publishing a blocked step
+                    # fails, this step failure stays reachable as its context.
+                    self._contain_failure(
+                        plan, scheduler, report, specs, spec.step_id, exc
+                    )
+                    continue
+
+                scheduler.record_success(spec.step_id, outcome)
+
+            scheduler.ensure_drained()
+            self._close_report(report, scheduler, TerminationReason.COMPLETED)
+        except BaseException as exc:
+            self._close_report(
+                report,
+                scheduler,
+                stop_reason or _unplanned_stop_reason(exc),
+                cause=exc,
+            )
+            self._publish_attempt_report(plan, report, cause=exc)
+            raise
+
+        self._publish_attempt_report(plan, report, cause=None)
+        return report
+
+    def _check_attempt_context(self, plan: Plan, context: AttemptContext) -> None:
+        """Refuse a context that does not belong to a fresh attempt at ``plan``.
+
+        The report is an attempt's only record. Recording one plan's outcomes
+        into a report opened for a different plan or step inventory, or into a
+        report an earlier attempt already filled, would make it describe
+        something that never happened. Such a context is a caller defect, so it
+        is refused before anything runs and left exactly as it was.
+
+        An execution ID also names the attempt's directory in the event spool,
+        so one that cannot name a directory there is refused too.
+
+        Args:
+            plan: The plan about to be executed.
+            context: The context the caller supplied.
+
+        Raises:
+            OrchestrationError: If the context's report was opened for another
+                plan, step inventory or failure policy, has already been used,
+                or has an execution ID that cannot name spool records.
+        """
+        report = context.report
+        problems: list[str] = []
+        if not is_record_key(report.execution_id):
+            problems.append(
+                f"its execution ID {report.execution_id!r} cannot name spool records"
+            )
+        if report.plan_id != plan.plan_id:
+            problems.append(f"its report was opened for plan '{report.plan_id}'")
+        if report.step_ids != [spec.step_id for spec in plan.steps]:
+            problems.append("its step inventory differs from the plan's steps")
+        if report.failure_policy != plan.failure_policy:
+            problems.append(
+                f"its failure policy is '{report.failure_policy}', "
+                f"not '{plan.failure_policy}'"
+            )
+        if report.is_finished or report.step_outcomes or report.diagnostic:
+            problems.append("its report was already used by another attempt")
+        if problems:
+            raise OrchestrationError(
+                f"Attempt context '{report.execution_id}' cannot run plan "
+                f"'{plan.plan_id}': {'; '.join(problems)}."
+            )
+
+    def _reserve_given_execution_id(self, plan: Plan, context: AttemptContext) -> None:
+        """Reserve the execution ID a caller built its context with.
+
+        An ID the engine allocated was reserved with it (see
+        :meth:`reserve_execution_id`) and is not reserved again. An ID the
+        caller chose is claimed here, exclusively, before the attempt publishes
+        anything: taken, it is refused rather than renamed or shared, since
+        writing into an existing attempt's directory would overwrite its
+        records. The context records the reservation only once it succeeds.
+        Without a reserver there is nothing to claim, and the context stays
+        unreserved.
+
+        Args:
+            plan: The plan about to be executed.
+            context: The attempt's context; its report is left untouched.
+
+        Raises:
+            OrchestrationError: If the ID is already taken, or reserving it
+                fails.
+        """
+        if context.execution_id_reserved or self.attempt_reserver is None:
+            return
+        execution_id = context.execution_id
+        with _orchestration_boundary(
+            f"Reserving execution ID '{execution_id}' for plan '{plan.plan_id}'"
+        ):
+            reserved = self.attempt_reserver.reserve(
+                plan.realm, plan.plan_id, execution_id
+            )
+        if not reserved:
+            raise OrchestrationError(
+                f"Attempt context '{execution_id}' cannot run plan "
+                f"'{plan.plan_id}': its execution ID is already taken by another "
+                f"attempt."
+            )
+        context.execution_id_reserved = True
+
+    def _contain_failure(
+        self,
+        plan: Plan,
+        scheduler: DependencyScheduler,
+        report: AttemptReport,
+        specs: dict[str, StepSpec],
+        failed_step_id: str,
+        exc: Exception,
+    ) -> None:
+        """Block every step that depends on a failed step, and publish each block.
+
+        Only under ``continue_independent``. A failed step's dependents can
+        never run in this attempt, so each is blocked at once, and its
+        ``step.blocked`` is published before another step starts: a reader sees
+        the blocking while the rest of the attempt is still running, not only
+        once it ends.
+
+        The blockers each event names are those known now. The blocker
+        diagnostics are settled first, so a step blocked through a chain of
+        blocked steps already names the failure at its root. A step that is
+        already blocked is not published again when a later failure adds to its
+        blockers; the report's final diagnostics record that.
+
+        Args:
+            plan: The plan being executed.
+            scheduler: The attempt's scheduler; the failed step is recorded.
+            report: The attempt's report.
+            specs: The plan's steps by ID.
+            failed_step_id: The step that just failed.
+            exc: Its failure, for the log.
+
+        Raises:
+            OrchestrationError: If the scheduler or the report rejects the
+                blocking.
+            EventPublicationError: If a ``step.blocked`` cannot be published.
+        """
+        blocked = scheduler.block_dependents(failed_step_id)
+        self._logger.warning(
+            "Step '%s' of plan '%s' failed (%s: %s); continuing independent "
+            "work. Blocked dependents: %s",
+            failed_step_id,
+            plan.plan_id,
+            type(exc).__name__,
+            exc,
+            blocked or "none",
+        )
+        if not blocked:
+            return
+        scheduler.record_blocker_diagnostics()
+        for step_id in blocked:
+            self._emit_step_blocked(plan, specs[step_id], report)
+
+    def _execute_step(
+        self,
+        plan: Plan,
+        spec: StepSpec,
+        fn: Callable[..., Any],
+        plan_dir: Path,
+        correlation: ExecutionCorrelation,
+    ) -> StepOutcome:
+        """Reuse or execute one step whose prerequisites have all been satisfied.
+
+        Called only once the scheduler has established readiness, so no cache
+        marker is ever read for a step whose prerequisites did not all succeed
+        in this attempt.
+
+        Reuse requires a success marker matching the step's fingerprint *and*
+        every declared output present; see :meth:`_can_reuse`. A step that is
+        not reused has its marker invalidated before it is called, so however
+        the call ends, no earlier success stays reusable over outputs the call
+        may have partly replaced. A new marker is written only once the step has
+        succeeded.
+
+        Failures are classified at their boundaries rather than here. Engine
+        bookkeeping, execution-context preparation, event publication, and
+        failing to determine whether a declared output exists raise
+        OrchestrationError. Everything else that escapes is this step's ordinary
+        failure, for the failure policy to contain or propagate: the step's own
+        exception, a required output it did not produce, but also
+        realm-controlled work done on its behalf, such as hashing the input
+        paths it declares.
+
+        Args:
+            plan: The plan being executed.
+            spec: The step to reuse or execute.
+            fn: The step's callable, resolved during preflight.
+            plan_dir: Directory for this plan's execution state.
+            correlation: The attempt's identity, stamped onto the step's events.
+
+        Returns:
+            StepOutcome: REUSED on a cache hit, SUCCEEDED after execution.
+
+        Raises:
+            OrchestrationError: If engine bookkeeping, execution-context
+                preparation, event publication or a declared-output check fails.
+            PermanentStepError: If the step returned without producing a
+                required output.
+            TransientStepError: Unchanged, once step.retry_unimplemented has been
+                published; what it means for the attempt is the policy's call.
+            Exception: Anything else the step, or realm-controlled work on its
+                behalf, raised.
+        """
+        step_dir = self._step_dir(plan_dir, spec)
+        with _orchestration_boundary(
+            f"Creating work directory for step '{spec.step_id}'"
+        ):
+            step_dir.mkdir(parents=True, exist_ok=True)
+
+        _lint_missing_inputs(spec, fn)
+
+        run_id = _new_run_id()
+
+        # compute fingerprint and check cache // pass fn so we can read _input_keys
+        fingerprint = _default_fingerprint(spec, fn)
+        marker = step_dir / SUCCESS_MARKER
+        required_outputs = resolve_declared_outputs(spec.outputs, step_dir)
+
+        if self._can_reuse(plan, spec, marker, fingerprint, required_outputs):
+            self._emit_step_skipped(plan, spec, fingerprint, run_id, correlation)
+            return StepOutcome.REUSED
+
+        # Building the context loads Yggdrasil's own external-systems
+        # configuration. A broken configuration fails every step alike; it must
+        # abort the attempt, not drain as a list of ordinary step failures.
+        with _orchestration_boundary(
+            f"Preparing the execution context for step '{spec.step_id}'"
+        ):
+            ctx = self._step_context(
+                plan,
+                spec,
+                plan_dir,
+                step_dir,
+                fingerprint,
+                run_id,
+                required_outputs,
+                correlation,
+            )
+
+        # The marker is invalidated before the call rather than after a failure,
+        # so a crash part-way through cannot leave the earlier success reusable
+        # over outputs that are now partly replaced. It happens as late as
+        # possible, so an attempt that aborts earlier costs no re-execution.
+        with _orchestration_boundary(
+            f"Invalidating the cache marker for step '{spec.step_id}'"
+        ):
+            marker.unlink(missing_ok=True)
+
+        try:
+            # Coerce string params to Path where function signature expects it
+            coerced_params = coerce_params_to_signature_types(fn, spec.params)
+            # returns StepResult (decorator wraps emissions)
+            result = fn(ctx, **coerced_params)
+        except TransientStepError as exc:
+            # The @step wrapper has already emitted "step.failed".
+            # Add a precise diagnostic so operators know retry isn't wired yet.
+            # TODO: Implement retry.
+            self._emit_retry_unimplemented(plan, spec, ctx, exc, correlation)
+            raise
+
+        if result is not None and not isinstance(result, StepResult):
+            self._logger.warning(
+                "Step %s returned %r (expected StepResult or None)",
+                spec.step_id,
+                type(result),
+            )
+
+        # A step's success is finalized in this order, each stage with one
+        # owner, so that neither a success event nor a reusable marker ever
+        # exists for a step whose required outputs are missing, and no
+        # successor starts before the step is fully finalized:
+        #
+        #   required-output validation    the @step wrapper, after the body
+        #     -> step-success publication  the @step wrapper, same call
+        #     -> atomic marker replacement here, once the wrapper has returned
+        #     -> admission of successors   the scheduler, once this returns
+        #
+        # The wrapper raises instead of returning if an output is missing, so
+        # reaching this point means the first two stages completed.
+        #
+        # A step-success event may already have been published when the
+        # marker replacement that follows it fails. That failure aborts the
+        # attempt as an OrchestrationError. The window is accepted: the event
+        # spool and the marker are separate systems, and no transaction spans
+        # them. A failed marker write never leaves a reusable success marker
+        # behind: the previous one was invalidated before the call, and a
+        # failed replacement installs nothing.
+        with _orchestration_boundary(
+            f"Writing the cache marker for step '{spec.step_id}'"
+        ):
+            _replace_marker(marker, fingerprint)
+
+        return StepOutcome.SUCCEEDED
+
+    def _can_reuse(
+        self,
+        plan: Plan,
+        spec: StepSpec,
+        marker: Path,
+        fingerprint: str,
+        required_outputs: dict[str, Path],
+    ) -> bool:
+        """Decide whether a ready step's earlier success may stand in for running it.
+
+        Needs both a success marker matching the current fingerprint and every
+        declared output present. A missing output is an ordinary cache miss, so
+        the producer runs again. A step that declares no outputs is decided by
+        its marker alone, exactly as before outputs could be declared.
+
+        Args:
+            plan: The plan being executed.
+            spec: The step being evaluated; its prerequisites are satisfied.
+            marker: The step's success marker.
+            fingerprint: The step's fingerprint for this attempt.
+            required_outputs: The step's resolved declared outputs.
+
+        Returns:
+            bool: True if the step may be reused.
+
+        Raises:
+            OrchestrationError: If the marker cannot be read, or whether a
+                declared output exists cannot be determined.
+        """
+        with _orchestration_boundary(
+            f"Reading the cache marker for step '{spec.step_id}'"
+        ):
+            if not marker.exists():
+                return False
+            if marker.read_text(encoding="utf-8").strip() != fingerprint:
+                return False
+
+        missing = find_missing_outputs(required_outputs, step_id=spec.step_id)
+        if missing:
+            self._logger.warning(
+                "Not reusing step '%s' of plan '%s': its success marker matches, "
+                "but declared outputs are missing: %s. Running it again.",
+                spec.step_id,
+                plan.plan_id,
+                ", ".join(f"{key}={path}" for key, path in missing.items()),
+            )
+            return False
+        return True
+
+    def _step_context(
+        self,
+        plan: Plan,
+        spec: StepSpec,
+        plan_dir: Path,
+        step_dir: Path,
+        fingerprint: str,
+        run_id: str,
+        required_outputs: dict[str, Path],
+        correlation: ExecutionCorrelation,
+    ) -> StepContext:
+        """Build the context one step invocation executes with.
+
+        Args:
+            plan: The plan being executed.
+            spec: The step about to run.
+            plan_dir: Directory for this plan's execution state.
+            step_dir: The step's work directory.
+            fingerprint: The step's fingerprint for this invocation.
+            run_id: The ID of this invocation.
+            required_outputs: The step's resolved declared outputs, which the
+                @step wrapper verifies before reporting success.
+            correlation: The attempt's identity, stamped onto every event the
+                step and its DataAccess publish.
+
+        Returns:
+            StepContext: The context passed to the step function. Its
+            DataAccess numbers write traces from the context's own event
+            counter, so they join the step's event stream.
+        """
+        ctx = StepContext(
+            realm=plan.realm,
+            scope=spec.scope or plan.scope,
+            plan_id=plan.plan_id,
+            step_id=spec.step_id,
+            step_name=spec.name,
+            workdir=step_dir,
+            scope_dir=self._scope_dir(plan_dir),
+            emitter=self.emitter,
+            run_mode=os.environ.get("YGG_RUN_MODE", "auto"),
+            fingerprint=fingerprint,
+            run_id=run_id,
+            required_outputs=required_outputs,
+            correlation=correlation,
+        )
+        ctx.data = DataAccess(
+            plan.realm,
+            phase="execution",
+            trace_context=DataAccessTraceContext(
                 realm=plan.realm,
                 phase="execution",
                 plan_id=plan.plan_id,
@@ -213,65 +1428,334 @@ class Engine:
                 step_name=spec.name,
                 scope=spec.scope or plan.scope,
                 emitter=self.emitter,
-            )
+                correlation=correlation,
+                next_seq=ctx._next_seq,
+            ),
+        )
+        return ctx
 
-            ctx = StepContext(
-                realm=plan.realm,
-                scope=spec.scope or plan.scope,
-                plan_id=plan.plan_id,
-                step_id=spec.step_id,
-                step_name=spec.name,
-                workdir=step_dir,
-                scope_dir=self._scope_dir(plan_dir),
-                emitter=self.emitter,
-                run_mode=os.environ.get("YGG_RUN_MODE", "auto"),
-                fingerprint=fingerprint,
-                run_id=run_id,
-                data=DataAccess(
+    def _emit_step_skipped(
+        self,
+        plan: Plan,
+        spec: StepSpec,
+        fingerprint: str,
+        run_id: str,
+        correlation: ExecutionCorrelation,
+    ) -> None:
+        """Publish the cache-hit event for a reused step.
+
+        ``step.skipped`` means only that an earlier success was reused; its
+        ``reason`` says so. It never describes a step that could not run: that
+        is ``step.blocked``.
+
+        Args:
+            plan: The plan being executed.
+            spec: The reused step.
+            fingerprint: The fingerprint its cache marker matched.
+            run_id: The ID allocated for this evaluation of the step.
+            correlation: The attempt's identity.
+
+        Raises:
+            EventPublicationError: If the emitter fails to publish.
+        """
+        self._emit_engine_event(
+            f"step.skipped for step '{spec.step_id}'",
+            {
+                "type": "step.skipped",
+                "realm": plan.realm,
+                "scope": plan.scope,
+                "plan_id": plan.plan_id,
+                "step_id": spec.step_id,
+                "step_name": spec.name,
+                "fingerprint": fingerprint,
+                "reason": CACHE_HIT_REASON,
+                "run_id": run_id,
+                # A reused step publishes nothing else in the attempt.
+                "seq": 1,
+                **correlation.event_fields(),
+                "eid": str(uuid.uuid4()),
+                "ts": utcnow_iso(),
+                "_spool_path": attempt_spool_path(
                     plan.realm,
-                    phase="execution",
-                    trace_context=trace_ctx,
+                    plan.plan_id,
+                    correlation.execution_id,
+                    step_event_filename(1, "step.skipped"),
+                    step_id=spec.step_id,
                 ),
-            )
+            },
+        )
 
-            try:
-                # Coerce string params to Path where function signature expects it
-                coerced_params = coerce_params_to_signature_types(fn, spec.params)
-                # returns StepResult (decorator wraps emissions)
-                result = fn(ctx, **coerced_params)
-            except TransientStepError as e:
-                # The @step wrapper has already emitted "step.failed".
-                # Add a precise diagnostic so operators know retry isn't wired yet.
-                # TODO: Implement retry.
-                self.emitter.emit(
+    def _emit_retry_unimplemented(
+        self,
+        plan: Plan,
+        spec: StepSpec,
+        ctx: StepContext,
+        exc: TransientStepError,
+        correlation: ExecutionCorrelation,
+    ) -> None:
+        """Publish the diagnostic that a transient failure was not retried.
+
+        It follows the step's own ``step.failed`` in the step's event stream,
+        numbered from the failed invocation's own counter.
+
+        Args:
+            plan: The plan being executed.
+            spec: The step that failed transiently.
+            ctx: The failed invocation's context.
+            exc: The transient failure.
+            correlation: The attempt's identity.
+
+        Raises:
+            EventPublicationError: If the emitter fails to publish.
+        """
+        seq = ctx._next_seq()
+        event_type = "step.retry_unimplemented"
+        self._emit_engine_event(
+            f"{event_type} for step '{spec.step_id}'",
+            {
+                "type": event_type,
+                "realm": plan.realm,
+                "scope": plan.scope,
+                "plan_id": plan.plan_id,
+                "step_id": spec.step_id,
+                "run_id": ctx.run_id,
+                "seq": seq,
+                "error": str(exc),
+                "kind": "transient",
+                **correlation.event_fields(),
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    correlation.execution_id,
+                    step_event_filename(seq, event_type),
+                    step_id=spec.step_id,
+                ),
+            },
+        )
+
+    def _emit_step_blocked(
+        self, plan: Plan, spec: StepSpec, report: AttemptReport
+    ) -> None:
+        """Publish the one ``step.blocked`` event of a step a failure blocked.
+
+        The step never ran, so the event names no run. It is the only event the
+        step has in the attempt, so it opens the step's event stream.
+
+        Args:
+            plan: The plan being executed.
+            spec: The blocked step.
+            report: The attempt's report, holding the blockers known now.
+
+        Raises:
+            EventPublicationError: If the emitter fails to publish.
+        """
+        self._emit_engine_event(
+            f"step.blocked for step '{spec.step_id}'",
+            {
+                "type": STEP_BLOCKED_EVENT,
+                "realm": plan.realm,
+                "scope": spec.scope or plan.scope,
+                "plan_id": plan.plan_id,
+                "step_id": spec.step_id,
+                "step_name": spec.name,
+                "direct_blockers": list(report.direct_blockers.get(spec.step_id, [])),
+                "failed_ancestors": list(report.failed_ancestors.get(spec.step_id, [])),
+                "seq": 1,
+                **report.correlation.event_fields(),
+                "eid": str(uuid.uuid4()),
+                "ts": utcnow_iso(),
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    report.execution_id,
+                    step_event_filename(1, STEP_BLOCKED_EVENT),
+                    step_id=spec.step_id,
+                ),
+            },
+        )
+
+    def _publish_attempt_started(self, plan: Plan, context: AttemptContext) -> None:
+        """Publish the record that an attempt was admitted.
+
+        Published before preflight and before any step runs, so every attempt
+        leaves a record, including one that is rejected or has no steps, and
+        the record carries the planned inventory a reader needs to show work
+        that has not started. Until it exists, a reader does not treat the
+        attempt as observed, so it must exist before the attempt does anything
+        else. (The attempt's place in the order of the plan's attempts was
+        already fixed when its directory was reserved.)
+
+        Args:
+            plan: The plan being attempted.
+            context: The attempt's context.
+
+        Raises:
+            EventPublicationError: If the emitter fails to publish.
+        """
+        report = context.report
+        self._emit_engine_event(
+            f"the start of attempt '{report.execution_id}' for plan '{plan.plan_id}'",
+            {
+                "type": ATTEMPT_STARTED_EVENT,
+                "realm": plan.realm,
+                "scope": plan.scope,
+                "plan_id": plan.plan_id,
+                **context.correlation.event_fields(),
+                "execution_authority": context.execution_authority,
+                "execution_owner": context.execution_owner,
+                "failure_policy": report.failure_policy,
+                "started_at": report.started_at,
+                "steps": [
                     {
-                        "type": "step.retry_unimplemented",
-                        "realm": plan.realm,
-                        "scope": plan.scope,
-                        "plan_id": plan.plan_id,
                         "step_id": spec.step_id,
-                        "error": str(e),
-                        "kind": "transient",
-                        "_spool_path": {
-                            "realm": plan.realm,
-                            "plan_id": plan.plan_id,
-                            "step_id": spec.step_id,
-                            "run_id": run_id,
-                            "filename": "retry_unimplemented.json",
-                        },
+                        "step_name": spec.name,
+                        "deps": list(spec.deps),
                     }
-                )
-                # Treat transient as permanent until retries are implemented.
-                raise PermanentStepError(
-                    f"Retry not implemented for transient failure: {e}"
-                ) from e
+                    for spec in plan.steps
+                ],
+                "eid": str(uuid.uuid4()),
+                "ts": utcnow_iso(),
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    report.execution_id,
+                    record_filename(ATTEMPT_STARTED_EVENT),
+                ),
+            },
+        )
 
-            if result is not None and not isinstance(result, StepResult):
-                self._logger.warning(
-                    "Step %s returned %r (expected StepResult or None)",
-                    spec.step_id,
-                    type(result),
-                )
+    def _close_report(
+        self,
+        report: AttemptReport,
+        scheduler: DependencyScheduler | None,
+        reason: TerminationReason,
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Close an attempt's report with how the attempt ended.
 
-            # mark success in cache after function returns without exception
-            fp_file.write_text(fingerprint)
+        Settles the final blocker diagnostics first, so a report closed early —
+        by fail-fast termination, cancellation or an abort — is as complete as
+        one that drained. A fail-fast step failure is already described by that
+        step's failure record; any other exceptional ending is recorded as an
+        attempt-level diagnostic, naming the step that was running if there was
+        one.
+
+        Args:
+            report: The attempt's report.
+            scheduler: The attempt's scheduler, or None if the attempt ended
+                before scheduling began.
+            reason: How the attempt ended.
+            cause: The exception ending the attempt, if any.
+
+        Raises:
+            OrchestrationError: If ``reason`` is COMPLETED but the report cannot
+                truthfully say so.
+        """
+        if scheduler is not None:
+            scheduler.record_blocker_diagnostics()
+        if cause is not None and reason is not TerminationReason.FAILED_FAST:
+            running = scheduler.running_step_id if scheduler is not None else None
+            report.record_diagnostic(
+                AttemptDiagnostic.from_exception(
+                    cause, details={"running_step_id": running} if running else None
+                )
+            )
+        report.finish(reason)
+        self._logger.info(
+            "Attempt '%s' for plan '%s' ended (%s): outcome=%s, steps=%s",
+            report.execution_id,
+            report.plan_id,
+            reason.value,
+            report.outcome.value if report.outcome else None,
+            report.counts,
+        )
+
+    def _publish_attempt_report(
+        self, plan: Plan, report: AttemptReport, *, cause: BaseException | None
+    ) -> None:
+        """Publish an attempt's closed report as its one plan-level event.
+
+        Published on every ending, so no attempt is left looking as if it were
+        still running. The event names no step, so the spool files it directly
+        in the attempt's own directory.
+
+        Publication is part of the attempt's exit, not an afterthought to it. If
+        it fails, or has to be skipped, the report the caller holds records that
+        through :meth:`AttemptReport.record_publication_failure`, so it cannot
+        claim an ending the caller's exception contradicts.
+
+        If the attempt is ending *because* event publication failed, publishing
+        again would only fail the same way and bury the original cause under a
+        second, identical failure, so publication is skipped.
+
+        Args:
+            plan: The plan the attempt executed.
+            report: The attempt's closed report.
+            cause: The exception ending the attempt, or None if it drained.
+
+        Raises:
+            EventPublicationError: If publication fails and the attempt was not
+                cancelled. When the attempt was ending with an exception, the
+                message names it and it stays reachable through the chain. A
+                cancelled attempt's own exception is never replaced; the
+                publication failure is attached to it as a note instead.
+        """
+        if isinstance(cause, EventPublicationError):
+            report.record_publication_failure(
+                AttemptDiagnostic(
+                    message=(
+                        "The attempt report was not published: event publication "
+                        "had already failed during this attempt."
+                    ),
+                    error_type=type(cause).__name__,
+                    details={"publication_skipped": True},
+                )
+            )
+            self._logger.error(
+                "Not publishing the report of attempt '%s' for plan '%s': event "
+                "publication already failed during this attempt.",
+                report.execution_id,
+                plan.plan_id,
+            )
+            return
+
+        event: dict[str, Any] = {
+            "type": ATTEMPT_REPORT_EVENT,
+            "realm": plan.realm,
+            "scope": plan.scope,
+            "plan_id": plan.plan_id,
+            **report.correlation.event_fields(),
+            "report": report.to_dict(),
+            "eid": str(uuid.uuid4()),
+            "ts": utcnow_iso(),
+            "_spool_path": attempt_spool_path(
+                plan.realm,
+                plan.plan_id,
+                report.execution_id,
+                record_filename(ATTEMPT_REPORT_EVENT),
+            ),
+        }
+        try:
+            self._emit_engine_event(
+                f"the report of attempt '{report.execution_id}' for plan "
+                f"'{plan.plan_id}'",
+                event,
+            )
+        except EventPublicationError as publish_error:
+            report.record_publication_failure(
+                AttemptDiagnostic.from_exception(publish_error)
+            )
+            if cause is None:
+                raise
+            if report.termination_reason is TerminationReason.CANCELLED:
+                cause.add_note(
+                    f"Publishing the attempt report also failed: {publish_error}"
+                )
+                self._logger.error("%s", publish_error)
+                return
+            raise EventPublicationError(
+                f"Failed to publish the report of attempt '{report.execution_id}' "
+                f"for plan '{plan.plan_id}'; the original "
+                f"{type(cause).__name__} is preserved: {cause}"
+            ) from publish_error

@@ -112,31 +112,85 @@ not notify PlanWatcher.
 
 **Checks:**
 1. Confirm PlanWatcher is started: `grep "PlanWatcher" yggdrasil.log`
-2. Check `run_token > executed_run_token` in the plan document
+2. Check `run_token > executed_run_token` in the plan document. If they are equal, the last request is already finished, whatever its outcome (see [A finished plan does not run again](#a-finished-plan-does-not-run-again)).
 3. Verify the configured internal plan store (`yggdrasil_plans` database) exists and is accessible: the CouchDB
    plans connection in production, or the SQLite file in dev mode.
+4. Search the log for `pending finalization`: the plan may have an unrecorded result (see [Result could not be recorded](#result-could-not-be-recorded)).
+5. Search the log for `the daemon is stopping`. A plan that became eligible while the daemon was shutting down was not started, and stays eligible. A daemon restarted from its saved checkpoint resumes after that change and does not see it again. Re-emit an observable change for the plan once the daemon is running.
+
+---
+
+## Plan finished, but not as expected
+
+### A finished plan does not run again
+
+**Symptom:** `status="approved"`, `executed_run_token == run_token`, and nothing runs, even though `last_finalized_execution.outcome` is `"failed"`.
+
+**Explanation:** A `continue_independent` plan finishes its request once every step that could run has run, even if some failed. Its result and its token are recorded together, and the plan does not run again by itself. Approving it again changes nothing.
+
+**Resolution:** Fix the cause, then raise `run_token` by one, leaving `status` as `"approved"`. Write it conditionally on the plan's revision; on SQLite, the same transaction must also advance the plan-change sequence. Steps that succeeded are reused, and failed or blocked steps run again. See [Plan Execution](plan_execution.md#requesting-a-rerun).
+
+### Steps were blocked
+
+**Symptom:** The snapshot shows steps in state `step.blocked`, and the attempt's outcome is `"failed"`.
+
+**Explanation:** Under `continue_independent`, a step whose prerequisite failed, or was itself blocked, is never invoked. Its `failed_ancestors` name the failed steps to fix; `direct_blockers` name its immediate prerequisites. A blocked step is not a failure of its own, and it runs on the next request once its prerequisites succeed.
+
+If a step was blocked by a step it should not need, the dependency is in the plan: `deps` are the only thing that blocks. See [Dependencies and failure policy](../realm_authoring/guide.md#dependencies-and-failure-policy).
+
+### Snapshot shows an attempt still running
+
+**Symptom:** The snapshot's `attempt.state` stays `"running"`, but none of the plan's steps is running.
+
+**Explanation:** An attempt shows as running until its report is published. No report is published when event publication had already failed during the attempt (the log says `Not publishing the report of attempt '<execution_id>'`), when publishing the report itself failed, or when the process was killed. None of these endings finished the request.
+
+**Resolution:** Search the log for the attempt's execution ID to find the cause, such as an unwritable event spool. The plan document confirms that the request is unfinished: `executed_run_token` is unchanged, and the plan stays eligible. Once the cause is fixed, the next attempt at the plan replaces the stale one in the snapshot. See [Attempt reports](../flow_api/overview.md#attempt-reports).
+
+### Plan rejected before any step ran
+
+**Symptom:** The log and the attempt report show `termination_reason: "preflight_rejected"` and a diagnostic such as a duplicate step ID, a step ID that cannot name a work directory of its own (not a nonempty string, absolute, or with an empty, `.` or `..` part) or is not distinct from another when letter case and Unicode normalization are ignored, an unknown dependency, a dependency cycle, an unknown `failure_policy`, or a malformed or unresolvable `fn_ref`.
+
+**Explanation:** The engine validates the whole plan before running anything, and rejects it without side effects. A rejected `fail_fast` plan stays eligible. A rejected `continue_independent` request is finished with a failed outcome, since the same plan would be rejected again. A plan with an unknown `failure_policy` stays eligible too: it is not a valid `continue_independent` request.
+
+Only confirmed defects of the plan are rejected. A step module that exists but cannot be imported is a different case (see [`fn_ref` cannot be resolved or imported](#fn_ref-cannot-be-resolved-or-imported)).
+
+**Resolution:** Fix the realm's planning, and let it regenerate the plan.
+
+### Result could not be recorded
+
+**Symptom:** The log says `finished, but its result could not be recorded; keeping it pending`. The snapshot shows the attempt as finished, but the plan document's `executed_run_token` was not advanced. `run-doc --run-once` exits with code `1`.
+
+**Explanation:** Recording the result failed through every retry: the plan store was unreachable, failed, or kept losing write races. The process keeps the result in memory and does not run the plan again. Other plans are unaffected.
+
+**Resolution:** Once the plan store is healthy, raise `run_token`. The daemon records the pending result first, then runs the new request. A restart loses the pending result, and the old request then runs again, so realm steps must tolerate that. See [Plan Execution](plan_execution.md#when-a-result-cannot-be-recorded).
 
 ---
 
 ## Step execution failures
 
-### `ModuleNotFoundError` or `AttributeError` for `fn_ref`
+### `fn_ref` cannot be resolved or imported
 
-**Symptom:** Step fails with `cannot import name 'run_foo' from 'my_realm.steps'`
+Every step's `fn_ref` is resolved before any step runs. What happens next depends on whether the reference itself is wrong.
 
-**Resolution:**
+**Symptom:** The plan is rejected by preflight with `Malformed fn_ref for step '<step_id>'`, `Unresolvable fn_ref for step '<step_id>': '<fn_ref>' names module '<module>', which does not exist.`, or `... module '<module>' does not define '<name>'.`
+
+**Resolution:** The reference is wrong, which is a defect of the plan:
 - The `fn_ref` in your `StepSpec` must be a valid dotted Python path to a `@step`-decorated function
 - The function must exist and be importable in the daemon's Python environment
 - Check for typos in the module path
 
-### `ValueError` — undecorated step function
+**Symptom:** The attempt aborts with `Importing the module for step '<step_id>' (fn_ref='<fn_ref>') failed: ...`, and `termination_reason: "orchestration_error"`.
 
-**Symptom:** Plan execution raises:
+**Explanation:** The module exists, but importing it failed: one of its own dependencies is missing, or it raised while being imported. That is a broken environment, not a malformed plan, so the plan is not rejected. The request stays eligible, and runs again once the environment is fixed and the plan changes again.
+
+### `PreflightValidationError` — undecorated step function
+
+**Symptom:** Plan execution is rejected with:
 ```
-ValueError: Undecorated step function detected for step '<step_id>' (fn_ref='<fn_ref>'). Decorate it with '@step' from 'yggdrasil.flow.step'.
+PreflightValidationError: Undecorated step function detected for step '<step_id>' (fn_ref='<fn_ref>'). Decorate it with '@step' from 'yggdrasil.flow.step'.
 ```
 
-**Explanation:** The Engine validates every resolved callable before execution. If `fn_ref` resolves to a plain function missing the `@step` decorator, the plan is aborted immediately. This prevents silent loss of lifecycle events (`step.started`, `step.succeeded`, `step.failed`) — which `@step` is responsible for emitting.
+**Explanation:** The Engine resolves and validates every step's callable before any step runs. If `fn_ref` resolves to a plain function missing the `@step` decorator, the plan is rejected, with no step run. `PreflightValidationError` is a `ValueError`. The check prevents silent loss of lifecycle events (`step.started`, `step.succeeded`, `step.failed`), which `@step` is responsible for emitting.
 
 **Resolution:** Decorate the function with `@step`:
 ```python
@@ -210,7 +264,11 @@ the holder.
 **Resolution:**
 
 1. Identify the holding process from the metadata in the error message.
-2. Stop it, or run your daemon in the other mode / on another machine.
+2. Stop the existing daemon. To run another daemon in the other mode or on
+   another machine, configure it to use separate internal storage (see
+   [Running prod and dev side by side](../getting_started/configuration.md#running-prod-and-dev-side-by-side)).
+   Changing mode or machine only bypasses the local lock; it does not make
+   sharing the same internal storage safe.
 3. **Never delete a lock file while a daemon is running** — the advisory
    `flock` dies with the process, and deleting a *held* file lets a second
    daemon start. Stale lock files from exited daemons are harmless and can
@@ -248,9 +306,11 @@ the configured backend.
 
 A daemon with no checkpoint can miss a plan approved before it started.
 After confirming PlanWatcher is running, the operator-provided storage
-integration can re-emit an observable change for that plan. Do this only
-when the plan is definitely not already executing, because re-emitting
-an in-flight plan may schedule it twice.
+integration can re-emit an observable change for that plan. Re-emitting a
+plan that is already executing does not start a second attempt: the daemon
+runs one attempt per plan at a time, and once the running attempt is finished
+it checks the plan again, running it only if a newer run was requested
+meanwhile.
 
 ---
 
@@ -266,6 +326,15 @@ an in-flight plan may schedule it twice.
 
 ```bash
 find $YGG_EVENT_SPOOL -path "*/test_realm/*" -name "*.json" | sort
+```
+
+### Finding one attempt's events
+
+Every attempt has its own directory, named after its `execution_id`, holding all of its events (see [Event spool layout](../flow_api/overview.md#event-spool-layout)). For IDs the engine allocated, name order is attempt order, so the last one in sorted order is normally the newest attempt (see [Execution IDs and attempt order](../flow_api/overview.md#execution-ids-and-attempt-order) for the limits). A directory holding neither `plan_attempt_started.json` nor `plan_attempt_report.json` is a reservation whose attempt was cancelled or killed before it recorded anything; the snapshot never shows it. An attempt's report may be missing too (see [Snapshot shows an attempt still running](#snapshot-shows-an-attempt-still-running)).
+
+```bash
+ls $YGG_EVENT_SPOOL/<realm>/<plan_id>/attempts/ | sort | tail -1
+find $YGG_EVENT_SPOOL/<realm>/<plan_id>/attempts/<execution_id> -name "*.json" | sort
 ```
 
 ---
