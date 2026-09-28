@@ -21,6 +21,7 @@ from yggdrasil.core.execution_ids import (
 )
 from yggdrasil.core.scheduler import DependencyScheduler
 from yggdrasil.flow.attempt import AttemptContext
+from yggdrasil.flow.data_access import DataAccess, DataAccessTraceContext
 from yggdrasil.flow.errors import (
     AttemptCancelledError,
     EventPublicationError,
@@ -1310,8 +1311,6 @@ class Engine:
             DataAccess numbers write traces from the context's own event
             counter, so they join the step's event stream.
         """
-        from yggdrasil.flow.data_access import DataAccess, DataAccessTraceContext
-
         ctx = StepContext(
             realm=plan.realm,
             scope=spec.scope or plan.scope,

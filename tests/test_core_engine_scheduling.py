@@ -986,7 +986,7 @@ class TestInfrastructureFailuresAbortTheAttempt(SchedulingTestCase):
     def test_failing_execution_context_preparation(self):
         """A broken configuration must not drain as N ordinary step failures."""
         with patch(
-            "yggdrasil.flow.data_access.DataAccess",
+            "yggdrasil.core.engine.DataAccess",
             side_effect=ValueError("malformed external_systems in main.json"),
         ):
             context, exc = self.run_attempt(self.plan_xy())
