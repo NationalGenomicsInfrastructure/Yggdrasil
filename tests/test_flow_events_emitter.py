@@ -373,6 +373,48 @@ class TestFileSpoolEmitter(unittest.TestCase):
             ],
         )
 
+    def test_step_ids_that_would_collide_as_paths_keep_separate_streams(self):
+        """Distinct step IDs never share a directory, and a step's directory
+        is never another step's event file or its temporary file, in either
+        publication order."""
+        attempt = "20260924T120000000001Z_c68e"
+        pairs = [
+            ("lane", "lane/0001_step_started.json"),
+            ("lane", "lane/0001_step_started.json.tmp"),
+            ("lane/process", "lane/./process"),
+            ("lane/process", "lane//process"),
+            ("lane", "lane/"),
+            ("other", "lane/../other"),
+        ]
+        for index, pair in enumerate(pairs):
+            for order in (pair, pair[::-1]):
+                with self.subTest(order=order):
+                    spool = self.spool_dir / f"case_{index}_{order == pair}"
+                    emitter = FileSpoolEmitter(spool_dir=str(spool))
+                    for step_id in order:
+                        emitter.emit(
+                            {
+                                "type": "step.started",
+                                "step_id": step_id,
+                                "_spool_path": {
+                                    "realm": "r",
+                                    "plan_id": "p",
+                                    "execution_id": attempt,
+                                    "step_id": step_id,
+                                    "filename": "0001_step_started.json",
+                                },
+                            }
+                        )
+
+                    steps = spool / "r" / "p" / "attempts" / attempt / "steps"
+                    # Escaped step directories can end in .json or .tmp too.
+                    files = [f for f in steps.rglob("*") if f.is_file()]
+                    self.assertEqual(
+                        sorted(json.loads(f.read_text())["step_id"] for f in files),
+                        sorted(order),
+                    )
+                    self.assertEqual([f.suffix for f in files], [".json", ".json"])
+
     def test_attempt_that_cannot_name_a_directory_is_refused(self):
         emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
 

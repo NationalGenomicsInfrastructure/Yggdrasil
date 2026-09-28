@@ -18,10 +18,14 @@ have at least four digits and order numerically. A step directory records what
 was observed about the step; it does not mean the step ran. A blocked step has
 one too.
 
-Step IDs are joined into the path as they are, like step work directories.
-Readers only open the step directories an attempt's step inventory names, and
-read only the files directly in each, so a step whose ID nests under another's
-(``lane_1/process`` beside ``lane_1``) stays apart from it.
+Each ``/``-separated part of a step ID becomes one directory level, so
+``lane_1/process`` is filed in ``steps/lane_1/process/``. A part the
+filesystem would read as something else is escaped with a leading ``%`` (see
+:func:`step_events_dir`), so every step ID has a directory of its own, and no
+step's directory is ever another step's event file. Readers only open the step
+directories an attempt's step inventory names, and read only the files
+directly in each, so a step whose ID nests under another's stays apart from
+it. Events keep the step's own ID; only the directory name is escaped.
 
 **Two readers, two jobs.** The execution-ID allocator reads only the names of
 a plan's attempt directories (:class:`SpoolAttemptHistory`): every attempt
@@ -62,6 +66,14 @@ STEP_BLOCKED_EVENT = "step.blocked"
 ATTEMPTS_DIR = "attempts"
 STEPS_DIR = "steps"
 
+# Prefixes a part of a step ID that would be ambiguous as a directory name.
+# No file the spool writes starts with it (see step_event_filename).
+STEP_PART_ESCAPE = "%"
+
+# Endings of the files the spool writes into a step's directory: an event, and
+# an event while it is being written.
+_EVENT_FILE_SUFFIXES = (".json", ".json.tmp")
+
 
 def record_filename(event_type: str) -> str:
     """Return the file name of an attempt's plan-level record of one type.
@@ -85,6 +97,10 @@ def step_event_filename(seq: int, event_type: str) -> str:
     Returns:
         str: The file name, e.g. ``0001_step_started.json``. Numbers past 9999
         take more digits; readers order by the event's ``seq``, not the name.
+        It starts with the number and ends in ``.json``, so it never starts
+        with :data:`STEP_PART_ESCAPE`, which is what keeps it apart from the
+        escaped directory of a step nested below (see
+        :func:`step_events_dir`).
     """
     return f"{seq:04d}_{event_type.replace('.', '_')}.json"
 
@@ -147,17 +163,76 @@ def attempt_dir(root: str | Path, realm: str, plan_id: str, execution_id: str) -
     return attempts_dir(root, realm, plan_id) / execution_id
 
 
+def _step_dir_part(part: str) -> str:
+    """Return the directory name for one ``/``-separated part of a step ID.
+
+    A part is escaped with :data:`STEP_PART_ESCAPE` when, used as it is, it
+    would not name a directory of its own: an empty part or ``.`` would be
+    normalized away, and ``..`` would name the parent; a part ending in
+    ``.json`` or ``.json.tmp`` could be the name of an event file the spool
+    writes into the step directory above it; and a part already starting with
+    the escape could be mistaken for an escaped one. Every other part is kept
+    as it is.
+
+    Args:
+        part: One part of a step ID.
+
+    Returns:
+        str: The directory name. Distinct parts always give distinct names,
+        and an escaped name never is ``.`` or ``..``, never is empty, and
+        never equals an event file's name, since event file names never start
+        with the escape.
+    """
+    if (
+        part in ("", ".", "..")
+        or part.startswith(STEP_PART_ESCAPE)
+        or part.endswith(_EVENT_FILE_SUFFIXES)
+    ):
+        return STEP_PART_ESCAPE + part
+    return part
+
+
 def step_events_dir(attempt_directory: Path, step_id: str) -> Path:
     """Return the directory holding one step's events within an attempt.
 
+    The step ID is split at ``/``, and each part becomes one directory level,
+    escaped where it would be ambiguous (see :func:`_step_dir_part`):
+
+    - ``lane_1/process`` is filed in ``steps/lane_1/process``;
+    - ``lane/./process`` in ``steps/lane/%./process``, apart from
+      ``lane/process``;
+    - ``lane/0001_step_started.json`` in ``steps/lane/%0001_step_started.json``,
+      apart from ``lane``'s event file of that name.
+
+    Distinct step IDs therefore always get distinct directories inside
+    ``steps/``, whatever characters they use. The writer and every reader use
+    this one mapping.
+
     Args:
         attempt_directory: The attempt's directory (see :func:`attempt_dir`).
-        step_id: The step, joined into the path as it is.
+        step_id: The step.
 
     Returns:
-        Path: ``<attempt_directory>/steps/<step_id>``.
+        Path: The step's directory under ``<attempt_directory>/steps``.
     """
-    return attempt_directory / STEPS_DIR / step_id
+    parts = (_step_dir_part(part) for part in step_id.split("/"))
+    return attempt_directory.joinpath(STEPS_DIR, *parts)
+
+
+def step_id_of_dir(name: str) -> str:
+    """Return the step ID a single-level step directory name stands for.
+
+    The inverse of :func:`step_events_dir` for a step ID without ``/``, for a
+    reader that has to list step directories instead of taking step IDs from
+    an attempt's inventory.
+
+    Args:
+        name: A directory name directly under ``steps/``.
+
+    Returns:
+        str: The step ID.
+    """
+    return name.removeprefix(STEP_PART_ESCAPE)
 
 
 def attempt_spool_path(

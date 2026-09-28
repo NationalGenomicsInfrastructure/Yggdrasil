@@ -255,8 +255,9 @@ $YGG_EVENT_SPOOL/
             lane_1__process/
               0001_step_started.json
               0002_step_progress.json
-              0003_data_access_write_succeeded.json
-              0004_step_succeeded.json
+              0003_step_artifact.json
+              0004_data_access_write_succeeded.json
+              0005_step_succeeded.json
             lane_1__upload/
               0001_step_skipped.json        # reused
             lane_2__upload/
@@ -265,7 +266,7 @@ $YGG_EVENT_SPOOL/
 
 Each attempt has a directory of its own, named after its execution ID, so its two plan-level records have fixed names. Each step has one numbered stream of events per attempt, whoever published them: the engine (skip, block, retry diagnostic), the `@step` wrapper, the step's own progress and artifacts, and its DataAccess write traces. Numbers have at least four digits and continue past `9999`; readers order events by their `seq`, not by file name. A step directory records what was observed about the step, not that it ran: a blocked step has one holding only its `step.blocked`. An attempt that runs no step, because preflight rejected it or it has none, has no `steps/` directory. The directory is created before the attempt publishes anything (see [Execution IDs and attempt order](#execution-ids-and-attempt-order)), so an attempt cancelled or killed in between leaves it empty.
 
-A step's directory is its `step_id` as a path, exactly like its work directory. `PlanBuilder` generates simple IDs, but a manually built `StepSpec` may use others, and a step ID containing `/` nests: `lane_1/process` is filed in `steps/lane_1/process/`. Readers open each planned step's directory by name and read only the files directly in it, so it never mixes with `lane_1`'s events.
+A step's directory follows its `step_id`, and every step ID gets a directory of its own. `PlanBuilder` generates simple IDs, but a manually built `StepSpec` may use others. Each `/`-separated part of the ID is one directory level, so `lane_1/process` is filed in `steps/lane_1/process/`. A part that the filesystem would read as something else is prefixed with `%`: an empty part, `.` or `..`, a part ending in `.json` or `.json.tmp` (an event file's name), and a part that already starts with `%`. So `lane/./process` is filed in `steps/lane/%./process/`, and `lane/0001_step_started.json` in `steps/lane/%0001_step_started.json/`, apart from `lane`'s own events. Events carry the step's own ID either way. Readers open each planned step's directory by name and read only the files directly in it, so a nested step's events never mix with those of the step above it.
 
 Work directories, artifacts and `success.fingerprint` markers are not in the spool; they stay at `<work_root>/<plan_id>/<step_id>/`.
 

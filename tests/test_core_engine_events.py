@@ -61,6 +61,7 @@ from yggdrasil.flow.events.attempt_records import (
     attempt_spool_path,
     attempts_dir,
     record_filename,
+    step_events_dir,
 )
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY, Plan
@@ -875,12 +876,16 @@ class TestAttemptFileLayout(EngineEventsTestCase):
     def tree(self, plan: Plan, execution_id: str) -> list[str]:
         """Every file in an attempt's directory, relative to it."""
         attempt = self.attempt_dir(plan, execution_id)
-        return sorted(str(p.relative_to(attempt)) for p in attempt.rglob("*.json"))
+        return sorted(
+            str(p.relative_to(attempt)) for p in attempt.rglob("*") if p.is_file()
+        )
 
     def stream(self, plan: Plan, execution_id: str, step_id: str) -> list[dict]:
         """One step's events in an attempt, in file-name order."""
-        directory = self.attempt_dir(plan, execution_id) / "steps" / step_id
-        return [self.spooled(p) for p in sorted(directory.glob("*.json"))]
+        directory = step_events_dir(self.attempt_dir(plan, execution_id), step_id)
+        return [
+            self.spooled(p) for p in sorted(directory.glob("*.json")) if p.is_file()
+        ]
 
     def assert_numbered(self, events: list[dict], names: list[str]) -> None:
         """Assert a step's events are numbered 1..n, as their names say."""
@@ -1112,6 +1117,45 @@ class TestAttemptFileLayout(EngineEventsTestCase):
             snapshot["steps"]["lane_1"]["run_id"],
             self.stream(plan, report.execution_id, "lane_1")[0]["run_id"],
         )
+
+    def test_step_ids_that_would_collide_as_paths_keep_separate_streams(self):
+        # A step ID can name another step's event file, or a path the
+        # filesystem would normalize to another step's directory. Whichever
+        # step publishes first, both run and keep streams of their own.
+        engine = self.spool_engine()
+        groups = [
+            ["lane", "lane/0001_step_started.json", "lane/0001_step_started.json.tmp"],
+            ["lane/process", "lane/./process"],
+        ]
+        for index, group in enumerate(groups):
+            for order in (group, group[::-1]):
+                with self.subTest(order=order):
+                    # Distinct params, so no step is reused from another's
+                    # marker should their work directories coincide.
+                    plan = plan_of(
+                        *(spec(s, variant=n) for n, s in enumerate(order)),
+                        plan_id=f"{PLAN_ID}_{index}_{order == group}",
+                    )
+
+                    report = engine.run(plan)
+
+                    assert report is not None
+                    self.assertEqual(report.counts["succeeded"], len(order))
+                    snapshot = self.snapshot(plan)
+                    self.assertEqual(list(snapshot["steps"]), order)
+                    run_ids = set()
+                    for step_id in order:
+                        events = self.stream(plan, report.execution_id, step_id)
+                        self.assertEqual(
+                            [e["type"] for e in events],
+                            ["step.started", "step.succeeded"],
+                        )
+                        self.assertEqual({e["step_id"] for e in events}, {step_id})
+                        entry = snapshot["steps"][step_id]
+                        self.assertEqual(entry["state"], "step.succeeded")
+                        self.assertEqual(entry["run_id"], events[0]["run_id"])
+                        run_ids.add(entry["run_id"])
+                    self.assertEqual(len(run_ids), len(order))
 
 
 if __name__ == "__main__":

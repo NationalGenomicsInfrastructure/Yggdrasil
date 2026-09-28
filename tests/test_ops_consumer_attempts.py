@@ -53,6 +53,7 @@ from yggdrasil.flow.events.attempt_records import (
     SpoolAttemptHistory,
     attempt_dir,
     record_filename,
+    step_events_dir,
 )
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY, Plan
@@ -678,6 +679,45 @@ class TestObservedAttempts(SnapshotTestCase):
             )
 
         self.assert_shows(self.snapshot(), shown.report)
+
+    def test_steps_found_by_listing_keep_their_own_ids(self):
+        # A start record without an inventory: the step directories are
+        # listed instead, and escaped names map back to the steps' IDs.
+        execution_id = format_execution_id(FUTURE, "0000")
+        directory = self.attempt_dir(execution_id)
+        directory.mkdir(parents=True)
+        (directory / record_filename(ATTEMPT_STARTED_EVENT)).write_text(
+            json.dumps(
+                {
+                    "type": ATTEMPT_STARTED_EVENT,
+                    "execution_id": execution_id,
+                    "scope": SCOPE,
+                }
+            )
+        )
+        step_ids = ["lane", "lane.json", "%lane"]
+        for step_id in step_ids:
+            step_dir = step_events_dir(directory, step_id)
+            step_dir.mkdir(parents=True)
+            (step_dir / "0001_step_started.json").write_text(
+                json.dumps(
+                    {
+                        "type": "step.started",
+                        "seq": 1,
+                        "execution_id": execution_id,
+                        "step_id": step_id,
+                        "run_id": f"run_{step_id}",
+                    }
+                )
+            )
+
+        steps = self.snapshot()["steps"]
+
+        self.assertEqual(sorted(steps), sorted(step_ids))
+        for step_id in step_ids:
+            with self.subTest(step_id=step_id):
+                self.assertEqual(steps[step_id]["run_id"], f"run_{step_id}")
+                self.assertEqual(steps[step_id]["state"], "step.started")
 
     def test_leftover_old_layout_neither_shows_nor_blocks(self):
         # A spool written before attempt directories: root-level records of a

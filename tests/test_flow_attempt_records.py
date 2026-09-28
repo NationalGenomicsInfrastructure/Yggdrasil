@@ -15,6 +15,7 @@ from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
     ATTEMPT_STARTED_EVENT,
     STEP_BLOCKED_EVENT,
+    STEP_PART_ESCAPE,
     SpoolAttemptDirectories,
     SpoolAttemptHistory,
     attempt_dir,
@@ -24,6 +25,7 @@ from yggdrasil.flow.events.attempt_records import (
     record_filename,
     step_event_filename,
     step_events_dir,
+    step_id_of_dir,
 )
 
 REALM = "test_realm"
@@ -84,18 +86,103 @@ class TestPaths(unittest.TestCase):
             attempt / "steps" / "lane_1__process",
         )
 
-    def test_step_ids_keep_their_existing_path_semantics(self):
-        # Manually built steps need not match PlanBuilder's ID pattern; a
-        # nested ID nests, exactly as its work directory does.
+    def test_ordinary_step_ids_keep_their_names_and_nesting(self):
+        # Manually built steps need not match PlanBuilder's ID pattern; each
+        # "/"-separated part of an ID is one directory level.
         attempt = attempt_dir(Path("/spool"), REALM, PLAN_ID, FIRST)
 
-        self.assertEqual(
-            step_events_dir(attempt, "lane_1/process"),
-            attempt / "steps" / "lane_1" / "process",
-        )
-        self.assertEqual(
-            step_events_dir(attempt, "1.lane"), attempt / "steps" / "1.lane"
-        )
+        for step_id in ("lane_1/process", "1.lane", "a%b", "lane.jsonl", "x y"):
+            with self.subTest(step_id=step_id):
+                self.assertEqual(
+                    step_events_dir(attempt, step_id),
+                    attempt.joinpath("steps", *step_id.split("/")),
+                )
+
+    def test_ambiguous_parts_are_escaped(self):
+        attempt = attempt_dir(Path("/spool"), REALM, PLAN_ID, FIRST)
+        steps = attempt / "steps"
+
+        for step_id, expected in (
+            # Parts that could be an event file of the step above.
+            ("lane/0001_step_started.json", "lane/%0001_step_started.json"),
+            ("lane/0001_step_started.json.tmp", "lane/%0001_step_started.json.tmp"),
+            ("lane.json", "%lane.json"),
+            # Parts that path normalization would drop or resolve.
+            ("lane/./process", "lane/%./process"),
+            ("lane//process", "lane/%/process"),
+            ("lane/", "lane/%"),
+            ("/lane", "%/lane"),
+            ("lane/../other", "lane/%../other"),
+            ("..", "%.."),
+            # The escape itself.
+            ("%lane", "%%lane"),
+            ("lane/%.", "lane/%%."),
+        ):
+            with self.subTest(step_id=step_id):
+                self.assertEqual(
+                    step_events_dir(attempt, step_id),
+                    steps.joinpath(*expected.split("/")),
+                )
+
+    def test_every_step_id_gets_a_directory_of_its_own_inside_steps(self):
+        attempt = attempt_dir(Path("/spool"), REALM, PLAN_ID, FIRST)
+        steps = attempt / "steps"
+        step_ids = [
+            "lane",
+            "lane/",
+            "/lane",
+            "lane/process",
+            "lane/./process",
+            "lane//process",
+            "lane/../lane/process",
+            "lane/0001_step_started.json",
+            "lane/0001_step_started.json.tmp",
+            "lane/%0001_step_started.json",
+            "lane/%",
+            "%",
+            "",
+            ".",
+            "..",
+            "../escape",
+        ]
+        event_files = [
+            step_event_filename(1, "step.started"),
+            step_event_filename(1, "step.started").replace(".json", ".json.tmp"),
+            step_event_filename(10000, "data_access.write.succeeded"),
+        ]
+        directories = {
+            step_id: step_events_dir(attempt, step_id) for step_id in step_ids
+        }
+
+        self.assertEqual(len(set(directories.values())), len(step_ids))
+        for step_id, directory in directories.items():
+            with self.subTest(step_id=step_id):
+                # Nothing the filesystem would normalize or resolve elsewhere.
+                self.assertEqual(os.path.normpath(directory), str(directory))
+                self.assertTrue(directory.is_relative_to(steps))
+                self.assertNotEqual(directory, steps)
+                # Never the path of another step's event file.
+                for other in directories.values():
+                    for name in event_files:
+                        self.assertNotEqual(directory, other / name)
+
+    def test_event_file_names_never_start_with_the_escape(self):
+        for name in (
+            step_event_filename(1, "step.started"),
+            step_event_filename(12345, STEP_BLOCKED_EVENT),
+            record_filename(ATTEMPT_STARTED_EVENT),
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(name.startswith(STEP_PART_ESCAPE))
+                self.assertTrue(name.endswith(".json"))
+
+    def test_single_level_directory_names_map_back_to_step_ids(self):
+        attempt = attempt_dir(Path("/spool"), REALM, PLAN_ID, FIRST)
+
+        for step_id in ("lane", "lane.json", "%lane", "", ".", ".."):
+            with self.subTest(step_id=step_id):
+                name = step_events_dir(attempt, step_id).name
+                self.assertEqual(step_id_of_dir(name), step_id)
 
     def test_an_id_that_cannot_name_a_directory_is_refused(self):
         for execution_id in ("", "..", "a/b"):

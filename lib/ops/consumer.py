@@ -66,6 +66,7 @@ from yggdrasil.flow.events.attempt_records import (
     STEPS_DIR,
     record_filename,
     step_events_dir,
+    step_id_of_dir,
 )
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
@@ -264,6 +265,9 @@ def _legacy_step_dirs(plan_dir: Path) -> list[Path]:
 def _event_files(directory: Path) -> list[Path]:
     """Return the event files directly in a directory, in name order.
 
+    Only files count: the directory of a step nested below can end in
+    ``.json`` too.
+
     Args:
         directory: The directory to list.
 
@@ -271,7 +275,11 @@ def _event_files(directory: Path) -> list[Path]:
         list[Path]: Its ``*.json`` files; none if it cannot be listed.
     """
     try:
-        return sorted(path for path in directory.iterdir() if path.suffix == ".json")
+        return sorted(
+            path
+            for path in directory.iterdir()
+            if path.suffix == ".json" and path.is_file()
+        )
     except OSError:
         return []
 
@@ -399,10 +407,12 @@ def _latest_observed_attempt(plan_dir: Path) -> tuple[Path, AttemptEvents] | Non
 def _attempt_events(attempt_directory: Path, attempt: AttemptEvents) -> AttemptEvents:
     """Gather the step events of an observed attempt.
 
-    Each step the attempt planned is read from its own directory, by name, and
-    only the files directly in it, so steps whose IDs nest (``lane_1`` and
+    Each step the attempt planned is read from its own directory (see
+    :func:`~yggdrasil.flow.events.attempt_records.step_events_dir`), and only
+    the files directly in it, so steps whose IDs nest (``lane_1`` and
     ``lane_1/process``) never mix. Only when the attempt's records list no
-    steps at all are the step directories listed instead.
+    steps at all are the step directories listed instead, which recovers
+    step IDs without ``/`` only.
 
     Args:
         attempt_directory: The attempt's directory.
@@ -415,7 +425,8 @@ def _attempt_events(attempt_directory: Path, attempt: AttemptEvents) -> AttemptE
     step_ids = planned_step_ids(attempt)
     if step_ids is None:
         step_ids = [
-            path.name for path in _subdirectories(attempt_directory / STEPS_DIR)
+            step_id_of_dir(path.name)
+            for path in _subdirectories(attempt_directory / STEPS_DIR)
         ]
 
     runs: dict[str, StepRun] = {}
