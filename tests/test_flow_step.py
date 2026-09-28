@@ -1,4 +1,5 @@
 import errno
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -589,6 +590,54 @@ class TestStepContext(unittest.TestCase):
                     {key: emitted[key] for key in correlation.event_fields()},
                     correlation.event_fields(),
                 )
+
+    def test_context_in_an_attempt_files_events_in_its_step_stream(self):
+        self.ctx.correlation = ExecutionCorrelation(
+            execution_id="20260924T120000000001Z_c68e"
+        )
+
+        self.ctx.emit("step.started")
+        self.ctx.progress(50)
+
+        paths = [
+            call[0][0]["_spool_path"] for call in self.mock_emitter.emit.call_args_list
+        ]
+        self.assertEqual(
+            paths,
+            [
+                {
+                    "realm": "test_realm",
+                    "plan_id": "test_plan_001",
+                    "execution_id": "20260924T120000000001Z_c68e",
+                    "step_id": "test_step_001",
+                    "filename": name,
+                }
+                for name in ("0001_step_started.json", "0002_step_progress.json")
+            ],
+        )
+
+    def test_every_event_carries_its_run_id(self):
+        self.ctx.emit("step.started")
+
+        self.assertEqual(self.mock_emitter.emit.call_args[0][0]["run_id"], "run_001")
+
+    def test_concurrent_events_never_share_a_number(self):
+        # Write traces share this counter, and a step may publish from threads
+        # of its own; a repeated number would overwrite a file.
+        start = threading.Barrier(8)
+
+        def publish() -> None:
+            start.wait(5.0)
+            for _ in range(100):
+                self.ctx._next_seq()
+
+        threads = [threading.Thread(target=publish) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5.0)
+
+        self.assertEqual(self.ctx._next_seq(), 801)
 
 
 class TestStepDecorator(unittest.TestCase):

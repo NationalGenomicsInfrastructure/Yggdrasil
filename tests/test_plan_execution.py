@@ -35,8 +35,10 @@ from lib.core_utils.plan_eligibility import is_plan_eligible
 from lib.core_utils.plan_execution import (
     DAEMON_CLAIM,
     ExecutionClaim,
+    ExecutionResult,
     ExecutionStatus,
     PlanExecutionCoordinator,
+    _log_level,
 )
 from lib.ops.consumer import build_plan_snapshot
 from lib.storage.errors import PlanStoreError
@@ -69,6 +71,9 @@ from yggdrasil.flow.errors import (
 from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
     ATTEMPT_STARTED_EVENT,
+    ATTEMPTS_DIR,
+    SpoolAttemptDirectories,
+    SpoolAttemptHistory,
 )
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY, Plan
@@ -939,6 +944,92 @@ class TestFinalizationRetries(ExecutionTestCase):
         self.assert_recorded(pending)
 
 
+class TestSummaryLogLevel(ExecutionTestCase):
+    """A resolved request is logged at the level its ending calls for.
+
+    A continuation attempt that drains its graph and finishes failed is a
+    normal, truthfully recorded ending, so its summary is a warning. Preflight
+    rejection, orchestration failure and an unrecorded result stay errors, and
+    how each request is resolved and recorded does not change.
+    """
+
+    def execute_logged(self) -> tuple[ExecutionResult, int]:
+        """Execute the plan; return the result and its summary's log level."""
+        with self.assertLogs(COORDINATOR_LOGGER, level=logging.DEBUG) as logs:
+            result = self.execute()
+        (summary,) = [r for r in logs.records if r.getMessage() == result.message]
+        return result, summary.levelno
+
+    def test_completed_failed_workflow_is_a_warning(self):
+        self.steps.fail("lane1_demux", RuntimeError("bad sample sheet"))
+        self.save(lanes_plan(CONTINUE))
+
+        result, level = self.execute_logged()
+
+        self.assertEqual(level, logging.WARNING)
+        self.assertEqual(result.status, ExecutionStatus.FINALIZED)
+        self.assertEqual(result.report.termination_reason, TerminationReason.COMPLETED)
+        self.assertEqual(result.report.outcome, ExecutionOutcome.FAILED)
+        self.assertFalse(result.succeeded)
+        self.assert_recorded(result)
+
+    def test_successful_workflow_is_info(self):
+        self.save(lanes_plan(CONTINUE))
+
+        result, level = self.execute_logged()
+
+        self.assertEqual(level, logging.INFO)
+        self.assertTrue(result.succeeded)
+
+    def test_finalized_preflight_rejection_stays_an_error(self):
+        # Its outcome is failed too, but the graph never ran.
+        self.save(cyclic_plan(CONTINUE))
+
+        result, level = self.execute_logged()
+
+        self.assertEqual(level, logging.ERROR)
+        self.assertEqual(result.status, ExecutionStatus.FINALIZED)
+        self.assertEqual(
+            result.report.termination_reason, TerminationReason.PREFLIGHT_REJECTED
+        )
+        self.assert_recorded(result)
+
+    def test_orchestration_failure_stays_an_error(self):
+        self.emitter.fail_on.add("step.started")
+        self.save(lanes_plan(CONTINUE))
+
+        result, level = self.execute_logged()
+
+        self.assertEqual(level, logging.ERROR)
+        self.assertEqual(result.status, ExecutionStatus.UNFINISHED)
+        self.assertEqual(
+            result.report.termination_reason, TerminationReason.ORCHESTRATION_ERROR
+        )
+        self.assert_unconsumed()
+
+    def test_pending_finalization_stays_an_error(self):
+        # The same completed failed workflow, whose result cannot be recorded.
+        self.steps.fail("lane1_demux", RuntimeError("bad sample sheet"))
+        self.save(lanes_plan(CONTINUE))
+        self.store.fail_finalize(RETRYABLE, RETRYABLE, RETRYABLE)
+
+        result, level = self.execute_logged()
+
+        self.assertEqual(level, logging.ERROR)
+        self.assertEqual(result.status, ExecutionStatus.FINALIZATION_PENDING)
+        self.assertEqual(result.report.termination_reason, TerminationReason.COMPLETED)
+        self.assert_unconsumed()
+
+    def test_finalized_result_without_an_adequate_report_is_not_downgraded(self):
+        unfinished = AttemptContext.for_plan(chain_plan(), execution_id="x").report
+        for report in (None, unfinished):
+            with self.subTest(report=report):
+                result = ExecutionResult(
+                    PLAN_ID, ExecutionStatus.FINALIZED, "finalized", report=report
+                )
+                self.assertEqual(_log_level(result), logging.ERROR)
+
+
 class TestAttemptReporting(ExecutionTestCase):
     """Each coordinated attempt is identified by the engine and reported once."""
 
@@ -1120,7 +1211,13 @@ class TestAttemptReporting(ExecutionTestCase):
             self.assertEqual(duplicate.status, ExecutionStatus.DUPLICATE)
             assert first.report is not None
             plan_dir = spool / REALM / PLAN_ID
-            self.assertEqual(len(list(plan_dir.glob("*.json"))), 2)
+            # One attempt directory, holding the first attempt's two records.
+            (attempt_dir,) = (plan_dir / ATTEMPTS_DIR).iterdir()
+            self.assertEqual(attempt_dir.name, first.report.execution_id)
+            self.assertEqual(
+                sorted(p.name for p in attempt_dir.glob("*.json")),
+                ["plan_attempt_report.json", "plan_attempt_started.json"],
+            )
             snapshot = build_plan_snapshot(plan_dir, REALM, PLAN_ID)
             self.assertEqual(
                 snapshot["attempt"]["execution_id"], first.report.execution_id
@@ -1129,12 +1226,137 @@ class TestAttemptReporting(ExecutionTestCase):
             self.assertEqual(snapshot["steps"]["a"]["state"], "step.failed")
 
 
+class _SpyReserver:
+    """Reserves in a real spool, recording each call; can hold, refuse or fail."""
+
+    def __init__(self, spool: Path) -> None:
+        self.inner = SpoolAttemptDirectories(spool)
+        self.calls: list[str] = []
+        self.refuse = False
+        self.error: Exception | None = None
+        self.gate: Gate | None = None
+
+    def reserve(self, realm: str, plan_id: str, execution_id: str) -> bool:
+        self.calls.append(execution_id)
+        if self.error is not None:
+            raise self.error
+        if self.refuse:
+            return False
+        reserved = self.inner.reserve(realm, plan_id, execution_id)
+        if self.gate is not None:
+            self.gate.pass_through()
+        return reserved
+
+
+class TestAttemptReservation(ExecutionTestCase):
+    """A coordinated attempt's ID is reserved once, before anything runs.
+
+    Reservation belongs to admission: a failure to reserve, or cancellation
+    around it, starts no work, consumes no request and releases the plan only
+    once the reservation's worker is done.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.spool = Path(temp_dir.name) / "spool"
+        self.reserver = _SpyReserver(self.spool)
+        self.engine = CapturingEngine(
+            work_root=Path(temp_dir.name) / "work",
+            emitter=FileSpoolEmitter(self.spool),
+            journal=self.journal,
+            execution_ids=ExecutionIdAllocator(
+                SpoolAttemptHistory(self.spool), clock=Clock(T0)
+            ),
+            attempt_reserver=self.reserver,
+        )
+        self.coordinator = PlanExecutionCoordinator(
+            engine=self.engine,
+            plan_store=self.store,  # type: ignore[arg-type]
+            sleep=self.record_delay,
+        )
+        self.attempts = self.spool / REALM / PLAN_ID / ATTEMPTS_DIR
+
+    def test_coordinated_attempt_reserves_its_directory_once(self):
+        self.save()
+
+        result = self.execute()
+
+        self.assertEqual(result.status, ExecutionStatus.FINALIZED)
+        (context,) = self.engine.contexts
+        self.assertEqual(self.reserver.calls, [context.execution_id])
+        self.assertTrue(context.execution_id_reserved)
+        self.assertEqual(
+            [p.name for p in self.attempts.iterdir()], [context.execution_id]
+        )
+        self.assert_recorded(result)
+
+    def test_exhausted_reservation_runs_nothing_and_leaves_the_plan_eligible(self):
+        self.reserver.refuse = True
+        self.save()
+
+        result = self.execute()
+
+        self.assertEqual(result.status, ExecutionStatus.ADMISSION_FAILED)
+        self.assertIn("ReservationExhaustedError", result.message)
+        self.assertEqual(len(self.reserver.calls), 3)
+        self.assertEqual(self.engine.contexts, [])
+        self.assertFalse(self.attempts.exists())
+        self.assert_unconsumed()
+        self.assertFalse(self.coordinator.is_in_flight(PLAN_ID))
+
+    def test_failed_reservation_is_not_retried_and_runs_nothing(self):
+        self.reserver.error = PermissionError("spool read-only")
+        self.save()
+
+        result = self.execute()
+
+        self.assertEqual(result.status, ExecutionStatus.ADMISSION_FAILED)
+        self.assertIn("PermissionError", result.message)
+        self.assertEqual(len(self.reserver.calls), 1)
+        self.assertEqual(self.engine.contexts, [])
+        self.assert_unconsumed()
+
+    def test_cancellation_after_reservation_leaves_an_unused_reservation(self):
+        self.reserver.gate = Gate()
+        self.save()
+
+        async def scenario():
+            first = self.coordinator.submit(PLAN_ID, DAEMON_CLAIM)
+            await self.reserver.gate.reached()
+            in_flight = self.coordinator.is_in_flight(PLAN_ID)
+            self.coordinator.request_cancellation(PLAN_ID)
+            self.reserver.gate.release()
+            return in_flight, await first
+
+        in_flight, result = run_bounded(scenario())
+
+        self.assertTrue(in_flight, "released while its reservation was running")
+        self.assertEqual(result.status, ExecutionStatus.CANCELLED)
+        self.assertEqual(self.engine.contexts, [])
+        self.assert_unconsumed()
+        self.assertFalse(self.coordinator.is_in_flight(PLAN_ID))
+        # The reservation stays, empty: it shows nothing ...
+        (unused,) = self.attempts.iterdir()
+        self.assertEqual(list(unused.iterdir()), [])
+        plan_dir = self.spool / REALM / PLAN_ID
+        self.assertIsNone(build_plan_snapshot(plan_dir, REALM, PLAN_ID)["attempt"])
+        # ... but keeps its place: the next attempt is ordered after it.
+        self.reserver.gate = None
+        retried = self.execute()
+        self.assertEqual(retried.status, ExecutionStatus.FINALIZED)
+        self.assertGreater(retried.report.execution_id, unused.name)
+        shown = build_plan_snapshot(plan_dir, REALM, PLAN_ID)["attempt"]
+        self.assertEqual(shown["execution_id"], retried.report.execution_id)
+
+
 class _ReturnsNothingEngine:
     """Runs the real attempt, then returns None instead of its report."""
 
     def __init__(self, engine):
         self.engine = engine
-        self.execution_ids = engine.execution_ids
+        self.reserve_execution_id = engine.reserve_execution_id
 
     def _run_attempt(self, plan: Plan, *, context: AttemptContext) -> None:
         self.engine._run_attempt(plan, context=context)
@@ -1143,7 +1365,8 @@ class _ReturnsNothingEngine:
 class _RefusingEngine:
     """Raises before recording anything, leaving the report open."""
 
-    execution_ids = ExecutionIdAllocator()
+    def reserve_execution_id(self, plan: Plan) -> tuple[str, bool]:
+        return ExecutionIdAllocator().allocate(plan.realm, plan.plan_id), False
 
     def _run_attempt(self, plan: Plan, *, context: AttemptContext) -> AttemptReport:
         raise OrchestrationError("attempt context refused")

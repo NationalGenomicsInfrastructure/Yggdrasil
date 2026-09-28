@@ -13,11 +13,13 @@ recorded":
 2. **Execution.** The attempt runs in a worker thread through
    ``Engine._run_attempt``, with an AttemptContext the coordinator owns, so the
    attempt's report is readable however the attempt ends. Its execution ID is
-   allocated just before, by the engine's own allocator, the one direct
-   ``Engine.run`` calls use as well, so attempts at a plan are ordered however
-   they were started. Allocation reads the plan's recorded attempts back, so
-   it runs in a worker thread too. A request that is not going to run, such as
-   a duplicate, gets no execution ID and leaves no trace in reporting.
+   allocated and reserved just before, through the engine's own helper, the
+   one direct ``Engine.run`` calls use as well, so attempts at a plan are
+   ordered however they were started and never share an attempt directory.
+   Allocation reads the plan's attempt history and reservation creates the
+   attempt's directory, so both run in a worker thread too. A request that is
+   not going to run, such as a duplicate, gets no execution ID and leaves no
+   trace in reporting.
 3. **Interpretation.** The report's termination reason decides whether the
    request finished (see ``finishes_request`` in
    ``lib/storage/plan_updates.py``); the type of any exception does not, since
@@ -189,8 +191,8 @@ class ExecutionStatus(str, Enum):
         INVALID_DOCUMENT: The plan document is eligible but does not describe
             an executable request. Nothing ran; the plan stays eligible.
         ADMISSION_FAILED: The plan store could not provide the snapshot to
-            admit the request from, or no execution ID could be allocated for
-            it. Nothing ran; the plan stays eligible.
+            admit the request from, or no execution ID could be allocated and
+            reserved for it. Nothing ran; the plan stays eligible.
         FINALIZED: The attempt finished its request and the result is
             recorded, consuming the token. The report's outcome says whether it
             succeeded.
@@ -376,6 +378,36 @@ _LOG_LEVELS: dict[ExecutionStatus, int] = {
     ExecutionStatus.FINALIZATION_PENDING: logging.ERROR,
     ExecutionStatus.SUPERSEDED: logging.WARNING,
 }
+
+
+def _log_level(result: ExecutionResult) -> int:
+    """Return the level a request's resolution is logged at.
+
+    A finalized request is logged by how its attempt ended. Success is INFO. An
+    attempt that drained its dependency graph (COMPLETED) with a failed outcome
+    is WARNING: under ``continue_independent`` that is a normal ending, recorded
+    truthfully, not a malfunction. Any other finalized ending, such as a
+    preflight rejection, or one without a report to judge by, stays ERROR.
+    Every other resolution has its level in ``_LOG_LEVELS``.
+
+    Args:
+        result: The request's resolution.
+
+    Returns:
+        int: The logging level.
+    """
+    if result.status is not ExecutionStatus.FINALIZED:
+        return _LOG_LEVELS[result.status]
+    if result.succeeded:
+        return logging.INFO
+    report = result.report
+    if (
+        report is not None
+        and report.termination_reason is TerminationReason.COMPLETED
+        and report.outcome is ExecutionOutcome.FAILED
+    ):
+        return logging.WARNING
+    return logging.ERROR
 
 
 class PlanExecutionCoordinator:
@@ -704,7 +736,7 @@ class PlanExecutionCoordinator:
                         "is not run again",
                     )
                 )
-            execution_id = await self._allocate_execution_id(
+            execution_id, reserved = await self._allocate_execution_id(
                 plan_doc_id, admission.plan, cancel_event
             )
             if cancel_event.is_set():
@@ -718,7 +750,7 @@ class PlanExecutionCoordinator:
                 )
             slot.attempted = request
             return await self._execute(
-                plan_doc_id, admission, execution_id, cancel_event
+                plan_doc_id, admission, execution_id, reserved, cancel_event
             )
         except _CycleStopped as stopped:
             return stopped.result
@@ -763,15 +795,19 @@ class PlanExecutionCoordinator:
 
     async def _allocate_execution_id(
         self, plan_doc_id: str, plan: Plan, cancel_event: threading.Event
-    ) -> str:
-        """Allocate the execution ID of the attempt about to be made.
+    ) -> tuple[str, bool]:
+        """Allocate and reserve the execution ID of the attempt about to be made.
 
-        The engine's allocator is the only one: the coordinator holds none of
-        its own, and reads the engine's at every allocation, so coordinated
-        and direct ``Engine.run`` attempts are always ordered by the same
-        allocator, however it was injected. Allocation reads the plan's
-        recorded attempts, so it runs in a worker thread, never on the event
-        loop.
+        The engine's helper is the only way to get one: the coordinator holds
+        no allocator of its own and calls ``Engine.reserve_execution_id`` at
+        every allocation, so coordinated and direct ``Engine.run`` attempts
+        are always ordered by the same allocator and reserved in the same
+        spool, however these were injected, and each attempt is reserved
+        exactly once. Allocation reads the plan's attempt history and
+        reservation creates the attempt's directory, so both run in a worker
+        thread, never on the event loop. A reservation that cancellation then
+        leaves unused stays behind as an empty directory: it keeps its place in
+        the order of the plan's attempts, but shows nothing.
 
         Args:
             plan_doc_id: The plan document.
@@ -779,15 +815,15 @@ class PlanExecutionCoordinator:
             cancel_event: The slot's cooperative cancellation signal.
 
         Returns:
-            str: The new execution ID.
+            tuple[str, bool]: The new execution ID, and whether it was
+            reserved.
 
         Raises:
-            _CycleStopped: ADMISSION_FAILED, if no execution ID can be allocated.
+            _CycleStopped: ADMISSION_FAILED, if no execution ID can be
+                allocated and reserved.
         """
         loop = asyncio.get_running_loop()
-        allocation = loop.run_in_executor(
-            None, self._engine.execution_ids.allocate, plan.realm, plan.plan_id
-        )
+        allocation = loop.run_in_executor(None, self._engine.reserve_execution_id, plan)
         try:
             return await self._outlast_cancellation(
                 allocation,
@@ -799,8 +835,9 @@ class PlanExecutionCoordinator:
                 ExecutionResult(
                     plan_doc_id,
                     ExecutionStatus.ADMISSION_FAILED,
-                    f"Could not allocate an execution ID for plan '{plan_doc_id}' "
-                    f"({type(exc).__name__}: {exc}); nothing ran, it stays eligible",
+                    f"Could not allocate and reserve an execution ID for plan "
+                    f"'{plan_doc_id}' ({type(exc).__name__}: {exc}); nothing ran, "
+                    "it stays eligible",
                 )
             ) from exc
 
@@ -878,6 +915,7 @@ class PlanExecutionCoordinator:
         plan_doc_id: str,
         admission: _Admission,
         execution_id: str,
+        reserved: bool,
         cancel_event: threading.Event,
     ) -> ExecutionResult:
         """Run one attempt for an admitted request, then resolve the request.
@@ -886,6 +924,7 @@ class PlanExecutionCoordinator:
             plan_doc_id: The plan document.
             admission: The captured request.
             execution_id: The execution ID allocated for the attempt.
+            reserved: Whether that ID was reserved when it was allocated.
             cancel_event: The slot's cooperative cancellation signal, handed to
                 the attempt.
 
@@ -901,6 +940,7 @@ class PlanExecutionCoordinator:
             execution_authority=admission.execution_authority,
             execution_owner=admission.execution_owner,
             cancel_event=cancel_event,
+            execution_id_reserved=reserved,
         )
         self._logger.info(
             "Executing plan '%s' (realm=%s, policy=%s, run_token=%d, "
@@ -1277,8 +1317,4 @@ class PlanExecutionCoordinator:
 
     def _log_result(self, result: ExecutionResult) -> None:
         """Log a request's resolution at a level matching it."""
-        if result.status is ExecutionStatus.FINALIZED:
-            level = logging.INFO if result.succeeded else logging.ERROR
-        else:
-            level = _LOG_LEVELS[result.status]
-        self._logger.log(level, "%s", result.message)
+        self._logger.log(_log_level(result), "%s", result.message)

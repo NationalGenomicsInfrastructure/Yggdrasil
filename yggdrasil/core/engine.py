@@ -14,7 +14,11 @@ from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
 from lib.core_utils.runtime_paths import resolve_work_root
-from yggdrasil.core.execution_ids import ExecutionIdAllocator
+from yggdrasil.core.execution_ids import (
+    AttemptReserver,
+    ExecutionIdAllocator,
+    reserve_execution_id,
+)
 from yggdrasil.core.scheduler import DependencyScheduler
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.errors import (
@@ -30,9 +34,12 @@ from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
     ATTEMPT_STARTED_EVENT,
     STEP_BLOCKED_EVENT,
+    SpoolAttemptDirectories,
     SpoolAttemptHistory,
+    attempt_spool_path,
     is_record_key,
     record_filename,
+    step_event_filename,
 )
 from yggdrasil.flow.events.correlation import ExecutionCorrelation
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
@@ -491,12 +498,14 @@ class Engine:
     - event spool emission via StepContext (handled by @step decorator), plus
       the engine's own records of each attempt: when it started, which steps
       a failure blocked, and how it ended. Every event of an attempt carries
-      the attempt's execution ID, allocated by :attr:`execution_ids`.
+      the attempt's execution ID, allocated by :attr:`execution_ids` and
+      reserved through :attr:`attempt_reserver`, and a file spool keeps each
+      attempt's events in that attempt's own directory.
 
     An Engine is long-lived and shared across plans, so it holds no attempt
     state: each attempt's outcomes live in its AttemptContext and a scheduler
-    built for that attempt alone. The one thing its attempts share is the
-    execution-ID allocator, which orders them.
+    built for that attempt alone. What its attempts share is the execution-ID
+    allocator, which orders them, and the reserver, which keeps them apart.
     """
 
     def __init__(
@@ -505,6 +514,7 @@ class Engine:
         emitter: EventEmitter | None = None,
         logger: logging.Logger | None = None,
         execution_ids: ExecutionIdAllocator | None = None,
+        attempt_reserver: AttemptReserver | None = None,
     ):
         """Initialize the engine.
 
@@ -520,20 +530,54 @@ class Engine:
                 keeps ordering within this engine only for any other emitter.
                 It never looks for a spool the emitter does not write to. Pass
                 one explicitly to choose its history, or to control its clock.
+            attempt_reserver: Claims each new attempt's execution ID before the
+                attempt publishes anything. When omitted, a FileSpoolEmitter's
+                own spool is used, whatever allocator was passed, so a file
+                spool always keeps its attempts apart; any other emitter gets
+                none, and nothing is reserved. Pass one explicitly to reserve
+                in a spool the emitter reaches indirectly, such as one inside
+                a TeeEmitter.
         """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         # Default resolution ($YGG_WORK_ROOT → mode default) is centralized
         # in lib.core_utils.runtime_paths.
         self.work_root = Path(work_root) if work_root else resolve_work_root()
         self.emitter = emitter or FileSpoolEmitter()
+        spool = (
+            self.emitter.root if isinstance(self.emitter, FileSpoolEmitter) else None
+        )
         if execution_ids is None:
-            history = (
-                SpoolAttemptHistory(self.emitter.root)
-                if isinstance(self.emitter, FileSpoolEmitter)
-                else None
+            execution_ids = ExecutionIdAllocator(
+                SpoolAttemptHistory(spool) if spool is not None else None
             )
-            execution_ids = ExecutionIdAllocator(history)
         self.execution_ids = execution_ids
+        if attempt_reserver is None and spool is not None:
+            attempt_reserver = SpoolAttemptDirectories(spool)
+        self.attempt_reserver = attempt_reserver
+
+    def reserve_execution_id(self, plan: Plan) -> tuple[str, bool]:
+        """Allocate and reserve the execution ID of a new attempt at a plan.
+
+        The one way an attempt's ID is chosen, shared by :meth:`run` and the
+        operational callers, so every attempt is both ordered by
+        :attr:`execution_ids` and reserved through :attr:`attempt_reserver`,
+        exactly once. Blocks on the plan's history and on the reservation:
+        call it off the event loop.
+
+        Args:
+            plan: The plan about to be attempted.
+
+        Returns:
+            tuple[str, bool]: The execution ID, and whether it was reserved;
+            False only when this engine has no reserver.
+
+        Raises:
+            ReservationExhaustedError: If every candidate ID was already taken.
+            Exception: Whatever reading the history or reserving raised.
+        """
+        return reserve_execution_id(
+            self.execution_ids, self.attempt_reserver, plan.realm, plan.plan_id
+        )
 
     def _emit_engine_event(self, description: str, event: dict[str, Any]) -> None:
         """Publish an engine-level event directly, classifying failure.
@@ -714,10 +758,11 @@ class Engine:
         rejected plan leaves existing plan snapshots, artifacts and cache
         markers untouched. The attempt is still recorded in the event spool.
 
-        The attempt's execution ID comes from :attr:`execution_ids`, the
-        allocator operational callers use too, so an attempt started here is
-        ordered against every other attempt at the plan. Allocating it reads
-        the plan's recorded attempts back, which blocks.
+        The attempt's execution ID comes from :meth:`reserve_execution_id`,
+        the helper operational callers use too, so an attempt started here is
+        ordered against every other attempt at the plan and never shares its
+        directory with one. Allocating and reserving it reads the plan's
+        attempt history and creates the attempt's directory, which blocks.
 
         The return contract depends on the plan's failure policy. Static typing
         cannot express that, so it is dispatched at runtime:
@@ -742,8 +787,8 @@ class Engine:
         Raises:
             PreflightValidationError: If the plan is rejected by preflight.
             OrchestrationError: If engine bookkeeping or event publication
-                fails, or no execution ID can be allocated. In the last case no
-                attempt starts, and nothing is published.
+                fails, or no execution ID can be allocated and reserved. In the
+                last case no attempt starts, and nothing is published.
             StepError: If a step fails under ``fail_fast``. A TransientStepError
                 surfaces as a PermanentStepError, because retries are not
                 implemented.
@@ -753,8 +798,10 @@ class Engine:
         with _orchestration_boundary(
             f"Allocating an execution ID for plan '{plan.plan_id}'"
         ):
-            execution_id = self.execution_ids.allocate(plan.realm, plan.plan_id)
-        context = AttemptContext.for_plan(plan, execution_id=execution_id)
+            execution_id, reserved = self.reserve_execution_id(plan)
+        context = AttemptContext.for_plan(
+            plan, execution_id=execution_id, execution_id_reserved=reserved
+        )
         report = self._run_attempt(plan, context=context)
         if report.failure_policy == CONTINUE_INDEPENDENT_POLICY:
             return report
@@ -781,13 +828,17 @@ class Engine:
         while runnable work remains, so it never interrupts a running step and a
         signal arriving after the last step does not undo a drained attempt.
 
+        Before anything else, the attempt's execution ID is reserved if its
+        context says it is not yet: a caller that built the context with an ID
+        of its own gets it claimed here, exclusively, and never renamed. An ID
+        already taken is refused, so no attempt writes into another's records.
+
         What the attempt publishes, in order, all stamped with its correlation:
 
         1. ``plan.attempt_started``, before preflight and before any step runs:
            the attempt's identity and planned step inventory. An attempt that
-           runs no step at all — rejected, or with no steps — is still visible,
-           and the record puts the attempt into the history later execution
-           IDs are ordered against.
+           runs no step at all — rejected, or with no steps — is still visible:
+           the record is what makes a reader treat the attempt as observed.
         2. Each step's own events, as it is reused or executed.
         3. One ``step.blocked`` per step a failure blocks, published as soon
            as the scheduler blocks it and before another step starts, with the
@@ -812,8 +863,9 @@ class Engine:
                 work remained (CANCELLED).
             OrchestrationError: If infrastructure failed or a scheduler invariant
                 was violated (ORCHESTRATION_ERROR); or if ``context`` does not
-                belong to a fresh attempt at ``plan``, in which case the report
-                is left untouched and nothing runs or is published.
+                belong to a fresh attempt at ``plan``, or its execution ID
+                cannot be reserved, in which case the report is left untouched
+                and nothing runs or is published.
             EventPublicationError: If publishing the report itself failed. The
                 report then says ORCHESTRATION_ERROR, with the ending it was
                 closed with kept as context (see
@@ -834,6 +886,7 @@ class Engine:
         the exception never disagree about how the attempt ended.
         """
         self._check_attempt_context(plan, context)
+        self._reserve_given_execution_id(plan, context)
         report = context.report
         correlation = context.correlation
         scheduler: DependencyScheduler | None = None
@@ -913,8 +966,8 @@ class Engine:
         something that never happened. Such a context is a caller defect, so it
         is refused before anything runs and left exactly as it was.
 
-        An execution ID also names the attempt's records in the event spool, so
-        one that cannot name a file there is refused too.
+        An execution ID also names the attempt's directory in the event spool,
+        so one that cannot name a directory there is refused too.
 
         Args:
             plan: The plan about to be executed.
@@ -947,6 +1000,43 @@ class Engine:
                 f"Attempt context '{report.execution_id}' cannot run plan "
                 f"'{plan.plan_id}': {'; '.join(problems)}."
             )
+
+    def _reserve_given_execution_id(self, plan: Plan, context: AttemptContext) -> None:
+        """Reserve the execution ID a caller built its context with.
+
+        An ID the engine allocated was reserved with it (see
+        :meth:`reserve_execution_id`) and is not reserved again. An ID the
+        caller chose is claimed here, exclusively, before the attempt publishes
+        anything: taken, it is refused rather than renamed or shared, since
+        writing into an existing attempt's directory would overwrite its
+        records. The context records the reservation only once it succeeds.
+        Without a reserver there is nothing to claim, and the context stays
+        unreserved.
+
+        Args:
+            plan: The plan about to be executed.
+            context: The attempt's context; its report is left untouched.
+
+        Raises:
+            OrchestrationError: If the ID is already taken, or reserving it
+                fails.
+        """
+        if context.execution_id_reserved or self.attempt_reserver is None:
+            return
+        execution_id = context.execution_id
+        with _orchestration_boundary(
+            f"Reserving execution ID '{execution_id}' for plan '{plan.plan_id}'"
+        ):
+            reserved = self.attempt_reserver.reserve(
+                plan.realm, plan.plan_id, execution_id
+            )
+        if not reserved:
+            raise OrchestrationError(
+                f"Attempt context '{execution_id}' cannot run plan "
+                f"'{plan.plan_id}': its execution ID is already taken by another "
+                f"attempt."
+            )
+        context.execution_id_reserved = True
 
     def _contain_failure(
         self,
@@ -1104,7 +1194,7 @@ class Engine:
             # The @step wrapper has already emitted "step.failed".
             # Add a precise diagnostic so operators know retry isn't wired yet.
             # TODO: Implement retry.
-            self._emit_retry_unimplemented(plan, spec, run_id, exc, correlation)
+            self._emit_retry_unimplemented(plan, spec, ctx, exc, correlation)
             raise
 
         if result is not None and not isinstance(result, StepResult):
@@ -1216,23 +1306,13 @@ class Engine:
                 step and its DataAccess publish.
 
         Returns:
-            StepContext: The context passed to the step function.
+            StepContext: The context passed to the step function. Its
+            DataAccess numbers write traces from the context's own event
+            counter, so they join the step's event stream.
         """
         from yggdrasil.flow.data_access import DataAccess, DataAccessTraceContext
 
-        trace_ctx = DataAccessTraceContext(
-            realm=plan.realm,
-            phase="execution",
-            plan_id=plan.plan_id,
-            run_id=run_id,
-            step_id=spec.step_id,
-            step_name=spec.name,
-            scope=spec.scope or plan.scope,
-            emitter=self.emitter,
-            correlation=correlation,
-        )
-
-        return StepContext(
+        ctx = StepContext(
             realm=plan.realm,
             scope=spec.scope or plan.scope,
             plan_id=plan.plan_id,
@@ -1246,12 +1326,24 @@ class Engine:
             run_id=run_id,
             required_outputs=required_outputs,
             correlation=correlation,
-            data=DataAccess(
-                plan.realm,
+        )
+        ctx.data = DataAccess(
+            plan.realm,
+            phase="execution",
+            trace_context=DataAccessTraceContext(
+                realm=plan.realm,
                 phase="execution",
-                trace_context=trace_ctx,
+                plan_id=plan.plan_id,
+                run_id=run_id,
+                step_id=spec.step_id,
+                step_name=spec.name,
+                scope=spec.scope or plan.scope,
+                emitter=self.emitter,
+                correlation=correlation,
+                next_seq=ctx._next_seq,
             ),
         )
+        return ctx
 
     def _emit_step_skipped(
         self,
@@ -1288,17 +1380,19 @@ class Engine:
                 "step_name": spec.name,
                 "fingerprint": fingerprint,
                 "reason": CACHE_HIT_REASON,
+                "run_id": run_id,
+                # A reused step publishes nothing else in the attempt.
                 "seq": 1,
                 **correlation.event_fields(),
                 "eid": str(uuid.uuid4()),
                 "ts": utcnow_iso(),
-                "_spool_path": {
-                    "realm": plan.realm,
-                    "plan_id": plan.plan_id,
-                    "step_id": spec.step_id,
-                    "run_id": run_id,
-                    "filename": "0001_step_skipped.json",
-                },
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    correlation.execution_id,
+                    step_event_filename(1, "step.skipped"),
+                    step_id=spec.step_id,
+                ),
             },
         )
 
@@ -1306,40 +1400,47 @@ class Engine:
         self,
         plan: Plan,
         spec: StepSpec,
-        run_id: str,
+        ctx: StepContext,
         exc: TransientStepError,
         correlation: ExecutionCorrelation,
     ) -> None:
         """Publish the diagnostic that a transient failure was not retried.
 
+        It follows the step's own ``step.failed`` in the step's event stream,
+        numbered from the failed invocation's own counter.
+
         Args:
             plan: The plan being executed.
             spec: The step that failed transiently.
-            run_id: The ID of the failed invocation.
+            ctx: The failed invocation's context.
             exc: The transient failure.
             correlation: The attempt's identity.
 
         Raises:
             EventPublicationError: If the emitter fails to publish.
         """
+        seq = ctx._next_seq()
+        event_type = "step.retry_unimplemented"
         self._emit_engine_event(
-            f"step.retry_unimplemented for step '{spec.step_id}'",
+            f"{event_type} for step '{spec.step_id}'",
             {
-                "type": "step.retry_unimplemented",
+                "type": event_type,
                 "realm": plan.realm,
                 "scope": plan.scope,
                 "plan_id": plan.plan_id,
                 "step_id": spec.step_id,
+                "run_id": ctx.run_id,
+                "seq": seq,
                 "error": str(exc),
                 "kind": "transient",
                 **correlation.event_fields(),
-                "_spool_path": {
-                    "realm": plan.realm,
-                    "plan_id": plan.plan_id,
-                    "step_id": spec.step_id,
-                    "run_id": run_id,
-                    "filename": "retry_unimplemented.json",
-                },
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    correlation.execution_id,
+                    step_event_filename(seq, event_type),
+                    step_id=spec.step_id,
+                ),
             },
         )
 
@@ -1348,9 +1449,8 @@ class Engine:
     ) -> None:
         """Publish the one ``step.blocked`` event of a step a failure blocked.
 
-        The step never ran, so the event names no run: the spool files it
-        directly under the step's directory, named after the attempt so that
-        different attempts' records never overwrite each other.
+        The step never ran, so the event names no run. It is the only event the
+        step has in the attempt, so it opens the step's event stream.
 
         Args:
             plan: The plan being executed.
@@ -1371,17 +1471,17 @@ class Engine:
                 "step_name": spec.name,
                 "direct_blockers": list(report.direct_blockers.get(spec.step_id, [])),
                 "failed_ancestors": list(report.failed_ancestors.get(spec.step_id, [])),
+                "seq": 1,
                 **report.correlation.event_fields(),
                 "eid": str(uuid.uuid4()),
                 "ts": utcnow_iso(),
-                "_spool_path": {
-                    "realm": plan.realm,
-                    "plan_id": plan.plan_id,
-                    "step_id": spec.step_id,
-                    "filename": record_filename(
-                        report.execution_id, STEP_BLOCKED_EVENT
-                    ),
-                },
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    report.execution_id,
+                    step_event_filename(1, STEP_BLOCKED_EVENT),
+                    step_id=spec.step_id,
+                ),
             },
         )
 
@@ -1391,9 +1491,10 @@ class Engine:
         Published before preflight and before any step runs, so every attempt
         leaves a record, including one that is rejected or has no steps, and
         the record carries the planned inventory a reader needs to show work
-        that has not started. It also puts the attempt into the history later
-        execution IDs for the plan are ordered against, so it must exist before
-        the attempt does anything else.
+        that has not started. Until it exists, a reader does not treat the
+        attempt as observed, so it must exist before the attempt does anything
+        else. (The attempt's place in the order of the plan's attempts was
+        already fixed when its directory was reserved.)
 
         Args:
             plan: The plan being attempted.
@@ -1425,13 +1526,12 @@ class Engine:
                 ],
                 "eid": str(uuid.uuid4()),
                 "ts": utcnow_iso(),
-                "_spool_path": {
-                    "realm": plan.realm,
-                    "plan_id": plan.plan_id,
-                    "filename": record_filename(
-                        report.execution_id, ATTEMPT_STARTED_EVENT
-                    ),
-                },
+                "_spool_path": attempt_spool_path(
+                    plan.realm,
+                    plan.plan_id,
+                    report.execution_id,
+                    record_filename(ATTEMPT_STARTED_EVENT),
+                ),
             },
         )
 
@@ -1489,8 +1589,7 @@ class Engine:
 
         Published on every ending, so no attempt is left looking as if it were
         still running. The event names no step, so the spool files it directly
-        under the plan, named after the attempt's execution ID: reports from
-        different attempts at one plan never overwrite each other.
+        in the attempt's own directory.
 
         Publication is part of the attempt's exit, not an afterthought to it. If
         it fails, or has to be skipped, the report the caller holds records that
@@ -1541,11 +1640,12 @@ class Engine:
             "report": report.to_dict(),
             "eid": str(uuid.uuid4()),
             "ts": utcnow_iso(),
-            "_spool_path": {
-                "realm": plan.realm,
-                "plan_id": plan.plan_id,
-                "filename": record_filename(report.execution_id, ATTEMPT_REPORT_EVENT),
-            },
+            "_spool_path": attempt_spool_path(
+                plan.realm,
+                plan.plan_id,
+                report.execution_id,
+                record_filename(ATTEMPT_REPORT_EVENT),
+            ),
         }
         try:
             self._emit_engine_event(

@@ -330,6 +330,68 @@ class TestFileSpoolEmitter(unittest.TestCase):
         unknown_step_dir = expected_dir / "unknown_step"
         self.assertFalse(unknown_step_dir.exists())
 
+    def test_attempt_events_are_filed_under_their_attempt(self):
+        """An execution_id hint files records in the attempt's own directory
+        and step events in that step's stream within it."""
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+        attempt = "20260924T120000000001Z_c68e"
+
+        emitter.emit(
+            {
+                "type": "plan.attempt_started",
+                "_spool_path": {
+                    "realm": "test_realm",
+                    "plan_id": "plan_123",
+                    "execution_id": attempt,
+                    "filename": "plan_attempt_started.json",
+                },
+            }
+        )
+        emitter.emit(
+            {
+                "type": "step.started",
+                "_spool_path": {
+                    "realm": "test_realm",
+                    "plan_id": "plan_123",
+                    "execution_id": attempt,
+                    "step_id": "lane_1/process",
+                    # A run hint has no say inside an attempt.
+                    "run_id": "run_1",
+                    "filename": "0001_step_started.json",
+                },
+            }
+        )
+
+        attempt_dir = self.spool_dir / "test_realm" / "plan_123" / "attempts" / attempt
+        self.assertEqual(
+            sorted(
+                str(p.relative_to(attempt_dir)) for p in attempt_dir.rglob("*.json")
+            ),
+            [
+                "plan_attempt_started.json",
+                "steps/lane_1/process/0001_step_started.json",
+            ],
+        )
+
+    def test_attempt_that_cannot_name_a_directory_is_refused(self):
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+
+        for execution_id in ("", "..", "../escape"):
+            with self.subTest(execution_id=execution_id):
+                with self.assertRaises(ValueError):
+                    emitter.emit(
+                        {
+                            "type": "plan.attempt_started",
+                            "_spool_path": {
+                                "realm": "r",
+                                "plan_id": "p",
+                                "execution_id": execution_id,
+                                "filename": "plan_attempt_started.json",
+                            },
+                        }
+                    )
+        self.assertEqual(list(self.spool_dir.rglob("*.json")), [])
+
     def test_emit_plan_level_event_with_run_id(self):
         """Test that plan-level events can include run_id for versioning."""
         emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))

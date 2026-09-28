@@ -1,6 +1,10 @@
-"""Tests for attempt-record naming and reading attempt starts back from a spool."""
+"""Tests for where a file spool keeps each attempt, and reading and reserving it.
 
-import json
+The history the execution-ID allocator reads is the names of a plan's attempt
+directories, never their contents; the reserver creates an attempt's
+directory exclusively. Both work only in the spool they were given.
+"""
+
 import os
 import unittest
 from pathlib import Path
@@ -10,34 +14,53 @@ from unittest.mock import patch
 from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
     ATTEMPT_STARTED_EVENT,
+    STEP_BLOCKED_EVENT,
+    SpoolAttemptDirectories,
     SpoolAttemptHistory,
-    attempt_record,
+    attempt_dir,
+    attempt_spool_path,
+    attempts_dir,
     is_record_key,
-    read_attempt_records,
     record_filename,
+    step_event_filename,
+    step_events_dir,
 )
-from yggdrasil.flow.events.emitter import FileSpoolEmitter
 
 REALM = "test_realm"
 PLAN_ID = "pln_records"
-FIRST = "exec_20260921T120500000000Z_" + "a" * 32
-SECOND = "exec_20260921T120600000000Z_" + "b" * 32
+FIRST = "20260921T120500000000Z_aaaa"
+SECOND = "20260921T120600000000Z_bbbb"
 
 
-class TestRecordNames(unittest.TestCase):
-    """Record file names embed the attempt, so attempts never collide."""
+class TestNames(unittest.TestCase):
+    """Record names are fixed; step events are numbered per step."""
 
-    def test_name_embeds_the_execution_id_and_the_event_type(self):
+    def test_plan_records_have_fixed_names(self):
         self.assertEqual(
-            record_filename(FIRST, ATTEMPT_STARTED_EVENT),
-            f"{FIRST}_plan_attempt_started.json",
+            record_filename(ATTEMPT_STARTED_EVENT), "plan_attempt_started.json"
         )
-        self.assertNotEqual(
-            record_filename(FIRST, ATTEMPT_STARTED_EVENT),
-            record_filename(SECOND, ATTEMPT_STARTED_EVENT),
+        self.assertEqual(
+            record_filename(ATTEMPT_REPORT_EVENT), "plan_attempt_report.json"
         )
 
-    def test_only_ids_usable_in_a_file_name_are_record_keys(self):
+    def test_step_event_names_are_numbered_and_dots_become_underscores(self):
+        self.assertEqual(
+            step_event_filename(1, "step.started"), "0001_step_started.json"
+        )
+        self.assertEqual(
+            step_event_filename(12, STEP_BLOCKED_EVENT), "0012_step_blocked.json"
+        )
+        self.assertEqual(
+            step_event_filename(3, "data_access.write.succeeded"),
+            "0003_data_access_write_succeeded.json",
+        )
+
+    def test_numbers_past_four_digits_take_more_digits(self):
+        self.assertEqual(
+            step_event_filename(10000, "step.progress"), "10000_step_progress.json"
+        )
+
+    def test_only_ids_usable_as_a_directory_name_are_record_keys(self):
         self.assertTrue(is_record_key(FIRST))
         self.assertTrue(is_record_key("exec_sched_plan"))
         for key in ("", ".", "..", "a/b", "../escape", "a\\b", None, 7):
@@ -45,113 +68,108 @@ class TestRecordNames(unittest.TestCase):
                 self.assertFalse(is_record_key(key))
 
 
-class TestAttemptRecordRecognition(unittest.TestCase):
-    """An attempt record is recognized by its content alone."""
+class TestPaths(unittest.TestCase):
+    """Every attempt has its own directory; every step its own stream in it."""
 
-    def test_attempt_events_with_a_usable_execution_id_are_records(self):
-        for event_type in (ATTEMPT_STARTED_EVENT, ATTEMPT_REPORT_EVENT):
-            with self.subTest(type=event_type):
-                event = {"type": event_type, "execution_id": FIRST}
-                self.assertIs(attempt_record(event), event)
+    def test_attempt_and_step_directories(self):
+        root = Path("/spool")
+        attempt = attempt_dir(root, REALM, PLAN_ID, FIRST)
 
-    def test_anything_else_is_not(self):
-        for event in (
-            {"type": "plan.draft", "execution_id": FIRST},
-            {"type": "step.started", "execution_id": FIRST},
-            {"type": ATTEMPT_STARTED_EVENT},
-            {"type": ATTEMPT_REPORT_EVENT, "execution_id": "a/b"},
-            [ATTEMPT_STARTED_EVENT, FIRST],
-            None,
-        ):
-            with self.subTest(event=event):
-                self.assertIsNone(attempt_record(event))
+        self.assertEqual(
+            attempts_dir(root, REALM, PLAN_ID), root / REALM / PLAN_ID / "attempts"
+        )
+        self.assertEqual(attempt, root / REALM / PLAN_ID / "attempts" / FIRST)
+        self.assertEqual(
+            step_events_dir(attempt, "lane_1__process"),
+            attempt / "steps" / "lane_1__process",
+        )
+
+    def test_step_ids_keep_their_existing_path_semantics(self):
+        # Manually built steps need not match PlanBuilder's ID pattern; a
+        # nested ID nests, exactly as its work directory does.
+        attempt = attempt_dir(Path("/spool"), REALM, PLAN_ID, FIRST)
+
+        self.assertEqual(
+            step_events_dir(attempt, "lane_1/process"),
+            attempt / "steps" / "lane_1" / "process",
+        )
+        self.assertEqual(
+            step_events_dir(attempt, "1.lane"), attempt / "steps" / "1.lane"
+        )
+
+    def test_an_id_that_cannot_name_a_directory_is_refused(self):
+        for execution_id in ("", "..", "a/b"):
+            with self.subTest(execution_id=execution_id):
+                with self.assertRaises(ValueError):
+                    attempt_dir(Path("/spool"), REALM, PLAN_ID, execution_id)
+
+    def test_spool_path_hints(self):
+        self.assertEqual(
+            attempt_spool_path(REALM, PLAN_ID, FIRST, "plan_attempt_started.json"),
+            {
+                "realm": REALM,
+                "plan_id": PLAN_ID,
+                "execution_id": FIRST,
+                "filename": "plan_attempt_started.json",
+            },
+        )
+        self.assertEqual(
+            attempt_spool_path(REALM, PLAN_ID, FIRST, "0001_x.json", step_id="a")[
+                "step_id"
+            ],
+            "a",
+        )
 
 
-class TestSpoolAttemptHistory(unittest.TestCase):
-    """Attempt records count by content, and only in the spool given."""
+class SpoolTestCase(unittest.TestCase):
+    """A temporary spool."""
 
     def setUp(self) -> None:
         temp_dir = TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         self.spool = Path(temp_dir.name) / "spool"
-        self.emitter = FileSpoolEmitter(self.spool)
+        self.attempts = attempts_dir(self.spool, REALM, PLAN_ID)
+
+
+class TestSpoolAttemptHistory(SpoolTestCase):
+    """The history is the names of a plan's attempt directories, nothing else."""
+
+    def setUp(self) -> None:
+        super().setUp()
         self.history = SpoolAttemptHistory(self.spool)
-        self.plan_dir = self.spool / REALM / PLAN_ID
 
-    def record(self, execution_id: str, event_type: str = ATTEMPT_STARTED_EVENT):
-        """Publish one attempt record, as the engine does."""
-        self.emitter.emit(
-            {
-                "type": event_type,
-                "realm": REALM,
-                "plan_id": PLAN_ID,
-                "execution_id": execution_id,
-                "_spool_path": {
-                    "realm": REALM,
-                    "plan_id": PLAN_ID,
-                    "filename": record_filename(execution_id, event_type),
-                },
-            }
-        )
-
-    def test_plan_without_a_spool_directory_has_no_history(self):
+    def test_plan_without_attempts_has_no_history(self):
+        self.assertEqual(self.history.recorded_execution_ids(REALM, PLAN_ID), [])
+        (self.spool / REALM / PLAN_ID).mkdir(parents=True)
         self.assertEqual(self.history.recorded_execution_ids(REALM, PLAN_ID), [])
 
-    def write(self, name: str, content: object) -> Path:
-        """Write a file into the plan's spool directory directly."""
-        self.plan_dir.mkdir(parents=True, exist_ok=True)
-        path = self.plan_dir / name
-        text = content if isinstance(content, str) else json.dumps(content)
-        path.write_text(text, encoding="utf-8")
-        return path
-
-    def test_reads_every_attempt_record_of_the_plan(self):
-        self.record(SECOND)
-        self.record(FIRST)
-        self.record(SECOND, ATTEMPT_REPORT_EVENT)
-
-        self.assertEqual(
-            self.history.recorded_execution_ids(REALM, PLAN_ID), [FIRST, SECOND, SECOND]
+    def test_every_attempt_directory_counts_whatever_it_holds(self):
+        (self.attempts / FIRST).mkdir(parents=True)  # an empty reservation
+        (self.attempts / SECOND).mkdir()
+        (self.attempts / SECOND / record_filename(ATTEMPT_STARTED_EVENT)).write_text(
+            "{not json"
         )
-
-    def test_records_count_by_content_whatever_their_file_is_called(self):
-        # Reports published before attempt-start records existed were named
-        # after their event ID, and a report can outlive its start record.
-        self.write(
-            "3f2b9c1e-5a6d-4f1e-9b2a-0c7d8e9f1a2b.json",
-            {"type": ATTEMPT_REPORT_EVENT, "execution_id": FIRST},
-        )
-        self.record(SECOND, ATTEMPT_REPORT_EVENT)
 
         self.assertEqual(
             sorted(self.history.recorded_execution_ids(REALM, PLAN_ID)),
             [FIRST, SECOND],
         )
 
-    def test_records_that_establish_nothing_are_skipped_with_a_warning(self):
-        self.record(FIRST)
-        self.write("broken.json", "{not json")
-        self.write(
-            "bad_id.json", {"type": ATTEMPT_STARTED_EVENT, "execution_id": "../x"}
-        )
-        # Not an attempt record at all, so not worth a warning either.
-        self.write("draft.json", {"type": "plan.draft", "execution_id": SECOND})
-        self.write("notes.txt", "not an event")
+    def test_files_are_not_attempts(self):
+        self.attempts.mkdir(parents=True)
+        (self.attempts / FIRST).write_text("stray")
 
-        with self.assertLogs(level="WARNING") as logs:
-            ids = self.history.recorded_execution_ids(REALM, PLAN_ID)
+        self.assertEqual(self.history.recorded_execution_ids(REALM, PLAN_ID), [])
 
-        self.assertEqual(ids, [FIRST])
-        self.assertEqual(len(logs.records), 2)
-        self.assertEqual(
-            sorted(
-                path.name for path, _ in read_attempt_records(self.plan_dir).problems
-            ),
-            ["bad_id.json", "broken.json"],
-        )
+    def test_the_old_layout_is_not_read(self):
+        plan_dir = self.spool / REALM / PLAN_ID
+        (plan_dir / "a" / "run_1").mkdir(parents=True)
+        (plan_dir / f"exec_{FIRST}_plan_attempt_started.json").write_text("{}")
 
-    def test_unreadable_plan_directory_is_raised(self):
-        self.record(FIRST)
+        self.assertEqual(self.history.recorded_execution_ids(REALM, PLAN_ID), [])
+
+    def test_unlistable_attempts_are_raised(self):
+        (self.attempts / FIRST).mkdir(parents=True)
 
         with patch(
             "yggdrasil.flow.events.attempt_records.os.scandir",
@@ -160,52 +178,72 @@ class TestSpoolAttemptHistory(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 self.history.recorded_execution_ids(REALM, PLAN_ID)
 
-    def test_unreadable_record_is_raised(self):
-        self.record(FIRST)
-        unreadable = self.plan_dir / record_filename(FIRST, ATTEMPT_STARTED_EVENT)
-        original = Path.read_text
+    def test_a_file_in_place_of_the_attempts_directory_is_raised(self):
+        self.attempts.parent.mkdir(parents=True)
+        self.attempts.write_text("not a directory")
 
-        def read_text(path: Path, *args, **kwargs):
-            if path == unreadable:
-                raise PermissionError("denied")
-            return original(path, *args, **kwargs)
-
-        with patch.object(Path, "read_text", read_text):
-            with self.assertRaises(PermissionError):
-                self.history.recorded_execution_ids(REALM, PLAN_ID)
-
-    def test_record_pruned_while_being_read_is_skipped(self):
-        self.record(FIRST)
-        self.record(SECOND)
-        pruned = self.plan_dir / record_filename(FIRST, ATTEMPT_STARTED_EVENT)
-        original = Path.read_text
-
-        def read_text(path: Path, *args, **kwargs):
-            if path == pruned:
-                raise FileNotFoundError(str(path))
-            return original(path, *args, **kwargs)
-
-        with patch.object(Path, "read_text", read_text):
-            self.assertEqual(
-                self.history.recorded_execution_ids(REALM, PLAN_ID), [SECOND]
-            )
+        with self.assertRaises(NotADirectoryError):
+            self.history.recorded_execution_ids(REALM, PLAN_ID)
 
     def test_reads_only_the_spool_it_was_given(self):
+        elsewhere = attempts_dir(self.spool.parent / "default_spool", REALM, PLAN_ID)
+        (elsewhere / FIRST).mkdir(parents=True)
+
+        with patch.dict(os.environ, {"YGG_EVENT_SPOOL": str(elsewhere.parents[2])}):
+            self.assertEqual(self.history.recorded_execution_ids(REALM, PLAN_ID), [])
+
+
+class TestSpoolAttemptDirectories(SpoolTestCase):
+    """Reserving creates an attempt's directory, exclusively."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.directories = SpoolAttemptDirectories(self.spool)
+
+    def test_reserving_creates_the_directory_and_its_parents(self):
+        self.assertTrue(self.directories.reserve(REALM, PLAN_ID, FIRST))
+
+        self.assertTrue((self.attempts / FIRST).is_dir())
+        self.assertEqual(list((self.attempts / FIRST).iterdir()), [])
+
+    def test_a_taken_directory_is_reported_and_left_as_it_was(self):
+        (self.attempts / FIRST).mkdir(parents=True)
+        record = self.attempts / FIRST / record_filename(ATTEMPT_REPORT_EVENT)
+        record.write_text("the other attempt's report")
+
+        self.assertFalse(self.directories.reserve(REALM, PLAN_ID, FIRST))
+
+        self.assertEqual(record.read_text(), "the other attempt's report")
+        self.assertEqual(list((self.attempts / FIRST).iterdir()), [record])
+
+    def test_a_taken_name_held_by_a_file_is_taken_too(self):
+        self.attempts.mkdir(parents=True)
+        (self.attempts / FIRST).write_text("stray")
+
+        self.assertFalse(self.directories.reserve(REALM, PLAN_ID, FIRST))
+
+    def test_failures_creating_parents_are_errors_not_collisions(self):
+        self.attempts.parent.mkdir(parents=True)
+        self.attempts.write_text("not a directory")
+
+        with self.assertRaises(OSError):
+            self.directories.reserve(REALM, PLAN_ID, FIRST)
+
+        self.assertEqual(self.attempts.read_text(), "not a directory")
+
+    def test_an_id_that_cannot_name_a_directory_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.directories.reserve(REALM, PLAN_ID, "../escape")
+        self.assertFalse(self.spool.exists())
+
+    def test_reserves_only_in_the_spool_it_was_given(self):
         elsewhere = self.spool.parent / "default_spool"
-        FileSpoolEmitter(elsewhere).emit(
-            {
-                "type": ATTEMPT_STARTED_EVENT,
-                "execution_id": FIRST,
-                "_spool_path": {
-                    "realm": REALM,
-                    "plan_id": PLAN_ID,
-                    "filename": record_filename(FIRST, ATTEMPT_STARTED_EVENT),
-                },
-            }
-        )
 
         with patch.dict(os.environ, {"YGG_EVENT_SPOOL": str(elsewhere)}):
-            self.assertEqual(self.history.recorded_execution_ids(REALM, PLAN_ID), [])
+            self.directories.reserve(REALM, PLAN_ID, FIRST)
+
+        self.assertFalse(elsewhere.exists())
+        self.assertTrue((self.attempts / FIRST).is_dir())
 
 
 if __name__ == "__main__":

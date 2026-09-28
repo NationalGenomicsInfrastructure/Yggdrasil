@@ -36,7 +36,12 @@ from tests.execution_support import (
     spec,
 )
 from yggdrasil.core.engine import Engine
-from yggdrasil.core.execution_ids import ExecutionIdAllocator, execution_timestamp
+from yggdrasil.core.execution_ids import (
+    ExecutionIdAllocator,
+    ReservationExhaustedError,
+    execution_timestamp,
+    format_execution_id,
+)
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.errors import (
     AttemptCancelledError,
@@ -50,7 +55,11 @@ from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
     ATTEMPT_STARTED_EVENT,
     STEP_BLOCKED_EVENT,
+    SpoolAttemptDirectories,
     SpoolAttemptHistory,
+    attempt_dir,
+    attempt_spool_path,
+    attempts_dir,
     record_filename,
 )
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
@@ -63,7 +72,7 @@ FAIL_FAST = FAIL_FAST_POLICY
 PLAN_ID = "pln_events"
 CORRELATION_FIELDS = ("execution_id", "plan_generation", "run_token")
 T0 = datetime(2026, 9, 21, 12, 5, tzinfo=UTC)
-FAR_FUTURE_ID = "exec_20990101T000000000000Z_" + "f" * 32
+FAR_FUTURE_ID = "20990101T000000000000Z_ffff"
 
 
 def exception_chain(exc: BaseException) -> list[BaseException]:
@@ -131,6 +140,10 @@ class EngineEventsTestCase(unittest.TestCase):
     def plan_dir(self, plan: Plan) -> Path:
         """The plan's spool directory."""
         return self.spool / plan.realm / plan.plan_id
+
+    def attempt_dir(self, plan: Plan, execution_id: str) -> Path:
+        """One attempt's directory in this test's spool."""
+        return attempt_dir(self.spool, plan.realm, plan.plan_id, execution_id)
 
     def spooled(self, path: Path) -> dict:
         """One spooled event."""
@@ -305,11 +318,9 @@ class TestAttemptStartRecord(EngineEventsTestCase):
         )
         self.assertEqual(
             started["_spool_path"],
-            {
-                "realm": REALM,
-                "plan_id": PLAN_ID,
-                "filename": record_filename("exec_start", ATTEMPT_STARTED_EVENT),
-            },
+            attempt_spool_path(
+                REALM, PLAN_ID, "exec_start", "plan_attempt_started.json"
+            ),
         )
 
     def test_rejected_attempt_leaves_a_readable_start_record(self):
@@ -319,9 +330,13 @@ class TestAttemptStartRecord(EngineEventsTestCase):
         with self.assertRaises(PreflightValidationError):
             engine.run(plan)
 
-        records = sorted(self.plan_dir(plan).glob("*.json"))
+        (attempt,) = (self.plan_dir(plan) / "attempts").iterdir()
+        records = sorted(attempt.iterdir())
+        self.assertEqual(
+            [p.name for p in records],
+            ["plan_attempt_report.json", "plan_attempt_started.json"],
+        )
         by_type = {self.spooled(p)["type"]: self.spooled(p) for p in records}
-        self.assertEqual(set(by_type), {ATTEMPT_STARTED_EVENT, ATTEMPT_REPORT_EVENT})
         started = by_type[ATTEMPT_STARTED_EVENT]
         self.assertEqual([entry["step_id"] for entry in started["steps"]], ["a", "b"])
         self.assertEqual(
@@ -331,8 +346,8 @@ class TestAttemptStartRecord(EngineEventsTestCase):
         self.assertEqual(
             by_type[ATTEMPT_REPORT_EVENT]["execution_id"], started["execution_id"]
         )
-        # No step ran: nothing below the plan level, and no work directory.
-        self.assertEqual([p for p in self.plan_dir(plan).iterdir() if p.is_dir()], [])
+        self.assertEqual(attempt.name, started["execution_id"])
+        # No step ran: no step events at all, and no work directory.
         self.assertFalse((self.work_root / PLAN_ID).exists())
         self.assertEqual(self.steps.calls, [])
 
@@ -459,12 +474,15 @@ class TestBlockedStepEvents(EngineEventsTestCase):
         self.assertNotIn("error", outcome)
         report: AttemptReport = outcome["report"]
 
-        # One step.blocked for J, filed without a run directory.
-        join_dir = self.plan_dir(plan) / "J"
-        blocked_name = record_filename(report.execution_id, STEP_BLOCKED_EVENT)
+        # One step.blocked for J, opening J's event stream.
+        attempt = self.attempt_dir(plan, report.execution_id)
+        join_dir = attempt / "steps" / "J"
+        blocked_name = "0001_step_blocked.json"
         self.assertEqual([p.name for p in join_dir.iterdir()], [blocked_name])
         blocked = self.spooled(join_dir / blocked_name)
         self.assertEqual(blocked["direct_blockers"], ["A"])
+        self.assertEqual(blocked["seq"], 1)
+        self.assertNotIn("run_id", blocked)
         self.assertFalse((self.work_root / PLAN_ID / "J").exists())
 
         # The report and the snapshot name both failures.
@@ -485,7 +503,7 @@ class TestBlockedStepEvents(EngineEventsTestCase):
         # Exactly one report, and it is what run() returned.
         reports = [
             self.spooled(p)
-            for p in self.plan_dir(plan).glob("*.json")
+            for p in self.plan_dir(plan).rglob("*.json")
             if self.spooled(p)["type"] == ATTEMPT_REPORT_EVENT
         ]
         self.assertEqual(len(reports), 1)
@@ -552,8 +570,8 @@ class TestAttemptReportRecord(EngineEventsTestCase):
         report = engine.run(plan_of(spec("a"), spec("b")))
 
         assert report is not None
-        path = self.plan_dir(plan_of()) / record_filename(
-            report.execution_id, ATTEMPT_REPORT_EVENT
+        path = self.attempt_dir(plan_of(), report.execution_id) / record_filename(
+            ATTEMPT_REPORT_EVENT
         )
         published = self.spooled(path)
         self.assertEqual(published["report"], report.to_dict())
@@ -567,20 +585,10 @@ class TestExecutionIdSource(EngineEventsTestCase):
     """The engine orders attempts against the spool it writes, and no other."""
 
     def far_future_record_in(self, spool: Path) -> None:
-        """Record an attempt at the plan far in the future, in a spool."""
-        FileSpoolEmitter(spool).emit(
-            {
-                "type": ATTEMPT_STARTED_EVENT,
-                "execution_id": FAR_FUTURE_ID,
-                "_spool_path": {
-                    "realm": REALM,
-                    "plan_id": PLAN_ID,
-                    "filename": record_filename(FAR_FUTURE_ID, ATTEMPT_STARTED_EVENT),
-                },
-            }
-        )
+        """Leave an attempt at the plan far in the future, in a spool."""
+        (attempts_dir(spool, REALM, PLAN_ID) / FAR_FUTURE_ID).mkdir(parents=True)
 
-    def test_default_allocator_reads_the_emitters_spool(self):
+    def test_default_allocator_and_reserver_use_the_emitters_spool(self):
         self.far_future_record_in(self.spool)
         engine = self.spool_engine()
 
@@ -588,9 +596,11 @@ class TestExecutionIdSource(EngineEventsTestCase):
 
         assert report is not None
         history = engine.execution_ids.history
-        self.assertIsInstance(history, SpoolAttemptHistory)
         assert isinstance(history, SpoolAttemptHistory)
         self.assertEqual(history.root, self.spool)
+        reserver = engine.attempt_reserver
+        assert isinstance(reserver, SpoolAttemptDirectories)
+        self.assertEqual(reserver.root, self.spool)
         self.assertGreater(report.execution_id, FAR_FUTURE_ID)
 
     def test_restarted_engine_with_its_clock_behind_still_orders_after(self):
@@ -630,12 +640,23 @@ class TestExecutionIdSource(EngineEventsTestCase):
                 "recorded_execution_ids",
                 side_effect=AssertionError("read a spool"),
             ),
+            patch.object(
+                SpoolAttemptDirectories,
+                "reserve",
+                side_effect=AssertionError("reserved in a spool"),
+            ),
         ):
             engine = Engine(work_root=self.work_root, emitter=emitter)
             report = engine.run(plan_of(spec("a")))
 
         assert report is not None
         self.assertIsNone(engine.execution_ids.history)
+        self.assertIsNone(engine.attempt_reserver)
+        # Nothing was reserved in the spool the environment points at.
+        self.assertEqual(
+            [p.name for p in attempts_dir(default_spool, REALM, PLAN_ID).iterdir()],
+            [FAR_FUTURE_ID],
+        )
         self.assertLess(report.execution_id, FAR_FUTURE_ID)
         self.assertEqual(
             {call.args[0]["execution_id"] for call in emitter.emit.call_args_list},
@@ -675,6 +696,421 @@ class TestExecutionIdSource(EngineEventsTestCase):
         self.assertEqual(execution_timestamp(first.execution_id), T0)
         self.assertEqual(
             execution_timestamp(second.execution_id), T0 + timedelta(microseconds=1)
+        )
+
+
+class HistoryWithoutReserve:
+    """A history that can be read but cannot reserve anything."""
+
+    def recorded_execution_ids(self, realm: str, plan_id: str) -> list[str]:
+        return []
+
+
+class ScriptedReserver:
+    """A reserver answering from a script, recording what it was asked."""
+
+    def __init__(self, *answers: bool | Exception) -> None:
+        self.answers = list(answers)
+        self.asked: list[str] = []
+
+    def reserve(self, realm: str, plan_id: str, execution_id: str) -> bool:
+        self.asked.append(execution_id)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+class TestReservation(EngineEventsTestCase):
+    """Every attempt's ID is reserved exactly once before it publishes anything."""
+
+    def test_injected_allocator_still_reserves_in_the_emitters_spool(self):
+        # The allocator sees no history, so it proposes an ID that is taken;
+        # the engine's own reserver, on the emitter's spool, refuses it.
+        taken = format_execution_id(T0, "c68e")
+        for name, history in (("none", None), ("read-only", HistoryWithoutReserve())):
+            with self.subTest(history=name):
+                plan_id = f"{PLAN_ID}_{name}"
+                existing = attempt_dir(self.spool, REALM, plan_id, taken)
+                existing.mkdir(parents=True)
+                (existing / "plan_attempt_report.json").write_text("earlier")
+                engine = self.spool_engine(
+                    execution_ids=ExecutionIdAllocator(
+                        history, clock=Clock(T0), new_suffix=lambda: "c68e"
+                    )
+                )
+
+                report = engine.run(plan_of(spec("a"), plan_id=plan_id))
+
+                assert report is not None
+                assert isinstance(engine.attempt_reserver, SpoolAttemptDirectories)
+                self.assertEqual(engine.attempt_reserver.root, self.spool)
+                self.assertEqual(
+                    report.execution_id,
+                    format_execution_id(T0 + timedelta(microseconds=1), "c68e"),
+                )
+                self.assertEqual(
+                    (existing / "plan_attempt_report.json").read_text(), "earlier"
+                )
+                self.assertEqual(
+                    [p.name for p in existing.iterdir()], ["plan_attempt_report.json"]
+                )
+
+    def test_run_reserves_once_and_says_so(self):
+        reserver = ScriptedReserver(True)
+        engine = Engine(
+            work_root=self.work_root, emitter=self.emitter, attempt_reserver=reserver
+        )
+
+        with patch.object(engine, "_run_attempt", wraps=engine._run_attempt) as run:
+            report = engine.run(plan_of(spec("a")))
+
+        assert report is not None
+        self.assertEqual(reserver.asked, [report.execution_id])
+        self.assertTrue(run.call_args.kwargs["context"].execution_id_reserved)
+
+    def test_exhausted_reservation_starts_nothing(self):
+        reserver = ScriptedReserver(False, False, False)
+        engine = Engine(
+            work_root=self.work_root, emitter=self.emitter, attempt_reserver=reserver
+        )
+
+        with self.assertRaises(OrchestrationError) as caught:
+            engine.run(plan_of(spec("a")))
+
+        self.assertIn("Allocating an execution ID", str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, ReservationExhaustedError)
+        self.assertEqual(len(reserver.asked), 3)
+        self.assertEqual(self.emitter.events, [])
+        self.assertEqual(self.steps.calls, [])
+        self.assertFalse((self.work_root / PLAN_ID).exists())
+
+    def test_caller_built_id_is_reserved_when_its_attempt_starts(self):
+        engine = self.spool_engine()
+        plan = plan_of(spec("a"))
+        context = AttemptContext.for_plan(plan, execution_id="exec_fixed")
+        self.assertFalse(context.execution_id_reserved)
+
+        self.assertIsNone(self.run_attempt(plan, context, engine))
+
+        self.assertTrue(context.execution_id_reserved)
+        self.assertEqual(
+            sorted(p.name for p in self.attempt_dir(plan, "exec_fixed").iterdir()),
+            ["plan_attempt_report.json", "plan_attempt_started.json", "steps"],
+        )
+
+    def test_taken_caller_built_id_is_refused_not_renamed_or_overwritten(self):
+        engine = self.spool_engine()
+        plan = plan_of(spec("a"))
+        existing = self.attempt_dir(plan, "exec_fixed")
+        existing.mkdir(parents=True)
+        (existing / "plan_attempt_report.json").write_text("the earlier attempt's")
+        context = AttemptContext.for_plan(plan, execution_id="exec_fixed")
+
+        exc = self.run_attempt(plan, context, engine)
+
+        self.assertIsInstance(exc, OrchestrationError)
+        self.assertIn("already taken", str(exc))
+        self.assertFalse(context.execution_id_reserved)
+        self.assertFalse(context.report.is_finished)
+        self.assertEqual(self.steps.calls, [])
+        self.assertEqual(
+            [p.name for p in (self.plan_dir(plan) / "attempts").iterdir()],
+            ["exec_fixed"],
+        )
+        self.assertEqual(
+            (existing / "plan_attempt_report.json").read_text(),
+            "the earlier attempt's",
+        )
+        self.assertEqual(
+            [p.name for p in existing.iterdir()], ["plan_attempt_report.json"]
+        )
+
+    def test_failing_to_reserve_a_caller_built_id_runs_nothing(self):
+        engine = Engine(
+            work_root=self.work_root,
+            emitter=self.emitter,
+            attempt_reserver=ScriptedReserver(PermissionError("spool read-only")),
+        )
+        plan = plan_of(spec("a"))
+        context = AttemptContext.for_plan(plan, execution_id="exec_fixed")
+
+        exc = self.run_attempt(plan, context, engine)
+
+        self.assertIsInstance(exc, OrchestrationError)
+        assert exc is not None
+        self.assertIsInstance(exc.__cause__, PermissionError)
+        self.assertFalse(context.execution_id_reserved)
+        self.assertFalse(context.report.is_finished)
+        self.assertEqual(self.emitter.events, [])
+        self.assertEqual(self.steps.calls, [])
+
+    def test_already_reserved_context_is_not_reserved_again(self):
+        reserver = ScriptedReserver()  # any call would fail: nothing scripted
+        engine = Engine(
+            work_root=self.work_root, emitter=self.emitter, attempt_reserver=reserver
+        )
+        plan = plan_of(spec("a"))
+        context = AttemptContext.for_plan(
+            plan, execution_id="exec_fixed", execution_id_reserved=True
+        )
+
+        self.assertIsNone(self.run_attempt(plan, context, engine))
+
+        self.assertEqual(reserver.asked, [])
+
+    def test_without_a_reserver_nothing_is_claimed(self):
+        plan = plan_of(spec("a"))
+        context = AttemptContext.for_plan(plan, execution_id="exec_fixed")
+
+        self.assertIsNone(self.run_attempt(plan, context))
+
+        self.assertIsNone(self.engine.attempt_reserver)
+        self.assertFalse(context.execution_id_reserved)
+
+
+class TestAttemptFileLayout(EngineEventsTestCase):
+    """What each kind of attempt leaves in the spool, file by file."""
+
+    def tree(self, plan: Plan, execution_id: str) -> list[str]:
+        """Every file in an attempt's directory, relative to it."""
+        attempt = self.attempt_dir(plan, execution_id)
+        return sorted(str(p.relative_to(attempt)) for p in attempt.rglob("*.json"))
+
+    def stream(self, plan: Plan, execution_id: str, step_id: str) -> list[dict]:
+        """One step's events in an attempt, in file-name order."""
+        directory = self.attempt_dir(plan, execution_id) / "steps" / step_id
+        return [self.spooled(p) for p in sorted(directory.glob("*.json"))]
+
+    def assert_numbered(self, events: list[dict], names: list[str]) -> None:
+        """Assert a step's events are numbered 1..n, as their names say."""
+        self.assertEqual([e["seq"] for e in events], list(range(1, len(events) + 1)))
+        self.assertEqual(
+            [int(n.split("_", 1)[0]) for n in names], [e["seq"] for e in events]
+        )
+
+    def test_executed_reused_and_blocked_steps(self):
+        engine = self.spool_engine()
+        first = engine.run(plan_of(spec("a")))
+        self.steps.fail("b", PermanentStepError("broken"))
+        self.steps.behaviors["d"] = lambda ctx: ctx.progress(50)
+        plan = plan_of(spec("a"), spec("b"), spec("c", "b"), spec("d"))
+
+        report = engine.run(plan)
+
+        assert first is not None and report is not None
+        self.assertEqual(
+            self.tree(plan, report.execution_id),
+            [
+                "plan_attempt_report.json",
+                "plan_attempt_started.json",
+                "steps/a/0001_step_skipped.json",
+                "steps/b/0001_step_started.json",
+                "steps/b/0002_step_failed.json",
+                "steps/c/0001_step_blocked.json",
+                "steps/d/0001_step_started.json",
+                "steps/d/0002_step_progress.json",
+                "steps/d/0003_step_succeeded.json",
+            ],
+        )
+        # The first attempt keeps its own directory, untouched.
+        self.assertEqual(
+            self.tree(plan, first.execution_id),
+            [
+                "plan_attempt_report.json",
+                "plan_attempt_started.json",
+                "steps/a/0001_step_started.json",
+                "steps/a/0002_step_succeeded.json",
+            ],
+        )
+        streams = {s: self.stream(plan, report.execution_id, s) for s in "abcd"}
+        for step_id, events in streams.items():
+            with self.subTest(step=step_id):
+                names = sorted(
+                    p.name
+                    for p in (
+                        self.attempt_dir(plan, report.execution_id) / "steps" / step_id
+                    ).glob("*.json")
+                )
+                self.assert_numbered(events, names)
+                self.assertEqual(
+                    {e["execution_id"] for e in events}, {report.execution_id}
+                )
+        # Every evaluation carries its own run ID; a blocked step has none.
+        (skipped,) = streams["a"]
+        self.assertTrue(skipped["run_id"].startswith("run_"))
+        self.assertEqual(len({e["run_id"] for e in streams["b"]}), 1)
+        self.assertEqual(len({e["run_id"] for e in streams["d"]}), 1)
+        self.assertNotEqual(streams["b"][0]["run_id"], streams["d"][0]["run_id"])
+        self.assertNotIn("run_id", streams["c"][0])
+        # Work directories and markers stay where they always were.
+        self.assertTrue(
+            (self.work_root / PLAN_ID / "a" / "success.fingerprint").exists()
+        )
+        self.assertTrue(
+            (self.work_root / PLAN_ID / "d" / "success.fingerprint").exists()
+        )
+
+    def test_retry_diagnostic_continues_the_failed_steps_stream(self):
+        engine = self.spool_engine()
+        self.steps.fail("a", TransientStepError("cluster busy"))
+        plan = plan_of(spec("a"))
+
+        report = engine.run(plan)
+
+        assert report is not None
+        events = self.stream(plan, report.execution_id, "a")
+        self.assertEqual(
+            [e["type"] for e in events],
+            ["step.started", "step.failed", "step.retry_unimplemented"],
+        )
+        self.assertEqual([e["seq"] for e in events], [1, 2, 3])
+        self.assertEqual(len({e["run_id"] for e in events}), 1)
+        self.assertIn(
+            "steps/a/0003_step_retry_unimplemented.json",
+            self.tree(plan, report.execution_id),
+        )
+
+    def test_data_access_traces_join_the_steps_stream(self):
+        from yggdrasil.flow.data_access.couchdb_data import CouchDBExecutionClient
+
+        def write_and_trace(ctx: StepContext) -> None:
+            ctx.progress(10)
+            assert ctx.data is not None
+            client = CouchDBExecutionClient(
+                Mock(),
+                Mock(),
+                permissions=frozenset({"read", "write"}),
+                realm_id=REALM,
+                connection_name="conn",
+                resource="db",
+                trace_context=ctx.data._trace_context,
+            )
+            client._emit("data_access.write.succeeded", doc_id="doc_1")
+
+        engine = self.spool_engine()
+        self.steps.behaviors["a"] = write_and_trace
+        plan = plan_of(spec("a"))
+
+        report = engine.run(plan)
+
+        assert report is not None
+        self.assertEqual(
+            [p for p in self.tree(plan, report.execution_id) if p.startswith("steps/")],
+            [
+                "steps/a/0001_step_started.json",
+                "steps/a/0002_step_progress.json",
+                "steps/a/0003_data_access_write_succeeded.json",
+                "steps/a/0004_step_succeeded.json",
+            ],
+        )
+        events = self.stream(plan, report.execution_id, "a")
+        trace = events[2]
+        self.assertEqual(trace["seq"], 3)
+        self.assertEqual(trace["execution_id"], report.execution_id)
+        self.assertEqual(trace["run_id"], events[0]["run_id"])
+
+    def test_attempt_without_steps_leaves_only_its_records(self):
+        engine = self.spool_engine()
+        plan = plan_of()
+
+        report = engine.run(plan)
+
+        assert report is not None
+        self.assertEqual(
+            self.tree(plan, report.execution_id),
+            ["plan_attempt_report.json", "plan_attempt_started.json"],
+        )
+
+    def test_cancelled_attempt_leaves_only_what_it_reached(self):
+        engine = self.spool_engine()
+        plan = plan_of(spec("a"), spec("b"), spec("c"))
+        execution_id, reserved = engine.reserve_execution_id(plan)
+        context = AttemptContext.for_plan(
+            plan, execution_id=execution_id, execution_id_reserved=reserved
+        )
+        self.steps.behaviors["b"] = lambda ctx: context.request_cancellation()
+
+        self.assertIsInstance(
+            self.run_attempt(plan, context, engine), AttemptCancelledError
+        )
+
+        self.assertEqual(
+            self.tree(plan, execution_id),
+            [
+                "plan_attempt_report.json",
+                "plan_attempt_started.json",
+                "steps/a/0001_step_started.json",
+                "steps/a/0002_step_succeeded.json",
+                "steps/b/0001_step_started.json",
+                "steps/b/0002_step_succeeded.json",
+            ],
+        )
+
+    def test_numbers_past_four_digits_are_ordered_by_number(self):
+        def many_events(ctx: StepContext) -> None:
+            ctx._seq = 9998  # as if 9998 events had been published already
+            ctx.progress(99)
+
+        engine = self.spool_engine()
+        self.steps.behaviors["a"] = many_events
+        plan = plan_of(spec("a"))
+
+        report = engine.run(plan)
+
+        assert report is not None
+        self.assertIn(
+            "steps/a/9999_step_progress.json", self.tree(plan, report.execution_id)
+        )
+        self.assertIn(
+            "steps/a/10000_step_succeeded.json", self.tree(plan, report.execution_id)
+        )
+        # By name, the progress event sorts last; by number, the success does.
+        entry = self.snapshot(plan)["steps"]["a"]
+        self.assertEqual((entry["state"], entry["progress"]), ("step.succeeded", 100))
+
+    def test_step_ids_outside_the_builder_pattern_keep_their_streams_apart(self):
+        # Manually built steps may use IDs PlanBuilder would not produce,
+        # including one nested under another's.
+        engine = self.spool_engine()
+        self.steps.fail("lane_1", PermanentStepError("lane 1 broke"))
+        plan = plan_of(spec("lane_1"), spec("lane_1/process", "lane_1"), spec("1.lane"))
+
+        report = engine.run(plan)
+
+        assert report is not None
+        self.assertEqual(
+            self.tree(plan, report.execution_id),
+            [
+                "plan_attempt_report.json",
+                "plan_attempt_started.json",
+                "steps/1.lane/0001_step_started.json",
+                "steps/1.lane/0002_step_succeeded.json",
+                "steps/lane_1/0001_step_started.json",
+                "steps/lane_1/0002_step_failed.json",
+                "steps/lane_1/process/0001_step_blocked.json",
+            ],
+        )
+        snapshot = self.snapshot(plan)
+        self.assertEqual(
+            list(snapshot["steps"]), ["lane_1", "lane_1/process", "1.lane"]
+        )
+        states = {
+            step_id: (entry["state"], entry["outcome"])
+            for step_id, entry in snapshot["steps"].items()
+        }
+        self.assertEqual(
+            states,
+            {
+                "lane_1": ("step.failed", "failed"),
+                "lane_1/process": (STEP_BLOCKED_EVENT, "blocked"),
+                "1.lane": ("step.succeeded", "succeeded"),
+            },
+        )
+        self.assertIsNone(snapshot["steps"]["lane_1/process"]["run_id"])
+        self.assertEqual(
+            snapshot["steps"]["lane_1"]["run_id"],
+            self.stream(plan, report.execution_id, "lane_1")[0]["run_id"],
         )
 
 

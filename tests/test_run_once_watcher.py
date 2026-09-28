@@ -60,6 +60,9 @@ def _complete_attempt(plan: Plan, *, context: AttemptContext) -> AttemptReport:
 
 _COMMITTED = FinalizationResult(status=FinalizationStatus.COMMITTED, message="ok")
 
+# What a mocked engine's reserve_execution_id returns: a reserved canonical ID.
+_RESERVED = ("20260924T120000000000Z_c68e", True)
+
 
 class TestGenerateRunOnceOwner(unittest.TestCase):
     """Tests for _generate_run_once_owner() helper function."""
@@ -564,6 +567,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
         mock_watcher_cls.return_value = mock_watcher
 
         core = YggdrasilCore(self.mock_config)
+        core.engine.reserve_execution_id.return_value = _RESERVED
         self.mock_storage.plans.ensure_plan_generation.side_effect = docs.get
         self.mock_storage.plans.finalize_execution.return_value = _COMMITTED
 
@@ -633,6 +637,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
         mock_watcher_cls.return_value = mock_watcher
 
         core = YggdrasilCore(self.mock_config)
+        core.engine.reserve_execution_id.return_value = _RESERVED
 
         def _load_plan(plan_id):
             self.assertEqual(plan_id, "pln_1")

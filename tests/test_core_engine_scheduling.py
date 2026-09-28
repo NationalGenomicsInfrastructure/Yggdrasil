@@ -1014,13 +1014,14 @@ class TestAttemptReportPublication(SchedulingTestCase):
         first = engine.run(plan)
         second = engine.run(plan)
 
-        plan_dir = spool / "test" / "sched_plan"
+        attempts = spool / "test" / "sched_plan" / "attempts"
         self.assertNotEqual(first.execution_id, second.execution_id)
-        # Each attempt keeps its own start record and report, side by side.
+        # Each attempt keeps its own start record and report, in its own
+        # directory.
         self.assertEqual(
-            sorted(p.name for p in plan_dir.glob("*.json")),
+            sorted(str(p.relative_to(attempts)) for p in attempts.glob("*/*.json")),
             sorted(
-                record_filename(attempt.execution_id, event_type)
+                f"{attempt.execution_id}/{record_filename(event_type)}"
                 for attempt in (first, second)
                 for event_type in (ATTEMPT_STARTED_EVENT, ATTEMPT_REPORT_EVENT)
             ),
@@ -1029,7 +1030,7 @@ class TestAttemptReportPublication(SchedulingTestCase):
             record["execution_id"]: record["report"]
             for record in (
                 json.loads(p.read_text(encoding="utf-8"))
-                for p in plan_dir.glob("*.json")
+                for p in attempts.glob("*/*.json")
             )
             if record["type"] == ATTEMPT_REPORT_EVENT
         }

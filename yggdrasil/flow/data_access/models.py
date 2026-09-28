@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -24,7 +25,11 @@ class DataAccessTraceContext:
         scope: Step scope dict.
         emitter: Event emitter for write trace events. None if not configured.
         correlation: The execution attempt the step belongs to, stamped onto
-            write trace events. None outside an execution attempt.
+            write trace events, which are then filed in the step's directory
+            within that attempt. None outside an execution attempt.
+        next_seq: Numbers write trace events in the step's event stream; the
+            step context's own counter, so trace numbers never repeat the
+            step's other events. None leaves traces unnumbered.
     """
 
     realm: str
@@ -36,6 +41,7 @@ class DataAccessTraceContext:
     scope: dict[str, Any] = field(default_factory=dict)
     emitter: EventEmitter | None = None
     correlation: ExecutionCorrelation | None = None
+    next_seq: Callable[[], int] | None = None
 
 
 @dataclass(frozen=True)

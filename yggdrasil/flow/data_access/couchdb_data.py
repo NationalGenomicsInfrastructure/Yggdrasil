@@ -28,6 +28,10 @@ from yggdrasil.flow.data_access.models import (
     DataAccessTraceContext,
     DataAccessWriteResult,
 )
+from yggdrasil.flow.events.attempt_records import (
+    attempt_spool_path,
+    step_event_filename,
+)
 
 if TYPE_CHECKING:
     from lib.couchdb.couchdb_connection import CouchDBHandler
@@ -651,7 +655,10 @@ class CouchDBExecutionClient:
         Emission failures are caught and logged; they never propagate to the caller.
         The backend write result is authoritative regardless of emission outcome.
         Within an execution attempt, the event carries the attempt's correlation
-        fields like every other event of the step.
+        fields like every other event of the step, and is filed in the step's
+        directory within that attempt. When the trace context numbers the step's
+        events, the event takes the next number (``seq``) and a numbered file
+        name; otherwise its file name is unique on its own.
         """
         if self._trace is None or self._trace.emitter is None:
             return
@@ -665,18 +672,35 @@ class CouchDBExecutionClient:
             "step_name": self._trace.step_name,
             "connection": self._connection_name,
             "backend": "couchdb",
-            "_spool_path": {
-                "realm": self._trace.realm,
-                "plan_id": self._trace.plan_id or "unknown",
-                "step_id": self._trace.step_id or "unknown",
-                "run_id": self._trace.run_id,
-                "filename": f"data_access_write_{uuid4().hex}.json",
-            },
             **extra,
         }
-        if self._trace.correlation is not None:
-            event.update(self._trace.correlation.event_fields())
         try:
+            if self._trace.next_seq is not None:
+                seq = self._trace.next_seq()
+                event["seq"] = seq
+                filename = step_event_filename(seq, type_)
+            else:
+                filename = f"data_access_write_{uuid4().hex}.json"
+            plan_id = self._trace.plan_id or "unknown"
+            step_id = self._trace.step_id or "unknown"
+            correlation = self._trace.correlation
+            if correlation is not None:
+                event.update(correlation.event_fields())
+                event["_spool_path"] = attempt_spool_path(
+                    self._trace.realm,
+                    plan_id,
+                    correlation.execution_id,
+                    filename,
+                    step_id=step_id,
+                )
+            else:
+                event["_spool_path"] = {
+                    "realm": self._trace.realm,
+                    "plan_id": plan_id,
+                    "step_id": step_id,
+                    "run_id": self._trace.run_id,
+                    "filename": filename,
+                }
             self._trace.emitter.emit(event)
         except Exception:
             _logger.exception(

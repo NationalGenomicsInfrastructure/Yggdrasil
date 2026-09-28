@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,10 @@ from yggdrasil.flow.errors import (
     OrchestrationError,
     PermanentStepError,
     TransientStepError,
+)
+from yggdrasil.flow.events.attempt_records import (
+    attempt_spool_path,
+    step_event_filename,
 )
 from yggdrasil.flow.events.correlation import ExecutionCorrelation
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
@@ -115,10 +120,24 @@ class StepContext:
     correlation: ExecutionCorrelation | None = None
     _seq: int = 0  # private counter, starts at 0
     _artifacts: list[Artifact] = field(default_factory=list)
+    _seq_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
 
     def _next_seq(self) -> int:
-        self._seq += 1
-        return self._seq
+        """Return the next number in this step's event stream.
+
+        The one counter for the invocation: the step's own events, the
+        engine's retry diagnostic and the step's DataAccess write traces all
+        draw from it, so their numbers never repeat. Thread-safe, since a step
+        may publish from threads of its own.
+
+        Returns:
+            int: The next number, starting at 1.
+        """
+        with self._seq_lock:
+            self._seq += 1
+            return self._seq
 
     @property
     def artifacts(self) -> list[Artifact]:
@@ -127,10 +146,13 @@ class StepContext:
     def emit(self, type_: str, **payload: Any) -> None:
         """Publish one step lifecycle event.
 
-        When the context belongs to an execution attempt, the event carries the
-        attempt's correlation fields (``execution_id``, ``plan_generation``,
-        ``run_token``). They are applied after the payload, so a payload field
-        cannot move the event into a different attempt.
+        Every event carries the invocation's ``run_id`` and its number in the
+        step's event stream (``seq``). When the context belongs to an execution
+        attempt, the event also carries the attempt's correlation fields
+        (``execution_id``, ``plan_generation``, ``run_token``), and is filed in
+        the step's directory within that attempt. The correlation fields are
+        applied after the payload, so a payload field cannot move the event
+        into a different attempt.
 
         Args:
             type_: Event type, e.g. "step.started".
@@ -149,19 +171,28 @@ class StepContext:
             "step_id": self.step_id,
             "step_name": self.step_name,
             "fingerprint": self.fingerprint,
+            "run_id": self.run_id,
             **payload,
         }
+        filename = step_event_filename(seq, type_)
+        # The emitter decides the final path from these hints.
         if self.correlation is not None:
             event.update(self.correlation.event_fields())
-        # Route into nested dirs for readability
-        # NOTE: We let the `emitter` decide final path; pass hints in the event
-        event["_spool_path"] = {
-            "realm": self.realm,
-            "plan_id": self.plan_id,
-            "step_id": self.step_id,
-            "run_id": self.run_id,
-            "filename": f"{seq:04d}_{type_.replace('.', '_')}.json",
-        }
+            event["_spool_path"] = attempt_spool_path(
+                self.realm,
+                self.plan_id,
+                self.correlation.execution_id,
+                filename,
+                step_id=self.step_id,
+            )
+        else:
+            event["_spool_path"] = {
+                "realm": self.realm,
+                "plan_id": self.plan_id,
+                "step_id": self.step_id,
+                "run_id": self.run_id,
+                "filename": filename,
+            }
         try:
             self.emitter.emit(event)
         except Exception as exc:

@@ -545,6 +545,53 @@ class TestCouchDBExecutionClientEvents(unittest.TestCase):
             {"execution_id": "exec_1", "plan_generation": "gen", "run_token": 2},
         )
 
+    def test_events_in_an_attempt_join_the_steps_numbered_stream(self):
+        mock_emitter = MagicMock()
+        trace = self._make_trace(mock_emitter)
+        trace.correlation = ExecutionCorrelation(
+            execution_id="20260924T120000000001Z_c68e"
+        )
+        numbers = iter([4, 5])
+        trace.next_seq = lambda: next(numbers)
+        handler = make_handler_mock(put_result={"rev": "1-abc"})
+        client = make_execution_client(handler, trace_context=trace)
+
+        client.save({}, doc_id="doc_a", mode="create")
+        client.save({}, doc_id="doc_b", mode="create")
+
+        events = [c[0][0] for c in mock_emitter.emit.call_args_list]
+        self.assertEqual([e["seq"] for e in events], [4, 5])
+        self.assertEqual(
+            [e["_spool_path"] for e in events],
+            [
+                {
+                    "realm": "r",
+                    "plan_id": "p1",
+                    "execution_id": "20260924T120000000001Z_c68e",
+                    "step_id": "s1",
+                    "filename": f"000{n}_data_access_write_succeeded.json",
+                }
+                for n in (4, 5)
+            ],
+        )
+        self.assertEqual({e["run_id"] for e in events}, {"r1"})
+
+    def test_a_failing_counter_stays_best_effort(self):
+        mock_emitter = MagicMock()
+        trace = self._make_trace(mock_emitter)
+
+        def broken() -> int:
+            raise RuntimeError("counter broke")
+
+        trace.next_seq = broken
+        handler = make_handler_mock(put_result={"rev": "1-abc"})
+        client = make_execution_client(handler, trace_context=trace)
+
+        result = client.save({}, doc_id="x", mode="create")
+
+        self.assertEqual(result.status, "created")
+        mock_emitter.emit.assert_not_called()
+
     def test_events_outside_an_attempt_are_uncorrelated(self):
         mock_emitter = MagicMock()
         handler = make_handler_mock(put_result={"rev": "1-abc"})

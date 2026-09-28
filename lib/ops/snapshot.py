@@ -4,16 +4,19 @@ Pure functions over events that have already been read; walking the spool is
 :mod:`lib.ops.consumer`'s job. Keeping the two apart lets the selection and
 precedence rules below be checked without a filesystem.
 
-**One attempt per snapshot.** A snapshot describes a single execution attempt:
-the one whose execution ID orders highest among the plan's attempt records
-(:func:`~yggdrasil.core.execution_ids.execution_order_key`), whether or not it
-has finished. Execution IDs are allocated in order at admission
-(``yggdrasil.core.execution_ids``), so this is the most recently admitted
-attempt, and replaying or re-delivering an old attempt's events cannot change
-which one is selected. Every step's state comes from that attempt's own events
-and report. A step the attempt has not reached is shown as not reached, never
-with an earlier attempt's result. Plan generations are opaque and run tokens
-reset on regeneration, so neither is compared to order attempts.
+**One attempt per snapshot.** A snapshot is the execution status of a single
+attempt: the latest *observed* one, i.e. the attempt whose execution ID orders
+highest (:func:`~yggdrasil.core.execution_ids.execution_order_key`) among those
+that have published a start or report record, whether or not it has finished.
+An attempt directory without either record, such as a reservation left empty
+by a cancellation or a crash, is never shown. Execution IDs are allocated in
+order when an attempt starts (``yggdrasil.core.execution_ids``), so this is
+the most recently started attempt that left a trace, and replaying or
+re-delivering an old attempt's events cannot change which one is selected.
+Every step's state comes from that attempt's own events and report. A step the
+attempt has not reached is shown as not reached, never with an earlier
+attempt's result. Plan generations are opaque and run tokens reset on
+regeneration, so neither is compared to order attempts.
 
 **Precedence within the attempt.** While the attempt runs, its events are all
 there is. Within one step run, a terminal event (succeeded, skipped, failed)
@@ -36,7 +39,7 @@ attempt has ended if it had started, and ``unreached`` if it never started.
 
 **Legacy histories.** Events published before attempts were correlated carry
 no execution ID, and which of them belonged to the same attempt was never
-recorded. A plan whose spool holds no attempt records is therefore shown as a
+recorded. A plan whose spool holds no observed attempt is therefore shown as a
 *legacy projection*: each step's latest uncorrelated run, as before, labelled
 so that it is not mistaken for one attempt. Uncorrelated events are never
 merged into a correlated attempt.
@@ -53,7 +56,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from yggdrasil.core.execution_ids import execution_order_key
-from yggdrasil.flow.events.attempt_records import STEP_BLOCKED_EVENT, attempt_record
+from yggdrasil.flow.events.attempt_records import STEP_BLOCKED_EVENT
 from yggdrasil.flow.outcomes import StepOutcome
 
 # What a snapshot projects.
@@ -88,11 +91,6 @@ _OUTCOME_STATES: dict[StepOutcome, str] = {
     StepOutcome.BLOCKED: STEP_BLOCKED_EVENT,
 }
 
-# Outcomes a step can only reach by being evaluated, so only these leave a run.
-_RUN_OUTCOMES = frozenset(
-    {StepOutcome.SUCCEEDED, StepOutcome.REUSED, StepOutcome.FAILED}
-)
-
 # Fields that identify a step's run rather than describe its outcome.
 _IDENTITY_FIELDS = ("step_name", "fingerprint", "job", "ts")
 
@@ -112,14 +110,18 @@ class SpooledEvent:
 
 @dataclass(frozen=True)
 class StepRun:
-    """The events of one evaluation of one step, i.e. one run directory.
+    """The events of one evaluation of one step.
+
+    Within an attempt, that is every event in the step's directory other than
+    a ``step.blocked``; in a legacy history, one run directory.
 
     Attributes:
-        run_id: The run's ID (its directory name).
-        events: The events found in it, in any order.
+        run_id: The evaluation's run ID, as its events carry it (a legacy
+            run's directory name); None if no event names one.
+        events: The events found, in any order.
     """
 
-    run_id: str
+    run_id: str | None
     events: list[SpooledEvent]
 
 
@@ -131,7 +133,7 @@ class AttemptEvents:
         execution_id: The attempt.
         started: Its ``plan.attempt_started`` record, if found.
         report: Its ``plan.attempt_report`` event, if published yet.
-        runs: Its run of each step it reused or executed, by step ID.
+        runs: Its evaluation of each step it reused or executed, by step ID.
         blocked: Its ``step.blocked`` event of each blocked step, by step ID.
     """
 
@@ -220,22 +222,36 @@ def execution_of(event: Mapping[str, Any]) -> str | None:
     return execution_id if isinstance(execution_id, str) and execution_id else None
 
 
-def select_execution(records: Iterable[Mapping[str, Any]]) -> str | None:
-    """Select the attempt a plan's snapshot describes.
+def attempts_newest_first(execution_ids: Iterable[str]) -> list[str]:
+    """Order a plan's attempts from the most recent to the oldest.
+
+    The snapshot shows the first of them that is observed, i.e. has a start or
+    report record, finished or not.
 
     Args:
-        records: The plan-level events in the plan's spool directory.
+        execution_ids: The plan's attempts, by execution ID.
 
     Returns:
-        str | None: The execution ID ordering highest among the attempt
-        records, finished or not; None if there are no attempt records.
+        list[str]: The distinct execution IDs, highest order key first.
     """
-    execution_ids = {
-        record["execution_id"]
-        for record in records
-        if attempt_record(record) is not None
-    }
-    return max(execution_ids, key=execution_order_key, default=None)
+    return sorted(set(execution_ids), key=execution_order_key, reverse=True)
+
+
+def run_id_of(events: Iterable[SpooledEvent]) -> str | None:
+    """Return the run ID a step's evaluation carries in its events.
+
+    Args:
+        events: The evaluation's events.
+
+    Returns:
+        str | None: The ``run_id`` of the first event, in publication order,
+        that names one; None if none does.
+    """
+    for event in order_events(events):
+        run_id = event.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            return run_id
+    return None
 
 
 # ----- one step run -----
@@ -244,9 +260,9 @@ def select_execution(records: Iterable[Mapping[str, Any]]) -> str | None:
 def order_events(events: Iterable[SpooledEvent]) -> list[dict[str, Any]]:
     """Put one run's events in publication order, counting copies once.
 
-    Events are ordered by ``seq``, then by file name; events without a
-    ``seq`` (such as write traces) follow those with one. Of several events
-    sharing an ``eid``, the first in that order is kept.
+    Events are ordered by ``seq``, numerically, then by file name; events
+    without a ``seq`` (such as legacy write traces) follow those with one. Of
+    several events sharing an ``eid``, the first in that order is kept.
 
     Args:
         events: The run's events.
@@ -470,7 +486,8 @@ def planned_step_ids(attempt: AttemptEvents) -> list[str] | None:
     """Return the steps the attempt planned, in plan order.
 
     No other step can have run in the attempt, so these are the only step
-    directories worth reading for it.
+    directories worth reading for it. Reading them by name, rather than by
+    listing, keeps a step whose ID nests under another's apart from it.
 
     Args:
         attempt: The attempt's records; its runs and blocked events are not
@@ -481,58 +498,6 @@ def planned_step_ids(attempt: AttemptEvents) -> list[str] | None:
     """
     planned = _planned_steps(attempt)
     return list(planned) if planned is not None else None
-
-
-def blocked_steps_to_read(attempt: AttemptEvents, step_ids: Iterable[str]) -> list[str]:
-    """Return the steps that may have a ``step.blocked`` event in the attempt.
-
-    Args:
-        attempt: The attempt's records.
-        step_ids: The steps to consider.
-
-    Returns:
-        list[str]: Every one of them while the attempt runs; once it has
-        ended, only those its report records as blocked.
-    """
-    report = _report_of(attempt)
-    if report is None:
-        return list(step_ids)
-    return [
-        step_id
-        for step_id in step_ids
-        if _outcome_of(report, step_id) is StepOutcome.BLOCKED
-    ]
-
-
-def steps_to_search_for_runs(
-    attempt: AttemptEvents, step_ids: Iterable[str]
-) -> list[str]:
-    """Return the steps that may have a run in the attempt.
-
-    Finding a step's run of one attempt means looking through that step's run
-    directories, all of them if it has none. That search is skipped wherever
-    the attempt's own records rule a run out: a blocked step was never
-    evaluated, and once the report exists, only a step it records as
-    succeeded, reused or failed, or as running when the attempt ended, can
-    have been. A preflight rejection records neither, so it searches nothing.
-
-    Args:
-        attempt: The attempt's records and blocked-step events.
-        step_ids: The steps to consider.
-
-    Returns:
-        list[str]: The steps whose runs are worth searching, in the given
-        order.
-    """
-    report = _report_of(attempt)
-    if report is None:
-        return [step_id for step_id in step_ids if step_id not in attempt.blocked]
-    running = _running_step_of(report)
-    return [
-        step_id
-        for step_id in step_ids
-        if _outcome_of(report, step_id) in _RUN_OUTCOMES or step_id == running
-    ]
 
 
 def _live_status(
@@ -605,9 +570,10 @@ def _settled_status(
     else:
         # The events do not record this outcome: the step failed before its
         # @step wrapper published anything, its terminal event is missing, or
-        # only the report survives. Keep what identifies the run.
+        # only the report survives. Keep what identifies the run. A blocked
+        # event identifies only a step the report says was blocked.
         identifying: Sequence[Mapping[str, Any]] = events or (
-            [blocked] if blocked is not None else []
+            [blocked] if blocked is not None and outcome is StepOutcome.BLOCKED else []
         )
         status = _identity(run_id, identifying)
         status.state = state

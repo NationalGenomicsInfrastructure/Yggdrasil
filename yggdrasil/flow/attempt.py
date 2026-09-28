@@ -39,12 +39,19 @@ class AttemptContext:
         execution_authority: "daemon" or "run_once" — who is permitted to
             execute and finalize this request.
         execution_owner: Unique owner token for run_once isolation, if any.
+        execution_id_reserved: Whether the attempt's execution ID has been
+            reserved, i.e. its attempt directory claimed exclusively in the
+            engine's spool. True only once a reservation succeeded: the engine
+            reserves an ID it allocates before building the context, and
+            reserves a caller-built ID itself when the attempt starts, never
+            twice. Stays False where the engine has nowhere to reserve.
     """
 
     report: AttemptReport
     cancel_event: threading.Event = field(default_factory=threading.Event)
     execution_authority: str = "daemon"
     execution_owner: str | None = None
+    execution_id_reserved: bool = False
 
     @classmethod
     def for_plan(
@@ -57,6 +64,7 @@ class AttemptContext:
         execution_authority: str = "daemon",
         execution_owner: str | None = None,
         cancel_event: threading.Event | None = None,
+        execution_id_reserved: bool = False,
     ) -> AttemptContext:
         """Open a context for one attempt at ``plan``.
 
@@ -77,6 +85,10 @@ class AttemptContext:
             execution_owner: Unique owner token for run_once isolation.
             cancel_event: Existing cancellation signal to share; a fresh unset
                 event is created when omitted.
+            execution_id_reserved: True only if ``execution_id`` was reserved
+                through the engine (``Engine.reserve_execution_id``) and that
+                reservation succeeded. Left False, the engine reserves the ID
+                when the attempt starts.
 
         Returns:
             AttemptContext: A context whose report is open and empty.
@@ -94,6 +106,7 @@ class AttemptContext:
             cancel_event=cancel_event or threading.Event(),
             execution_authority=execution_authority,
             execution_owner=execution_owner,
+            execution_id_reserved=execution_id_reserved,
         )
 
     # ----- captured identity (read-through to the report) -----

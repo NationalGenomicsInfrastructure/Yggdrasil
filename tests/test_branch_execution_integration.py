@@ -354,20 +354,30 @@ class BranchExecutionTestCase(unittest.TestCase):
         assert snapshot is not None, f"no snapshot {SNAPSHOT_ID} is stored"
         return snapshot
 
+    def attempt_dir(self, execution_id: str) -> Path:
+        """One attempt's directory in the spool."""
+        return self.spool / REALM / PLAN_ID / "attempts" / execution_id
+
     def spooled(self, execution_id: str | None = None) -> list[tuple[Path, dict]]:
-        """Return the plan's spooled events, each with its path in the spool.
+        """Return spooled events, each with its path in the spool.
 
         Args:
-            execution_id: Only this attempt's events; all when None.
+            execution_id: Only this attempt's events, from its own directory;
+                all of the plan's when None.
 
         Returns:
             list[tuple[Path, dict]]: Each event, with its path relative to the
-            plan's spool directory, in path order.
+            attempt's directory (or to the plan's, when all are returned), in
+            path order.
         """
-        plan_dir = self.spool / REALM / PLAN_ID
+        root = (
+            self.spool / REALM / PLAN_ID
+            if execution_id is None
+            else self.attempt_dir(execution_id)
+        )
         events = [
-            (path.relative_to(plan_dir), json.loads(path.read_text()))
-            for path in sorted(plan_dir.rglob("*.json"))
+            (path.relative_to(root), json.loads(path.read_text()))
+            for path in sorted(root.rglob("*.json"))
         ]
         return [
             (path, event)
@@ -382,6 +392,13 @@ class BranchExecutionTestCase(unittest.TestCase):
             for path, event in self.spooled(report.execution_id)
             if event["type"] == event_type
         ]
+
+    def steps_with(self, event_type: str, report: AttemptReport) -> list[str]:
+        """Return the steps whose streams hold one attempt's events of a type."""
+        return sorted(
+            str(path.parent.relative_to("steps"))
+            for path in self.events_of_type(event_type, report)
+        )
 
     def work_file(self, step_id: str, name: str) -> Path:
         """Return a file in a step's work directory."""
@@ -458,12 +475,8 @@ class BranchExecutionTestCase(unittest.TestCase):
         """Assert the attempt published its start and its report exactly once."""
         started = self.events_of_type("plan.attempt_started", report)
         published = self.events_of_type("plan.attempt_report", report)
-        self.assertEqual(
-            started, [Path(f"{report.execution_id}_plan_attempt_started.json")]
-        )
-        self.assertEqual(
-            published, [Path(f"{report.execution_id}_plan_attempt_report.json")]
-        )
+        self.assertEqual(started, [Path("plan_attempt_started.json")])
+        self.assertEqual(published, [Path("plan_attempt_report.json")])
         ((_, event),) = [
             item
             for item in self.spooled(report.execution_id)
@@ -530,12 +543,13 @@ class BranchExecutionTestCase(unittest.TestCase):
             if step["run_id"] is None:
                 continue
             with self.subTest(step=step_id):
-                run_dir = self.spool / REALM / PLAN_ID / step_id / step["run_id"]
-                events = [json.loads(p.read_text()) for p in run_dir.glob("*.json")]
+                step_dir = self.attempt_dir(execution_id) / "steps" / step_id
+                events = [json.loads(p.read_text()) for p in step_dir.glob("*.json")]
                 self.assertTrue(events)
                 self.assertEqual(
                     {event["execution_id"] for event in events}, {execution_id}
                 )
+                self.assertIn(step["run_id"], {event.get("run_id") for event in events})
 
 
 class DaemonScenarios:
@@ -549,9 +563,13 @@ class DaemonScenarios:
         self.assertEqual(doc["status"], "approved")
         self.assertEqual(doc["plan"]["failure_policy"], "continue_independent")
 
-        result = self.execute_as_daemon()
+        with self.assertLogs(CORE_LOGGER, level=logging.DEBUG) as logs:
+            result = self.execute_as_daemon()
 
         report = self.assert_drained_failure(result, BRANCH_FAILURE_OUTCOMES)
+        # A drained, truthfully recorded failure is a warning, not an error.
+        (summary,) = [r for r in logs.records if r.getMessage() == result.message]
+        self.assertEqual(summary.levelno, logging.WARNING)
         self.assertEqual(report.plan_generation, doc["plan_generation"])
         self.assertEqual(report.run_token, 0)
         self.assertEqual(
@@ -579,31 +597,28 @@ class DaemonScenarios:
         self.assert_one_record_each(report)
         self.assertEqual(
             self.events_of_type("step.blocked", report),
-            [Path("lane_2__upload", f"{report.execution_id}_step_blocked.json")],
+            [Path("steps", "lane_2__upload", "0001_step_blocked.json")],
         )
         self.assertEqual(
-            sorted(
-                path.parts[0] for path in self.events_of_type("step.failed", report)
-            ),
+            self.steps_with("step.failed", report),
             ["lane_2__process", "update_metadata"],
         )
         self.assertEqual(
-            sorted(
-                path.parts[0] for path in self.events_of_type("step.succeeded", report)
-            ),
+            self.steps_with("step.succeeded", report),
             sorted(
                 step_id
                 for step_id, outcome in BRANCH_FAILURE_OUTCOMES.items()
                 if outcome is SUCCEEDED
             ),
         )
-        # A blocked step never ran, so it has no run directory.
+        # A blocked step never ran: its stream holds its blocked event alone,
+        # which names no run.
+        blocked_dir = self.attempt_dir(report.execution_id) / "steps" / "lane_2__upload"
         self.assertEqual(
-            [
-                p.name
-                for p in (self.spool / REALM / PLAN_ID / "lane_2__upload").iterdir()
-            ],
-            [f"{report.execution_id}_step_blocked.json"],
+            [p.name for p in blocked_dir.iterdir()], ["0001_step_blocked.json"]
+        )
+        self.assertNotIn(
+            "run_id", json.loads((blocked_dir / "0001_step_blocked.json").read_text())
         )
 
         snapshot = self.consume_spool()
@@ -656,15 +671,11 @@ class DaemonScenarios:
         self.assert_correlated(report)
         self.assert_one_record_each(report)
         self.assertEqual(
-            sorted(
-                path.parts[0] for path in self.events_of_type("step.blocked", report)
-            ),
+            self.steps_with("step.blocked", report),
             sorted(LANE_STEPS),
         )
         self.assertEqual(
-            sorted(
-                path.parts[0] for path in self.events_of_type("step.started", report)
-            ),
+            self.steps_with("step.started", report),
             ["update_metadata", "validate_shared"],
         )
 

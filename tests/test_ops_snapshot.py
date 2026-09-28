@@ -18,11 +18,12 @@ from lib.ops.snapshot import (
     AttemptEvents,
     SpooledEvent,
     StepRun,
+    attempts_newest_first,
     fold_run,
     order_events,
     project_attempt,
     project_legacy,
-    select_execution,
+    run_id_of,
 )
 from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
@@ -30,8 +31,8 @@ from yggdrasil.flow.events.attempt_records import (
     STEP_BLOCKED_EVENT,
 )
 
-OLDER = "exec_20260921T120500000000Z_" + "f" * 32
-NEWER = "exec_20260921T120600000000Z_" + "0" * 32
+OLDER = "20260921T120500000000Z_ffff"
+NEWER = "20260921T120600000000Z_0000"
 
 
 def event(type_: str, seq: int | None = None, **fields: Any) -> dict[str, Any]:
@@ -71,29 +72,43 @@ def report_event(execution_id: str, **report: Any) -> dict[str, Any]:
 
 
 class TestSelection(unittest.TestCase):
-    """The newest admitted attempt is selected, finished or not."""
+    """Attempts are tried newest first, by execution ID alone."""
 
-    def test_highest_execution_id_wins_whatever_else_the_records_say(self):
-        records = [
-            # The older attempt finished and succeeded, under a generation
-            # that sorts above the newer attempt's, with a higher run token.
-            started(OLDER, plan_generation="ffff", run_token=7),
-            report_event(OLDER, outcome="succeeded"),
-            started(NEWER, plan_generation="0000", run_token=0),
+    def test_newest_first_by_execution_id_whatever_the_suffix(self):
+        self.assertEqual(attempts_newest_first([OLDER, NEWER]), [NEWER, OLDER])
+
+    def test_ids_that_are_not_canonical_come_last(self):
+        # "exec_sched_plan" sorts above any canonical ID by name alone.
+        self.assertEqual(
+            attempts_newest_first(["exec_sched_plan", OLDER, NEWER, "zzz"]),
+            [NEWER, OLDER, "zzz", "exec_sched_plan"],
+        )
+
+    def test_each_attempt_is_tried_once(self):
+        self.assertEqual(attempts_newest_first([OLDER, OLDER]), [OLDER])
+        self.assertEqual(attempts_newest_first([]), [])
+
+
+class TestRunId(unittest.TestCase):
+    """A step's run ID is read from its events, not from where they are."""
+
+    def test_first_event_naming_a_run_gives_it(self):
+        events = [
+            SpooledEvent(
+                "0002_step_succeeded.json", event("step.succeeded", 2, run_id="run_b")
+            ),
+            SpooledEvent(
+                "0001_step_started.json", event("step.started", 1, run_id="run_a")
+            ),
         ]
 
-        self.assertEqual(select_execution(records), NEWER)
+        self.assertEqual(run_id_of(events), "run_a")
 
-    def test_only_correlated_attempt_records_count(self):
-        records = [
-            {"type": "step.succeeded", "execution_id": NEWER},
-            {"type": ATTEMPT_STARTED_EVENT},
-            {"type": ATTEMPT_STARTED_EVENT, "execution_id": ""},
-            {"type": "plan.draft", "execution_id": NEWER},
-        ]
-
-        self.assertIsNone(select_execution(records))
-        self.assertEqual(select_execution([*records, started(OLDER)]), OLDER)
+    def test_events_without_a_run_give_none(self):
+        self.assertIsNone(run_id_of([SpooledEvent("x.json", event("step.started", 1))]))
+        self.assertIsNone(
+            run_id_of([SpooledEvent("x.json", event("step.started", 1, run_id=""))])
+        )
 
 
 class TestOneRun(unittest.TestCase):
@@ -252,6 +267,41 @@ class TestAttemptProjection(unittest.TestCase):
         self.assertEqual(summary["state"], ATTEMPT_FINISHED)
         self.assertEqual(steps["j"]["direct_blockers"], ["a", "b"])
         self.assertEqual(steps["j"]["failed_ancestors"], ["a", "b"])
+
+    def test_blocked_event_describes_only_a_step_the_report_calls_blocked(self):
+        # A stray blocked event beside a step the report says failed before
+        # publishing anything: the report decides, and the stray event lends
+        # the entry nothing.
+        attempt = AttemptEvents(
+            execution_id=NEWER,
+            started=started(NEWER, "a"),
+            blocked={
+                "a": event(
+                    STEP_BLOCKED_EVENT,
+                    seq=1,
+                    execution_id=NEWER,
+                    step_name="stray",
+                    ts="2026-09-21T12:06:00Z",
+                    direct_blockers=["x"],
+                )
+            },
+            report=report_event(
+                NEWER,
+                termination_reason="completed",
+                outcome="failed",
+                step_outcomes={"a": "failed"},
+                failures={"a": {"step_id": "a", "error": "hashing failed"}},
+            ),
+        )
+
+        _, steps = project_attempt(attempt)
+
+        self.assertEqual(
+            (steps["a"]["state"], steps["a"]["outcome"]), ("step.failed", "failed")
+        )
+        self.assertEqual(steps["a"]["step_name"], "name_a")
+        self.assertIsNone(steps["a"]["ts"])
+        self.assertEqual(steps["a"]["direct_blockers"], [])
 
     def test_unconfirmed_terminal_event_does_not_make_an_outcome(self):
         # The attempt aborted after a's success event but before a's success
