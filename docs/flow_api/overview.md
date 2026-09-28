@@ -247,18 +247,27 @@ The marker is not a transaction across the event spool, the artifacts and the pl
 $YGG_EVENT_SPOOL/
   <realm>/
     <plan_id>/
-      <execution_id>_plan_attempt_started.json
-      <execution_id>_plan_attempt_report.json
-      <step_id>/
-        <execution_id>_step_blocked.json     # only if the attempt blocked the step
-        <run_id>/
-          0001_step_started.json
-          0002_step_progress.json
-          0003_step_artifact.json
-          0004_step_succeeded.json
+      attempts/
+        <execution_id>/
+          plan_attempt_started.json
+          plan_attempt_report.json
+          steps/
+            lane_1__process/
+              0001_step_started.json
+              0002_step_progress.json
+              0003_data_access_write_succeeded.json
+              0004_step_succeeded.json
+            lane_1__upload/
+              0001_step_skipped.json        # reused
+            lane_2__upload/
+              0001_step_blocked.json        # blocked: it never ran
 ```
 
-Plan-level records sit directly in the plan's directory. Every attempt writes its own, since the file names carry its execution ID. Each reuse or execution of a step gets its own `<run_id>` directory. A blocked step never ran, so its record sits in the step's directory, with no run directory.
+Each attempt has a directory of its own, named after its execution ID, so its two plan-level records have fixed names. Each step has one numbered stream of events per attempt, whoever published them: the engine (skip, block, retry diagnostic), the `@step` wrapper, the step's own progress and artifacts, and its DataAccess write traces. Numbers have at least four digits and continue past `9999`; readers order events by their `seq`, not by file name. A step directory records what was observed about the step, not that it ran: a blocked step has one holding only its `step.blocked`. An attempt that runs no step, because preflight rejected it or it has none, has no `steps/` directory. The directory is created before the attempt publishes anything (see [Execution IDs and attempt order](#execution-ids-and-attempt-order)), so an attempt cancelled or killed in between leaves it empty.
+
+A step's directory is its `step_id` as a path, exactly like its work directory. `PlanBuilder` generates simple IDs, but a manually built `StepSpec` may use others, and a step ID containing `/` nests: `lane_1/process` is filed in `steps/lane_1/process/`. Readers open each planned step's directory by name and read only the files directly in it, so it never mixes with `lane_1`'s events.
+
+Work directories, artifacts and `success.fingerprint` markers are not in the spool; they stay at `<work_root>/<plan_id>/<step_id>/`.
 
 ### Event types
 
@@ -270,45 +279,57 @@ Plan-level records sit directly in the plan's directory. Every attempt writes it
 | `step.artifact` | One artifact registered |
 | `step.succeeded` | Step finished successfully |
 | `step.failed` | The step's function raised an exception, or returned without a required output. A step that fails before its function is called publishes no events; only the attempt report records its failure |
-| `step.retry_unimplemented` | Follows `step.failed` for a `TransientStepError`: retries are not implemented |
+| `step.retry_unimplemented` | Follows `step.failed` in the same stream for a `TransientStepError`: retries are not implemented |
 | `step.skipped` | An earlier success was reused (`reason: "cache_hit"`) |
 | `step.blocked` | A prerequisite failed or was blocked, so the step will not run in this attempt. Published once, as soon as it is blocked, with the blockers known at that moment |
 | `plan.attempt_report` | Once, when the attempt ends, including by failure, cancellation or preflight rejection, unless event publication has already failed in it (see [Attempt reports](#attempt-reports)). Carries the full report: termination reason, outcome, every step's outcome, failures, and the complete blocker lists |
 
-Each event JSON record contains `type`, `ts`, `eid`, `realm`, `scope` and `plan_id`. The events of a step's run also carry `seq`, `step_id`, `step_name` and `fingerprint`. A `step.blocked` record carries `step_id`, `step_name`, `direct_blockers` and `failed_ancestors`.
+Each event JSON record contains `type`, `ts`, `eid`, `realm`, `scope` and `plan_id`. Every step event also carries `step_id` and its number in the step's stream, `seq`. The events of a step's evaluation carry its `run_id`, `step_name` and, from the step itself, `fingerprint`; a reused step's `step.skipped` carries the `run_id` of the reuse check. A `step.blocked` record carries `step_name`, `direct_blockers` and `failed_ancestors`, and no `run_id`: the step never ran.
 
-Every event an attempt publishes also carries the attempt's identity: `execution_id`, and the `plan_generation` and `run_token` the attempt captured from the plan document (both `null` for a direct `Engine.run` call). A step's `run_id` identifies one invocation of that step. The `execution_id` says which attempt at the whole plan it belonged to. How execution IDs order attempts is described in [Execution IDs and attempt order](#execution-ids-and-attempt-order).
+Every event an attempt publishes also carries the attempt's identity: `execution_id`, and the `plan_generation` and `run_token` the attempt captured from the plan document (both `null` for a direct `Engine.run` call). A step's `run_id` identifies one evaluation of that step. The `execution_id` says which attempt at the whole plan it belonged to. How execution IDs order attempts is described in [Execution IDs and attempt order](#execution-ids-and-attempt-order).
 
 ### Attempt reports
 
 Every attempt keeps an in-memory report of what it established, and closes it however the attempt ends, including by an exception. On its way out, the engine then publishes the closed report as `plan.attempt_report`, **unless event publication has already failed during the attempt**. It does not try again through an emitter that has just failed, since the second failure would only bury the first. The log then says `Not publishing the report of attempt '<execution_id>'`.
 
-So an attempt can end without a terminal record. That happens when event publication failed, when publishing the report itself failed, or when the process was killed outright. Its snapshot then keeps showing the attempt as `running`, until a newer attempt is admitted. If even its `plan.attempt_started` was never recorded, the snapshot keeps showing an earlier attempt instead. None of these endings finishes the execution request, so the plan document does not record the attempt and the plan stays eligible. When a snapshot looks stuck, check the log for the attempt's execution ID, and the plan document's `executed_run_token` and `last_finalized_execution`.
+So an attempt can end without a terminal record. That happens when event publication failed, when publishing the report itself failed, or when the process was killed outright. Its snapshot then keeps showing the attempt as `running`, until a newer attempt is observed. If even its `plan.attempt_started` was never recorded, the snapshot keeps showing an earlier attempt instead. None of these endings finishes the execution request, so the plan document does not record the attempt and the plan stays eligible. When a snapshot looks stuck, check the log for the attempt's execution ID, and the plan document's `executed_run_token` and `last_finalized_execution`.
 
 ### Execution IDs and attempt order
 
-An attempt's execution ID is allocated when the attempt is admitted, before any step runs, in the form `exec_<UTC timestamp to the microsecond>_<32 hex digits>`. The ops snapshot shows the attempt whose ID orders highest. The ordering is only as reliable as these rules:
+An attempt's execution ID is its UTC timestamp to the microsecond, then four random lowercase hex characters: `20260924T120000000001Z_c68e`. The ID is allocated and reserved before the attempt publishes anything or runs any step. The ops snapshot shows the observed attempt whose ID orders highest (see [Plan Execution](../reference/plan_execution.md#operational-snapshots-plan_status)). The ordering is only as reliable as these rules:
 
-- **Canonical IDs first.** An ID the engine allocates is *canonical*: exactly that shape, with a real date and time. Canonical IDs order by their timestamp, which, at their fixed width, is also their string order. Any other ID orders below every canonical one; only an attempt context a caller builds itself, rather than letting the engine allocate its ID, can carry such an ID. Attempts are therefore not ordered by comparing arbitrary IDs as strings.
-- **Within one engine.** An engine's allocator never allocates a timestamp at or below the last one it allocated, for any plan. Its IDs strictly increase, even when the clock stands still or moves backwards.
-- **Across restarts.** Before allocating, the allocator reads back the plan's recorded attempts and allocates above all of them. This protection lasts only as long as that history is retained. If the spool's attempt records are deleted or pruned, a clock that is behind after a restart can order a new attempt below an older one.
-- **Where the history comes from.** An engine whose emitter is a `FileSpoolEmitter`, as the daemon's and run-once's are, reads back its own spool automatically. With any other emitter, a `TeeEmitter` included, the engine orders attempts within itself only, unless it is given an allocator that reads a history:
+- **Canonical IDs first.** An ID the engine allocates is *canonical*: exactly that shape, with a real date and time. Canonical IDs order by their timestamp, which, at their fixed width, is also their string order; the four hex characters only break ties between equal timestamps. Any other ID orders below every canonical one; only an attempt context a caller builds itself can carry such an ID. Attempts are therefore not ordered by comparing arbitrary IDs as strings.
+- **Within one engine.** An engine's allocator never allocates a timestamp at or below the last one it allocated, for any plan. Its IDs strictly increase, even when the clock stands still or moves backwards, and it never gives two attempts the same timestamp.
+- **Across restarts.** Before allocating, the allocator lists the plan's attempt directories and allocates above the latest timestamp among them. Every attempt directory counts, including an empty one left by an attempt that was cancelled or killed before it recorded anything, and one whose records cannot be read.
+- **Reservation.** The new attempt's directory is then created, exclusively: if a directory with that exact ID already exists, it is left untouched and the next candidate, with a later timestamp, is tried. After three candidates, or on any other failure to create the directory, the attempt does not start: `Engine.run` raises an `OrchestrationError`, and a coordinated request is not admitted (`admission_failed`) and stays eligible. A caller-built ID is reserved the same way when its attempt starts, and refused, never renamed, if it is taken.
+- **Where the history comes from.** An engine whose emitter is a `FileSpoolEmitter`, as the daemon's and run-once's are, orders and reserves in that spool automatically. An injected allocator does not change where attempts are reserved. With any other emitter, a `TeeEmitter` included, the engine orders attempts within itself only and reserves nothing, unless it is given a history and a reserver for the spool:
 
     ```python
     from yggdrasil.core.engine import Engine
     from yggdrasil.core.execution_ids import ExecutionIdAllocator
-    from yggdrasil.flow.events.attempt_records import SpoolAttemptHistory
+    from yggdrasil.flow.events.attempt_records import (
+        SpoolAttemptDirectories,
+        SpoolAttemptHistory,
+    )
     from yggdrasil.flow.events.emitter import FileSpoolEmitter, TeeEmitter
 
     engine = Engine(
         emitter=TeeEmitter(FileSpoolEmitter(spool_dir=spool), other_emitter),
         execution_ids=ExecutionIdAllocator(SpoolAttemptHistory(spool)),
+        attempt_reserver=SpoolAttemptDirectories(spool),
     )
     ```
 
-- **Concurrent allocators.** Attempts allocated at the same time by independent engines or processes are not ordered against each other: each reads the history before the other has recorded anything.
+- **Concurrent allocators.** Attempts allocated at the same time by independent engines or processes are not ordered against each other: each reads the history before the other has reserved anything. Reservation still keeps them from sharing a directory. No database is consulted for the order, and nothing is promised about chronological order across processes or across separate spools.
 
-A lost or pruned history therefore degrades ordering to "correct while the clock moves forward". It never makes two IDs collide.
+Ordering therefore depends on the attempt directories that are kept:
+
+- Pruning event files, or whole attempt directories, while an engine keeps running does not lower that engine's own floor.
+- Attempt directories that are kept, even empty ones, keep their place in the order across restarts. Their presence alone says nothing about how an attempt went.
+- After attempt directories are deleted and the process restarts, a new attempt is ordered by the clock and whatever directories survive. A clock set back can then give it an ID below an erased attempt's; the hex suffix does not repair that.
+- Restoring deleted directories can change which attempt orders highest, and so which one the snapshot shows. Removing a newer attempt's records can make an older attempt appear latest. Deleting a plan's whole event directory does not remove its stored `plan_status` snapshot.
+
+To reset a spool, see [Resetting the event spool](../reference/plan_execution.md#resetting-the-event-spool).
 
 ### Emitters
 
