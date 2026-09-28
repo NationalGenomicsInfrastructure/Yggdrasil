@@ -103,9 +103,14 @@ class TestPaths(unittest.TestCase):
         steps = attempt / "steps"
 
         for step_id, expected in (
-            # Parts that could be an event file of the step above.
+            # Parts that could be an event file of the step above, in any
+            # letter case; the part keeps its own spelling.
             ("lane/0001_step_started.json", "lane/%0001_step_started.json"),
             ("lane/0001_step_started.json.tmp", "lane/%0001_step_started.json.tmp"),
+            ("lane/0001_step_started.JSON", "lane/%0001_step_started.JSON"),
+            ("lane/0001_step_started.Json", "lane/%0001_step_started.Json"),
+            ("lane/0001_step_started.JSON.TMP", "lane/%0001_step_started.JSON.TMP"),
+            ("lane/0001_step_started.json.Tmp", "lane/%0001_step_started.json.Tmp"),
             ("lane.json", "%lane.json"),
             # Parts that path normalization would drop or resolve.
             ("lane/./process", "lane/%./process"),
@@ -124,7 +129,7 @@ class TestPaths(unittest.TestCase):
                     steps.joinpath(*expected.split("/")),
                 )
 
-    def test_every_step_id_gets_a_directory_of_its_own_inside_steps(self):
+    def test_distinct_step_ids_get_distinct_paths_inside_steps(self):
         attempt = attempt_dir(Path("/spool"), REALM, PLAN_ID, FIRST)
         steps = attempt / "steps"
         step_ids = [
@@ -137,6 +142,8 @@ class TestPaths(unittest.TestCase):
             "lane/../lane/process",
             "lane/0001_step_started.json",
             "lane/0001_step_started.json.tmp",
+            "lane/0001_step_started.JSON",
+            "lane/0001_step_started.Json.TMP",
             "lane/%0001_step_started.json",
             "lane/%",
             "%",
@@ -161,10 +168,13 @@ class TestPaths(unittest.TestCase):
                 self.assertEqual(os.path.normpath(directory), str(directory))
                 self.assertTrue(directory.is_relative_to(steps))
                 self.assertNotEqual(directory, steps)
-                # Never the path of another step's event file.
+                # Never the path of another step's event file, even where
+                # letter case is ignored, as on macOS's default filesystem.
                 for other in directories.values():
                     for name in event_files:
-                        self.assertNotEqual(directory, other / name)
+                        self.assertNotEqual(
+                            str(directory).casefold(), str(other / name).casefold()
+                        )
 
     def test_event_file_names_never_start_with_the_escape(self):
         for name in (

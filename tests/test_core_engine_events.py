@@ -1119,21 +1119,22 @@ class TestAttemptFileLayout(EngineEventsTestCase):
         )
 
     def test_step_ids_that_would_collide_as_paths_keep_separate_streams(self):
-        # A step ID can name another step's event file, or a path the
-        # filesystem would normalize to another step's directory. Whichever
-        # step publishes first, both run and keep streams of their own.
+        # A step ID can name another step's event file, or its temporary file,
+        # in any letter case: a case-insensitive filesystem reads the upper-case
+        # name as the lower-case file. Whichever step publishes first, both run
+        # and keep streams of their own. (IDs a path would normalize onto
+        # another step's are rejected by preflight; see
+        # tests/test_core_engine_preflight.py.)
         engine = self.spool_engine()
         groups = [
             ["lane", "lane/0001_step_started.json", "lane/0001_step_started.json.tmp"],
-            ["lane/process", "lane/./process"],
+            ["lane", "lane/0001_step_started.JSON", "lane/0001_step_started.Json.Tmp"],
         ]
         for index, group in enumerate(groups):
             for order in (group, group[::-1]):
                 with self.subTest(order=order):
-                    # Distinct params, so no step is reused from another's
-                    # marker should their work directories coincide.
                     plan = plan_of(
-                        *(spec(s, variant=n) for n, s in enumerate(order)),
+                        *(spec(s) for s in order),
                         plan_id=f"{PLAN_ID}_{index}_{order == group}",
                     )
 

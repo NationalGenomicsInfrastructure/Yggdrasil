@@ -21,11 +21,15 @@ one too.
 Each ``/``-separated part of a step ID becomes one directory level, so
 ``lane_1/process`` is filed in ``steps/lane_1/process/``. A part the
 filesystem would read as something else is escaped with a leading ``%`` (see
-:func:`step_events_dir`), so every step ID has a directory of its own, and no
-step's directory is ever another step's event file. Readers only open the step
-directories an attempt's step inventory names, and read only the files
-directly in each, so a step whose ID nests under another's stays apart from
-it. Events keep the step's own ID; only the directory name is escaped.
+:func:`step_events_dir`), so distinct step IDs get distinct paths, and no
+step's directory is another step's event file, even where letter case is
+ignored. Escaping does not remove every way a filesystem can equate two
+names: on a case-insensitive one, IDs differing only by case share a
+directory, which is why the engine's preflight rejects such IDs within a
+plan. Readers only open the step directories an attempt's step inventory
+names, and read only the files directly in each, so a step whose ID nests
+under another's stays apart from it. Events keep the step's own ID; only the
+directory name is escaped.
 
 **Two readers, two jobs.** The execution-ID allocator reads only the names of
 a plan's attempt directories (:class:`SpoolAttemptHistory`): every attempt
@@ -169,24 +173,25 @@ def _step_dir_part(part: str) -> str:
     A part is escaped with :data:`STEP_PART_ESCAPE` when, used as it is, it
     would not name a directory of its own: an empty part or ``.`` would be
     normalized away, and ``..`` would name the parent; a part ending in
-    ``.json`` or ``.json.tmp`` could be the name of an event file the spool
-    writes into the step directory above it; and a part already starting with
-    the escape could be mistaken for an escaped one. Every other part is kept
-    as it is.
+    ``.json`` or ``.json.tmp``, in any letter case, could be the name of an
+    event file the spool writes into the step directory above it, on a
+    filesystem that ignores case too; and a part already starting with the
+    escape could be mistaken for an escaped one. Only the test ignores case:
+    the part itself is kept as it is, prefixed or not.
 
     Args:
         part: One part of a step ID.
 
     Returns:
-        str: The directory name. Distinct parts always give distinct names,
-        and an escaped name never is ``.`` or ``..``, never is empty, and
-        never equals an event file's name, since event file names never start
-        with the escape.
+        str: The directory name. Distinct parts give distinct names, and an
+        escaped name never is ``.`` or ``..``, never is empty, and never
+        equals an event file's name, in any letter case, since event file
+        names never start with the escape.
     """
     if (
         part in ("", ".", "..")
         or part.startswith(STEP_PART_ESCAPE)
-        or part.endswith(_EVENT_FILE_SUFFIXES)
+        or part.casefold().endswith(_EVENT_FILE_SUFFIXES)
     ):
         return STEP_PART_ESCAPE + part
     return part
@@ -202,11 +207,15 @@ def step_events_dir(attempt_directory: Path, step_id: str) -> Path:
     - ``lane/./process`` in ``steps/lane/%./process``, apart from
       ``lane/process``;
     - ``lane/0001_step_started.json`` in ``steps/lane/%0001_step_started.json``,
-      apart from ``lane``'s event file of that name.
+      apart from ``lane``'s event file of that name, and so is
+      ``lane/0001_step_started.JSON``.
 
-    Distinct step IDs therefore always get distinct directories inside
-    ``steps/``, whatever characters they use. The writer and every reader use
-    this one mapping.
+    Distinct step IDs get distinct paths inside ``steps/``, none of them
+    another step's event file. That settles the pathname conflicts above, not
+    every alias a filesystem can make: on a case-insensitive filesystem, IDs
+    that differ only by case share a directory, and the engine's preflight
+    rejects such IDs within a plan. The writer and every reader use this one
+    mapping.
 
     Args:
         attempt_directory: The attempt's directory (see :func:`attempt_dir`).

@@ -381,6 +381,9 @@ class TestFileSpoolEmitter(unittest.TestCase):
         pairs = [
             ("lane", "lane/0001_step_started.json"),
             ("lane", "lane/0001_step_started.json.tmp"),
+            # Where case is ignored, as on macOS, these name the same files.
+            ("lane", "lane/0001_step_started.JSON"),
+            ("lane", "lane/0001_step_started.Json.Tmp"),
             ("lane/process", "lane/./process"),
             ("lane/process", "lane//process"),
             ("lane", "lane/"),
