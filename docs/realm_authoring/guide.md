@@ -191,7 +191,7 @@ Under `continue_independent`:
 
 `docs/design/demux_realm_single_flowcell_plan_prd.md` works through this graph for the demux realm. The test realm's `branch_failure` and `branch_failure_metadata_required` recipes build both variants, so both can be run in dev mode (see [Test Realm](../reference/test_realm.md#scenario-20-independent-branches-one-fails)).
 
-Give branch steps IDs that stay the same however the inputs are ordered, for example `lane_2__demux` rather than one based on a list index. A step's ID names its work directory, and reuse on a rerun depends on finding that directory again. An ID may nest with `/`, as in `lane_2/demux`, but preflight rejects an absolute ID, one with an empty, `.` or `..` part, and two IDs that differ only by letter case (see [Step IDs](../flow_api/overview.md#step-ids)).
+Prefer simple step IDs using letters, digits, underscores and hyphens, such as `lane_2__demux`. Keep IDs stable across reruns: derive them from what the step works on, not from its position in a list, since a step's ID names its work directory and reuse on a rerun depends on finding that directory again. See [Step IDs](../flow_api/overview.md#step-ids) for the validation rules.
 
 ### Declaring required outputs
 

@@ -11,7 +11,7 @@
 **Amendments:**
 
 - **2026-09-24 — Phase 8 pre-release refinement.** Adopt timestamp-plus-four-hex attempt IDs and attempt-first event directories, with ordered allocation and bounded exclusive reservation. Start from a manually reset test event spool; no format migration/detection is required. Clarify retained-history limits, completed-failure summary logging and separate-storage requirements. Scheduling, caching, finalization and CLI exit behavior remain unchanged.
-- **2026-09-28 — Step-ID pre-release correction.** A step ID names its work directory and its event directory, and some accepted IDs aliased: `lane/./process` shared `lane/process`'s work directory and was reported reused without running, `../..` escaped the work root, and `lane/0001_step_started.json` collided with `lane`'s event file. Preflight now rejects absolute IDs, IDs with empty, `.` or `..` parts, and IDs differing only by letter case; event directories escape ambiguous ID parts. Accepted IDs, work paths, fingerprints and cache locations are unchanged.
+- **2026-09-28 — Step-ID pre-release correction.** A step ID names its work directory and its event directory, and some accepted IDs aliased: `lane/./process` shared `lane/process`'s work directory and was reported reused without running, `../..` escaped the work root, and `lane/0001_step_started.json` collided with `lane`'s event file. Preflight now requires nonempty string IDs without NUL characters, rejects absolute IDs and IDs with empty, `.` or `..` parts, and requires IDs to remain distinct when letter case and Unicode normalization are ignored; event directories escape ambiguous ID parts. Accepted IDs retain their original spelling, work paths, fingerprints and cache locations.
 
 ## 1. Problem and intended outcome
 
@@ -100,7 +100,7 @@ An author makes a metadata step mandatory by including it in the relevant depend
 
 Before invoking any step:
 
-- Validate unique, nonempty step IDs and known dependencies. A step ID names its work directory, so it must be a relative path whose `/`-separated parts are nonempty and neither `.` nor `..`, and no two IDs in a plan may differ only by letter case, which a case-insensitive filesystem would give one directory. IDs keep their spelling; nested IDs such as `lane_1/process` stay valid, and the builder's stricter naming pattern is not imposed on manually built plans.
+- Validate unique, nonempty step IDs and known dependencies. A step ID must be a nonempty string without NUL characters. It names its work directory, so it must be a relative path whose `/`-separated parts are nonempty and neither `.` nor `..`, and step IDs must remain distinct when letter case and Unicode normalization are ignored, since a case-insensitive filesystem would give two that are not one directory. Accepted IDs retain their original spelling; nested IDs such as `lane_1/process` stay valid, and the builder's stricter naming pattern is not imposed on manually built plans.
 - Reject self-dependencies and cycles with actionable diagnostics.
 - Validate the selected policy and required execution metadata.
 - Resolve/check callable registration and basic binding errors where possible without invoking step bodies.
@@ -287,7 +287,7 @@ Use isolated temporary files and mocked external services. Cover both policies a
 4. An old matching cache marker on a blocked descendant does not allow execution or reuse.
 5. Valid reuse satisfies dependencies; deleting a declared output causes its producer to run; a failed rerun leaves no reusable success marker.
 6. Forward references execute correctly; ready-node tie-breaking is deterministic.
-7. Duplicate IDs, unknown dependencies, self-dependencies, cycles, and step IDs that cannot name a work directory of their own (absolute, with an empty, `.` or `..` part, or differing from another only by letter case) are rejected before any step invocation or work-directory write; a safely recorded preflight rejection terminally fails the captured continuation request rather than leaving it repeatedly eligible.
+7. Duplicate IDs, unknown dependencies, self-dependencies, cycles, and step IDs that cannot name a work directory of their own (not nonempty strings, absolute, with an empty, `.` or `..` part, or not distinct when letter case and Unicode normalization are ignored) are rejected before any step invocation or work-directory write, with a publishable rejection report; a safely recorded preflight rejection terminally fails the captured continuation request rather than leaving it repeatedly eligible.
 8. Transient and unexpected ordinary step exceptions preserve diagnostics while healthy branches continue; cancellation/systemic failure stops the attempt distinctly.
 9. Omitted policy round-trips as fail-fast; unknown policy rejects; legacy stop/raise behavior remains.
 10. Daemon and run-once consume the result correctly. Failed continuation finishes healthy work, reports failure, and run-once exits nonzero.
