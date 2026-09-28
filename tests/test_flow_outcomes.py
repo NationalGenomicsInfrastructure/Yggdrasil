@@ -190,6 +190,24 @@ class TestAttemptReportUnreachedWork(unittest.TestCase):
         self.assertEqual(counts["unreached"], 1)
         self.assertEqual(sum(counts.values()), len(report.step_ids))
 
+    def test_entries_that_are_not_strings_count_as_unreached(self):
+        """A malformed plan's inventory must not break a report rejecting it.
+
+        Preflight rejects these IDs, and the report closing that rejection
+        still has to count, serialize and publish them: unhashable ones must
+        never be used as dictionary keys.
+        """
+        malformed: list = [["bad"], {"bad": 1}, None, 7, []]
+        report = _report("a", *malformed)
+        report.record_outcome("a", StepOutcome.SUCCEEDED)
+        report.finish(TerminationReason.PREFLIGHT_REJECTED)
+
+        self.assertEqual(report.unreached_step_ids, malformed)
+        self.assertEqual(report.counts["unreached"], len(malformed))
+        restored = json.loads(json.dumps(report.to_dict()))
+        self.assertEqual(restored["unreached_step_ids"], malformed)
+        self.assertEqual(restored["termination_reason"], "preflight_rejected")
+
 
 class TestAttemptReportCompletion(unittest.TestCase):
     """finish(), is_drained, and the derived overall outcome."""

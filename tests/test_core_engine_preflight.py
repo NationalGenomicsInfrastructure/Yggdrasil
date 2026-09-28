@@ -11,6 +11,7 @@ when it runs, and the malformed part is always downstream of it.
 """
 
 import importlib
+import json
 import sys
 import unittest
 import uuid
@@ -286,12 +287,41 @@ class TestStepIdsNameWorkDirectories(PreflightTestCase):
                         "'lane_1/process'",
                     )
 
-    def test_an_id_that_is_not_a_string_is_rejected(self):
-        plan = self.plan(self.side_effect_spec(), self.final_step(7))
+    def test_ids_that_are_not_strings_are_rejected_with_a_publishable_report(self):
+        # A plan read from a malformed document keeps whatever its step IDs
+        # were. Unhashable ones must not break the report closing the rejection.
+        for step_id in (7, None, [], ["bad"], {"bad": 1}):
+            for policy in self.POLICIES:
+                with self.subTest(step_id=step_id, policy=policy):
+                    self.mock_emitter.reset_mock()
+                    plan = self.plan(
+                        self.side_effect_spec(),
+                        self.final_step(step_id),
+                        failure_policy=policy,
+                    )
 
-        self.assert_rejected_without_side_effects(plan, "of type int")
+                    # The original rejection is what surfaces, with nothing run.
+                    rejection = self.assert_rejected_without_side_effects(
+                        plan,
+                        f"of type {type(step_id).__name__}, not a string",
+                        repr(step_id),
+                    )
+                    self.assertIs(type(rejection), PreflightValidationError)
 
-    def test_ids_differing_only_by_letter_case_are_rejected(self):
+                    # Exactly one terminal report is published, and it survives
+                    # serialization, as recording the rejection requires.
+                    published = [
+                        call.args[0]
+                        for call in self.mock_emitter.emit.call_args_list
+                        if call.args[0]["type"] == "plan.attempt_report"
+                    ]
+                    self.assertEqual(len(published), 1)
+                    report = json.loads(json.dumps(published[0]["report"]))
+                    self.assertEqual(report["termination_reason"], "preflight_rejected")
+                    self.assertEqual(report["unreached_step_ids"], ["s1", step_id])
+                    self.assertIn("not a string", report["diagnostic"]["message"])
+
+    def test_ids_equal_ignoring_case_and_normalization_are_rejected(self):
         for first, second in (
             ("Lane", "lane"),
             ("lane_1/Process", "lane_1/process"),
@@ -308,7 +338,11 @@ class TestStepIdsNameWorkDirectories(PreflightTestCase):
                     )
 
                     self.assert_rejected_without_side_effects(
-                        plan, repr(first), repr(second), "differ only by letter case"
+                        plan,
+                        ascii(first),
+                        ascii(second),
+                        "the same when letter case and Unicode normalization "
+                        "are ignored",
                     )
 
     def test_rejection_leaves_earlier_work_untouched(self):

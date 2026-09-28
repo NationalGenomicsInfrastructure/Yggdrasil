@@ -25,8 +25,8 @@ filesystem would read as something else is escaped with a leading ``%`` (see
 step's directory is another step's event file, even where letter case is
 ignored. Escaping does not remove every way a filesystem can equate two
 names: on a case-insensitive one, IDs differing only by case share a
-directory, which is why the engine's preflight rejects such IDs within a
-plan. Readers only open the step directories an attempt's step inventory
+directory, which is why the engine's preflight requires a plan's step IDs to
+remain distinct when letter case and Unicode normalization are ignored. Readers only open the step directories an attempt's step inventory
 names, and read only the files directly in each, so a step whose ID nests
 under another's stays apart from it. Events keep the step's own ID; only the
 directory name is escaped.
@@ -214,7 +214,8 @@ def step_events_dir(attempt_directory: Path, step_id: str) -> Path:
     another step's event file. That settles the pathname conflicts above, not
     every alias a filesystem can make: on a case-insensitive filesystem, IDs
     that differ only by case share a directory, and the engine's preflight
-    rejects such IDs within a plan. The writer and every reader use this one
+    requires a plan's step IDs to remain distinct when letter case and
+    Unicode normalization are ignored. The writer and every reader use this one
     mapping.
 
     Args:

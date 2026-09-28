@@ -493,10 +493,22 @@ class AttemptReport:
         a fail-fast run aborted, the attempt was cancelled, or it is still
         running.
 
+        The inventory holds the plan's step IDs as the plan gave them, before
+        preflight has validated them, so an entry read from a malformed plan
+        document may not even be a string. Such an entry never has an outcome,
+        so it counts as unreached without being looked up among them: it may
+        not be usable as a dictionary key at all, and a report rejecting it
+        must still be closable, publishable and recordable.
+
         Returns:
-            list[str]: Step IDs with no recorded outcome.
+            list[str]: Step IDs with no recorded outcome, in the inventory's
+            order, including any entry that is not a string.
         """
-        return [sid for sid in self.step_ids if sid not in self.step_outcomes]
+        return [
+            step_id
+            for step_id in self.step_ids
+            if not isinstance(step_id, str) or step_id not in self.step_outcomes
+        ]
 
     @property
     def is_finished(self) -> bool:

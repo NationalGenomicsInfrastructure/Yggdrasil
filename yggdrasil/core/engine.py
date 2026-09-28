@@ -254,7 +254,7 @@ def _find_cycle(steps: list[StepSpec]) -> list[str] | None:
     return None
 
 
-def _work_dir_problem(step_id: object) -> str | None:
+def _work_dir_problem(step_id: str) -> str | None:
     """Say why a step ID cannot name a work directory of its own, if it cannot.
 
     A step's work directory is ``<work_root>/<plan_id>/<step_id>``, each
@@ -273,8 +273,6 @@ def _work_dir_problem(step_id: object) -> str | None:
     Returns:
         str | None: What is wrong with it; None if it is usable.
     """
-    if not isinstance(step_id, str):
-        return f"it is of type {type(step_id).__name__}, not a string"
     if step_id.startswith("/"):
         return "it is an absolute path"
     if "\x00" in step_id:
@@ -288,11 +286,12 @@ def _work_dir_problem(step_id: object) -> str | None:
 
 
 def _caseless(step_id: str) -> str:
-    """Return the form in which step IDs differing only by case are equal.
+    """Return the form in which step IDs a filesystem may not tell apart are equal.
 
-    Letter case, and how accented characters are encoded, are ignored
-    (Unicode canonical caseless matching), as a case-insensitive filesystem
-    such as macOS's default ignores them in file names.
+    Letter case and Unicode normalization, i.e. how accented characters are
+    encoded, are ignored (Unicode canonical caseless matching), as a
+    case-insensitive filesystem such as macOS's default ignores them in file
+    names. Used only to compare IDs; IDs keep their original spelling.
 
     Args:
         step_id: The step's ID.
@@ -700,23 +699,35 @@ class Engine:
         self-dependency and every edge of a cycle satisfy "this ID exists in the
         plan", so the old existence check could never detect either.
 
-        A step ID also names the step's work directory, so it must name one of
-        its own (see :func:`_work_dir_problem`), and two IDs must not differ
-        only by letter case: a case-insensitive filesystem would give both
-        steps one directory. IDs keep their spelling; nothing is normalized.
+        A step ID must be a nonempty string. It also names the step's work
+        directory, so it must name one of its own (see
+        :func:`_work_dir_problem`), and step IDs must remain distinct when
+        letter case and Unicode normalization are ignored: a case-insensitive
+        filesystem would give two IDs that are not one directory. Accepted IDs
+        retain their original spelling; nothing is normalized.
 
         Args:
             plan: The plan to validate.
 
         Raises:
-            PreflightValidationError: If any step ID is empty, duplicated,
-                unusable as a work directory, or differs from another only by
-                letter case; a dependency is unknown; a step depends on itself;
+            PreflightValidationError: If any step ID is not a string, is
+                empty, is duplicated, is unusable as a work directory, or is not
+                distinct from another when letter case and Unicode normalization
+                are ignored; a dependency is unknown; a step depends on itself;
                 or the graph contains a cycle.
         """
         by_id: dict[str, StepSpec] = {}
         by_caseless: dict[str, str] = {}
         for position, spec in enumerate(plan.steps):
+            # A plan read from a malformed document can carry anything here,
+            # and nothing below may use it before it is known to be a string.
+            if not isinstance(spec.step_id, str):
+                raise PreflightValidationError(
+                    f"Step at position {position} in plan '{plan.plan_id}' has a "
+                    f"step_id of type {type(spec.step_id).__name__}, not a "
+                    f"string: {spec.step_id!r}. Every step needs a unique, "
+                    f"nonempty string identity."
+                )
             if not spec.step_id:
                 raise PreflightValidationError(
                     f"Step at position {position} in plan '{plan.plan_id}' has an "
@@ -738,12 +749,15 @@ class Engine:
                 )
             caseless = _caseless(spec.step_id)
             if caseless in by_caseless:
+                # ascii() shows how two IDs that may look alike differ.
                 raise PreflightValidationError(
-                    f"Step IDs {by_caseless[caseless]!r} and {spec.step_id!r} in "
-                    f"plan '{plan.plan_id}' differ only by letter case. A "
-                    f"case-insensitive filesystem, such as macOS's default, would "
-                    f"give both steps one work directory, so step IDs must differ "
-                    f"in more than case."
+                    f"Step IDs {ascii(by_caseless[caseless])} and "
+                    f"{ascii(spec.step_id)} in plan '{plan.plan_id}' are the same "
+                    f"when letter case and "
+                    f"Unicode normalization are ignored, so a case-insensitive "
+                    f"filesystem, such as macOS's default, would give both steps "
+                    f"one work directory. Step IDs must remain distinct when "
+                    f"letter case and Unicode normalization are ignored."
                 )
             by_caseless[caseless] = spec.step_id
             by_id[spec.step_id] = spec

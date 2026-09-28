@@ -187,6 +187,46 @@ class ConsumptionScenarios:
         self.assert_recorded(result)
         self.assertFalse(is_plan_eligible(self.stored()))
 
+    def test_step_ids_that_are_not_strings_are_rejected_and_recorded(self):
+        # A stored document can carry anything as a step ID, and reading the
+        # plan keeps it. Its rejection must still be reported and, for a
+        # continuation request, recorded like any other preflight rejection.
+        cases = [
+            (policy, step_id)
+            for policy in POLICIES
+            for step_id in (["bad"], {"bad": 1}, None)
+        ]
+        for index, (policy, step_id) in enumerate(cases):
+            plan_id = f"{PLAN_ID}_malformed_{index}"
+            with self.subTest(policy=policy, step_id=step_id):
+                malformed = spec("b")
+                malformed.step_id = step_id  # type: ignore[assignment]
+                self.save(
+                    make_plan(spec("a"), malformed, policy=policy, plan_id=plan_id)
+                )
+
+                result = self.execute(plan_id)
+
+                report = result.report
+                assert report is not None
+                self.assertEqual(
+                    report.termination_reason, TerminationReason.PREFLIGHT_REJECTED
+                )
+                assert report.diagnostic is not None
+                self.assertEqual(
+                    report.diagnostic.error_type, "PreflightValidationError"
+                )
+                self.assertIn("not a string", report.diagnostic.message)
+                self.assertEqual(report.unreached_step_ids, ["a", step_id])
+                if policy == CONTINUE:
+                    self.assertEqual(result.status, ExecutionStatus.FINALIZED)
+                    self.assert_recorded(result)
+                    self.assertFalse(is_plan_eligible(self.stored(plan_id)))
+                else:
+                    self.assertEqual(result.status, ExecutionStatus.UNFINISHED)
+                    self.assert_unconsumed(plan_id)
+        self.assertEqual(self.steps.calls, [])
+
     def test_orchestration_failure_leaves_the_request_eligible(self):
         self.emitter.fail_on.add("step.started")
         for policy in POLICIES:
