@@ -1,11 +1,16 @@
 # Yggdrasil: Independent Branch Execution for Concrete Plans
 
-**Status:** draft PRD for review; no implementation authorized by this document  
+**Status:** Agreed requirements; implemented through Phase 8  
 **Date:** 2026-09-14  
+**Last amended:** 2026-09-24  
 **Source baseline:** Yggdrasil `dev`, `250e9e17e8b29cfc8db40268aba8db6e2287308e`  
 **Companion:** [Demux single-flowcell plan PRD](demux_realm_single_flowcell_plan_prd.md)
 
 **Implementation-agent review:** targeted clarifications and decisions are recorded in [the review response](independent_branch_execution_agent_review.md); [the saved original](yggdrasil_independent_branch_execution_prd.before_agent_review.md) and [unified diff](yggdrasil_independent_branch_execution_prd.agent_review.diff) track this revision.
+
+**Amendments:**
+
+- **2026-09-24 — Phase 8 pre-release refinement.** Adopt timestamp-plus-four-hex attempt IDs and attempt-first event directories, with ordered allocation and bounded exclusive reservation. Start from a manually reset test event spool; no format migration/detection is required. Clarify retained-history limits, completed-failure summary logging and separate-storage requirements. Scheduling, caching, finalization and CLI exit behavior remain unchanged.
 
 ## 1. Problem and intended outcome
 
@@ -152,12 +157,32 @@ Provide an explicit internal execution-context/result path for callers to finali
 
 ### Events and snapshots
 
-- Correlate events with one execution ID plus the captured plan generation/token. Existing per-step run IDs alone are insufficient to select a coherent plan attempt.
+- Correlate events with one execution ID plus the captured plan generation/token. Existing per-step run IDs alone are insufficient to select a coherent plan attempt. Each step evaluation's run ID, including a reuse check's, remains event metadata; a blocked step has none.
 - Emit explicit blocking diagnostics and a plan-level terminal result. Existing cache-skip events may remain, with an unambiguous cache-hit reason; they are different from blocked events.
 - Supply step names/IDs, errors, direct blockers, original failed ancestors, outcome counts, and enough plan information to show unstarted work.
-- Build the latest operational snapshot from one selected execution, not a mixture of independently selected historical step runs.
+- An operational snapshot is the derived execution status of the latest observed attempt. Build it from that one attempt's records and events, not a mixture of independently selected historical step runs. Only an attempt-start or attempt-report record makes an attempt observed.
 - Do not let a later progress/artifact event, delayed event delivery, or replay erase a known terminal failure. Correlate/deduplicate by event identity and use defined terminal ordering.
-- Preserve old event readability. Upgrade the consumer's handling of plan-level events and scope discovery rather than assuming its current directory traversal already supports the new layout.
+- Event-publication failures keep the qualifications above: they abort the attempt, and an attempt whose event publication failed may end without a published report.
+- Phase 8 starts with a manually cleared or newly configured development event spool. No migration or old-format detection is required. New attempt history is read only from the new layout; leftover old event files neither block execution nor contribute to the new attempt view. No data is deleted by code.
+
+### Execution IDs and event layout
+
+An execution ID is `<UTC timestamp>_<four lowercase hexadecimal characters>`, for example `20260924T120000000001Z_c68e`: the timestamp at microsecond precision (`%Y%m%dT%H%M%S%fZ`), then four random hex characters (`0000` through `ffff`). There is no `exec_` prefix. An ID is canonical only if it matches `[0-9]{8}T[0-9]{12}Z_[0-9a-f]{4}` in full and its timestamp is a real date and time that round-trips. The field keeps the name `execution_id`; event `eid` and step run-ID formats are unchanged.
+
+Each attempt's events live under its own directory:
+
+```text
+<spool>/<realm>/<plan_id>/attempts/<execution_id>/
+    plan_attempt_started.json
+    plan_attempt_report.json
+    steps/<step_id>/0001_step_started.json, 0002_step_succeeded.json, ...
+```
+
+Plan records have fixed names because the attempt directory isolates them. Each step directory holds that step's numbered event stream for the attempt (at least four digits, ordered numerically), including engine-originated skip, block and retry events and DataAccess write traces. A step directory records observations; it does not imply the step ran. Work directories, artifacts, success markers and fingerprint locations are unchanged.
+
+Allocation takes the candidate timestamp as the greatest of the current UTC time, the allocator's previous timestamp plus one microsecond, and the latest canonical attempt-directory timestamp for the plan plus one microsecond. Every canonical attempt directory counts, including an empty one left by a crash or cancellation, and one allocator's floor spans all its plans, so it never repeats a timestamp. Both coordinated and direct engine execution use the engine's one allocator. The candidate's final attempt directory is then created exclusively. If that directory already exists, it is left untouched and the next candidate, with a later timestamp, is tried. Three candidates are allowed; exhaustion, and any other I/O failure, fails before any step or attempt event runs. The ID is fixed before anything is published. A caller-supplied fixed ID is reserved the same way, never renamed, and never overwrites an existing attempt.
+
+Neither the operations database nor the plan database is queried for an allocation floor, and no chronological order between independent allocators or processes is promised. The suffix separates attempts whose histories overlap; it does not order them. Full-ID order is a deterministic tie-break for equal timestamps. Ordering holds only as long as attempt directories are retained: after they are deleted, a restart orders new attempts by the clock and whatever directories survive.
 
 Approval `status` stays `draft`/`approved`. Execution outcome is separate metadata, including in `yggdrasil_ops` and plan summaries. No new approval status is required.
 
@@ -236,6 +261,19 @@ Typed result serialization, caches shared across plans, implementation/environme
 
 Update Flow API, realm-authoring, CLI, and approval/execution documentation. Correct the current implication that merely supplying `deps` already enforces dependency order. Clarify work-directory reuse and the distinction between approval status, terminal execution, and success.
 
+The execution coordinator's summary log level for a resolved request follows the result and its report, without changing events, outcomes, finalization, run tokens, exceptions or CLI exit codes:
+
+| Condition | Level |
+|---|---|
+| Finalized, report present, termination reason `completed`, outcome `failed` | WARNING |
+| Finalized successful execution | INFO |
+| Finalized preflight rejection | ERROR |
+| Every other result | Its existing level |
+
+`completed` means the dependency graph drained normally, not that every step succeeded. A finalized result without an adequate report is not downgraded to WARNING. Step-level logging and fail-fast failure logging are unchanged.
+
+Daemon-lock documentation must not present another mode or another machine as a way around the local lock without the storage requirement: a second daemon needs separate internal storage. Changing mode or machine only bypasses the local lock; it does not make sharing the same internal storage safe. Local locks do not coordinate across users, containers or hosts.
+
 The existing dynamic-planning recap remains a future design record. The earlier caching pre-PRD's blanket-disable proposal was superseded in the discussion and is not a requirement of this PRD. Neither older document was edited when this document was created.
 
 ## 11. Acceptance criteria
@@ -260,6 +298,12 @@ Use isolated temporary files and mocked external services. Cover both policies a
 16. Parameterized chain, fan-out, diamond/join, independent-root, out-of-order, empty, and all-reused graphs verify deterministic order and at-most-once invocation under both policies. Include multiple independent failures converging on a join and concurrent distinct plans using one Engine instance.
 17. Inject failure at each event-publication boundary and marker publication: no subsequent step runs, infrastructure failure is not drained as an ordinary failed branch, and the original cause remains visible. Missing required output produces one failed terminal step event with no success event/marker. Cancellation retains exclusion until actual worker completion.
 18. SQLite stale writes and conditional-create races cannot change body, revision, or sequence on conflict. Test rerun-token/finalization races, legacy initialization/regeneration races, and idempotent replay after an uncertain commit. Retry exhaustion plus duplicate events never re-executes completed work locally; another plan still progresses.
+19. Execution IDs are canonical timestamp-plus-four-hex IDs. Wrong suffix widths, invalid dates or times, upper-case hex, non-ASCII digits and the old `exec_` shape are not canonical.
+20. Allocation stays ordered with frozen and backward clocks, and after a restart above retained attempt directories, including empty ones. An existing directory at a timestamp forces a later timestamp, not just another suffix. Tests describe the lost-history limit.
+21. Reservation never overwrites: a forced complete-ID collision leaves the existing directory intact and retries with a later timestamp; three candidates exhaust before anything runs; non-collision I/O errors are not retried; a controlled exclusive-create race yields distinct IDs. Coordinated and direct execution reserve once. A preparation failure or cancellation starts no work, consumes no token and keeps exclusion until the worker exits. A mocked emitter reaches no spool.
+22. The files written for executed, reused and blocked steps, and for empty, rejected and cancelled attempts, follow the new layout, with run metadata, step inventories, per-step numbering and correlation across engine, wrapper and DataAccess events.
+23. The consumer shows the newest attempt that has a start or report record, recognizes report-only histories, never shows an empty reservation as running, and keeps final-blocker authority and replay/late-event precedence. Leftover old-format files neither change that view nor prevent execution.
+24. Publication-failure, cancellation, consumer-shutdown and integration behavior is unchanged; branch and reuse scenarios pass on both storage backends, with unchanged cache/work paths, outcomes, token handling and CLI exits. The coordinator's summary log levels follow section 10.
 
 Implementation is complete only after this contract works through the real engine callers and event/storage paths, not merely in a scheduler unit test.
 
