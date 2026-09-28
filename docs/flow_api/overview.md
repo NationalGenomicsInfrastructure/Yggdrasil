@@ -24,7 +24,7 @@ Defines one step inside a plan.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `step_id` | `str` | Unique within the plan |
+| `step_id` | `str` | Unique within the plan; names the step's work directory (see [Step IDs](#step-ids)) |
 | `name` | `str` | Human-readable label |
 | `fn_ref` | `str` | Dotted import path to the `@step` function |
 | `params` | `dict` | Static parameters passed to the step |
@@ -32,6 +32,15 @@ Defines one step inside a plan.
 | `inputs` | `dict` | Artifact paths tracked for fingerprinting (optional) |
 | `outputs` | `dict[str, str]` | Required output paths, keyed by artifact key: absolute, or relative to the step's work directory. An earlier success is reused only while all of them exist. See [Declared outputs and reuse](#declared-outputs-and-reuse) (optional) |
 | `scope` | `dict \| None` | Override scope for this step (optional) |
+
+#### Step IDs
+
+A step's ID names its work directory, `<work_root>/<plan_id>/<step_id>`, where each `/`-separated part of the ID is one directory level. So that every step gets a directory of its own, preflight rejects an ID that:
+
+- is absolute, or has an empty, `.` or `..` part, as `/lane`, `lane//process`, `lane/`, `lane/./process` and `../other` do. A path would drop or resolve such parts, and two steps could share a work directory, or one could end up outside the plan's;
+- differs from another step's ID only by letter case, as `Lane` and `lane` do. A case-insensitive filesystem, such as macOS's default, would give them one directory.
+
+Any other ID is accepted and keeps its spelling, including nested IDs such as `lane_1/process` and names such as `1.lane`. `PlanBuilder` generates simpler IDs (letters, digits, `_` and `-`), but manually built plans are not held to that pattern.
 
 ### `StepContext`
 
@@ -153,7 +162,7 @@ A planner is a `BaseHandler` subclass — not just any object implementing `gene
 
 `Engine.run(plan)` runs one **attempt** at a plan. Steps run one at a time, in dependency order:
 
-1. **Preflight**, before anything is written to the work root. The plan is rejected if a step ID is empty or duplicated, a dependency names an unknown step or the step itself, the dependencies form a cycle, `failure_policy` is unknown, `outputs` are malformed, or a step's `fn_ref` is malformed, names a module that does not exist or a function its module does not define, is not a `@step`-decorated callable, or cannot bind its `params`. A rejected plan raises `PreflightValidationError` (a `ValueError`), and no step runs. Only a confirmed defect of the plan is rejected. A step module that exists but fails to import, because one of its own dependencies is missing or it raises while being imported, is a broken environment: the attempt aborts with an `OrchestrationError` instead.
+1. **Preflight**, before anything is written to the work root. The plan is rejected if a step ID is empty, duplicated or unable to name a work directory of its own, or differs from another only by letter case (see [Step IDs](#step-ids)); if a dependency names an unknown step or the step itself, or the dependencies form a cycle; if `failure_policy` is unknown or `outputs` are malformed; or if a step's `fn_ref` is malformed, names a module that does not exist or a function its module does not define, is not a `@step`-decorated callable, or cannot bind its `params`. A rejected plan raises `PreflightValidationError` (a `ValueError`), and no step runs. Only a confirmed defect of the plan is rejected. A step module that exists but fails to import, because one of its own dependencies is missing or it raises while being imported, is a broken environment: the attempt aborts with an `OrchestrationError` instead.
 2. Creates `<work_root>/<plan_id>/` and writes `plan.json`.
 3. Runs every step whose prerequisites are satisfied. A step is **ready** once every step in its `deps` has succeeded or been reused in this attempt. When several steps are ready, the one listed first in `plan.steps` runs first. For each step it:
     - creates its work directory, `<plan_dir>/<step_id>/`
@@ -266,7 +275,7 @@ $YGG_EVENT_SPOOL/
 
 Each attempt has a directory of its own, named after its execution ID, so its two plan-level records have fixed names. Each step has one numbered stream of events per attempt, whoever published them: the engine (skip, block, retry diagnostic), the `@step` wrapper, the step's own progress and artifacts, and its DataAccess write traces. Numbers have at least four digits and continue past `9999`; readers order events by their `seq`, not by file name. A step directory records what was observed about the step, not that it ran: a blocked step has one holding only its `step.blocked`. An attempt that runs no step, because preflight rejected it or it has none, has no `steps/` directory. The directory is created before the attempt publishes anything (see [Execution IDs and attempt order](#execution-ids-and-attempt-order)), so an attempt cancelled or killed in between leaves it empty.
 
-A step's directory follows its `step_id`, and every step ID gets a directory of its own. `PlanBuilder` generates simple IDs, but a manually built `StepSpec` may use others. Each `/`-separated part of the ID is one directory level, so `lane_1/process` is filed in `steps/lane_1/process/`. A part that the filesystem would read as something else is prefixed with `%`: an empty part, `.` or `..`, a part ending in `.json` or `.json.tmp` (an event file's name), and a part that already starts with `%`. So `lane/./process` is filed in `steps/lane/%./process/`, and `lane/0001_step_started.json` in `steps/lane/%0001_step_started.json/`, apart from `lane`'s own events. Events carry the step's own ID either way. Readers open each planned step's directory by name and read only the files directly in it, so a nested step's events never mix with those of the step above it.
+A step's directory follows its `step_id` (see [Step IDs](#step-ids)): each `/`-separated part is one directory level, so `lane_1/process` is filed in `steps/lane_1/process/`. A part that could name one of the event files beside it, ending in `.json` or `.json.tmp` in any letter case, is prefixed with `%`, and so is a part that already starts with `%`: `lane/0001_step_started.json` is filed in `steps/lane/%0001_step_started.json/`, apart from `lane`'s own events. The spool escapes empty, `.` and `..` parts the same way, for writers other than the engine, whose preflight rejects them. Events carry the step's own ID either way. Readers open each planned step's directory by name and read only the files directly in it, so a nested step's events never mix with those of the step above it. Escaping does not remove every way a filesystem can equate names: on a case-insensitive filesystem, IDs that differ only by case would share a directory, which is why preflight rejects them.
 
 Work directories, artifacts and `success.fingerprint` markers are not in the spool; they stay at `<work_root>/<plan_id>/<step_id>/`.
 

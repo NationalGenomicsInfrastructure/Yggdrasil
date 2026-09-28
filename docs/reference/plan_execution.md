@@ -49,7 +49,7 @@ Every attempt closes a report when it ends, but only some endings finish the req
 | Every step succeeded or was reused | Finished, `succeeded` | Finished, `succeeded` |
 | Every step that could run ran, with some failed or blocked | Not possible: the attempt stops at the first failure | Finished, `failed` |
 | A step failed and the attempt stopped (`failed_fast`) | **Not finished**: stays eligible | Not possible |
-| Rejected by preflight: invalid graph, malformed output declarations, or a step reference that is malformed or names a missing module or function | **Not finished**: stays eligible | Finished, `failed`: rerunning an unchanged plan cannot help |
+| Rejected by preflight: invalid graph, step IDs that cannot name a work directory of their own, malformed output declarations, or a step reference that is malformed or names a missing module or function | **Not finished**: stays eligible | Finished, `failed`: rerunning an unchanged plan cannot help |
 | Cancelled (daemon shutdown, Ctrl+C) before every step had run | Not finished: stays eligible | Not finished: stays eligible |
 | Aborted by an infrastructure failure, such as the event spool being unwritable, or a step module that exists but fails to import | Not finished: stays eligible | Not finished: stays eligible |
 

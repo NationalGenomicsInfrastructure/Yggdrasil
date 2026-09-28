@@ -2,7 +2,7 @@
 
 **Status:** Agreed requirements; implemented through Phase 8  
 **Date:** 2026-09-14  
-**Last amended:** 2026-09-24  
+**Last amended:** 2026-09-28  
 **Source baseline:** Yggdrasil `dev`, `250e9e17e8b29cfc8db40268aba8db6e2287308e`  
 **Companion:** [Demux single-flowcell plan PRD](demux_realm_single_flowcell_plan_prd.md)
 
@@ -11,6 +11,7 @@
 **Amendments:**
 
 - **2026-09-24 — Phase 8 pre-release refinement.** Adopt timestamp-plus-four-hex attempt IDs and attempt-first event directories, with ordered allocation and bounded exclusive reservation. Start from a manually reset test event spool; no format migration/detection is required. Clarify retained-history limits, completed-failure summary logging and separate-storage requirements. Scheduling, caching, finalization and CLI exit behavior remain unchanged.
+- **2026-09-28 — Step-ID pre-release correction.** A step ID names its work directory and its event directory, and some accepted IDs aliased: `lane/./process` shared `lane/process`'s work directory and was reported reused without running, `../..` escaped the work root, and `lane/0001_step_started.json` collided with `lane`'s event file. Preflight now rejects absolute IDs, IDs with empty, `.` or `..` parts, and IDs differing only by letter case; event directories escape ambiguous ID parts. Accepted IDs, work paths, fingerprints and cache locations are unchanged.
 
 ## 1. Problem and intended outcome
 
@@ -99,7 +100,7 @@ An author makes a metadata step mandatory by including it in the relevant depend
 
 Before invoking any step:
 
-- Validate unique, nonempty step IDs and known dependencies.
+- Validate unique, nonempty step IDs and known dependencies. A step ID names its work directory, so it must be a relative path whose `/`-separated parts are nonempty and neither `.` nor `..`, and no two IDs in a plan may differ only by letter case, which a case-insensitive filesystem would give one directory. IDs keep their spelling; nested IDs such as `lane_1/process` stay valid, and the builder's stricter naming pattern is not imposed on manually built plans.
 - Reject self-dependencies and cycles with actionable diagnostics.
 - Validate the selected policy and required execution metadata.
 - Resolve/check callable registration and basic binding errors where possible without invoking step bodies.
@@ -178,7 +179,7 @@ Each attempt's events live under its own directory:
     steps/<step_id>/0001_step_started.json, 0002_step_succeeded.json, ...
 ```
 
-Plan records have fixed names because the attempt directory isolates them. Each step directory holds that step's numbered event stream for the attempt (at least four digits, ordered numerically), including engine-originated skip, block and retry events and DataAccess write traces. A step directory records observations; it does not imply the step ran. Work directories, artifacts, success markers and fingerprint locations are unchanged.
+Plan records have fixed names because the attempt directory isolates them. A step's directory follows its ID, one level per `/`-separated part; a part a path would normalize, a part that could name an event file (in any letter case), and a part already starting with `%` are escaped with a leading `%`. Each step directory holds that step's numbered event stream for the attempt (at least four digits, ordered numerically), including engine-originated skip, block and retry events and DataAccess write traces. A step directory records observations; it does not imply the step ran. Work directories, artifacts, success markers and fingerprint locations are unchanged.
 
 Allocation takes the candidate timestamp as the greatest of the current UTC time, the allocator's previous timestamp plus one microsecond, and the latest canonical attempt-directory timestamp for the plan plus one microsecond. Every canonical attempt directory counts, including an empty one left by a crash or cancellation, and one allocator's floor spans all its plans, so it never repeats a timestamp. Both coordinated and direct engine execution use the engine's one allocator. The candidate's final attempt directory is then created exclusively. If that directory already exists, it is left untouched and the next candidate, with a later timestamp, is tried. Three candidates are allowed; exhaustion, and any other I/O failure, fails before any step or attempt event runs. The ID is fixed before anything is published. A caller-supplied fixed ID is reserved the same way, never renamed, and never overwrites an existing attempt.
 
@@ -286,7 +287,7 @@ Use isolated temporary files and mocked external services. Cover both policies a
 4. An old matching cache marker on a blocked descendant does not allow execution or reuse.
 5. Valid reuse satisfies dependencies; deleting a declared output causes its producer to run; a failed rerun leaves no reusable success marker.
 6. Forward references execute correctly; ready-node tie-breaking is deterministic.
-7. Duplicate IDs, unknown dependencies, self-dependencies, and cycles are rejected before any step invocation; a safely recorded preflight rejection terminally fails the captured continuation request rather than leaving it repeatedly eligible.
+7. Duplicate IDs, unknown dependencies, self-dependencies, cycles, and step IDs that cannot name a work directory of their own (absolute, with an empty, `.` or `..` part, or differing from another only by letter case) are rejected before any step invocation or work-directory write; a safely recorded preflight rejection terminally fails the captured continuation request rather than leaving it repeatedly eligible.
 8. Transient and unexpected ordinary step exceptions preserve diagnostics while healthy branches continue; cancellation/systemic failure stops the attempt distinctly.
 9. Omitted policy round-trips as fail-fast; unknown policy rejects; legacy stop/raise behavior remains.
 10. Daemon and run-once consume the result correctly. Failed continuation finishes healthy work, reports failure, and run-once exits nonzero.

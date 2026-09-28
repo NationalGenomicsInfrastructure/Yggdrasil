@@ -148,7 +148,7 @@ If a step was blocked by a step it should not need, the dependency is in the pla
 
 ### Plan rejected before any step ran
 
-**Symptom:** The log and the attempt report show `termination_reason: "preflight_rejected"` and a diagnostic such as a duplicate step ID, an unknown dependency, a dependency cycle, an unknown `failure_policy`, or a malformed or unresolvable `fn_ref`.
+**Symptom:** The log and the attempt report show `termination_reason: "preflight_rejected"` and a diagnostic such as a duplicate step ID, a step ID that cannot name a work directory of its own (absolute, or with an empty, `.` or `..` part) or differs from another only by letter case, an unknown dependency, a dependency cycle, an unknown `failure_policy`, or a malformed or unresolvable `fn_ref`.
 
 **Explanation:** The engine validates the whole plan before running anything, and rejects it without side effects. A rejected `fail_fast` plan stays eligible. A rejected `continue_independent` request is finished with a failed outcome, since the same plan would be rejected again. A plan with an unknown `failure_policy` stays eligible too: it is not a valid `continue_independent` request.
 
