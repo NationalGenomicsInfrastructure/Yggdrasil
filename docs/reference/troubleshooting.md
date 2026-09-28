@@ -264,7 +264,11 @@ the holder.
 **Resolution:**
 
 1. Identify the holding process from the metadata in the error message.
-2. Stop it, or run your daemon in the other mode / on another machine.
+2. Stop the existing daemon. To run another daemon in the other mode or on
+   another machine, configure it to use separate internal storage (see
+   [Running prod and dev side by side](../getting_started/configuration.md#running-prod-and-dev-side-by-side)).
+   Changing mode or machine only bypasses the local lock; it does not make
+   sharing the same internal storage safe.
 3. **Never delete a lock file while a daemon is running** — the advisory
    `flock` dies with the process, and deleting a *held* file lets a second
    daemon start. Stale lock files from exited daemons are harmless and can
@@ -326,11 +330,11 @@ find $YGG_EVENT_SPOOL -path "*/test_realm/*" -name "*.json" | sort
 
 ### Finding one attempt's events
 
-Every event carries the `execution_id` of the attempt that published it, and the attempt's plan-level records are named after it. For IDs the engine allocated, name order is attempt order, so the last one in sorted order is normally the newest attempt (see [Execution IDs and attempt order](../flow_api/overview.md#execution-ids-and-attempt-order) for the limits). Every attempt records its start when it is admitted, while its report may be missing (see [Snapshot shows an attempt still running](#snapshot-shows-an-attempt-still-running)), so look for start records:
+Every attempt has its own directory, named after its `execution_id`, holding all of its events (see [Event spool layout](../flow_api/overview.md#event-spool-layout)). For IDs the engine allocated, name order is attempt order, so the last one in sorted order is normally the newest attempt (see [Execution IDs and attempt order](../flow_api/overview.md#execution-ids-and-attempt-order) for the limits). A directory holding neither `plan_attempt_started.json` nor `plan_attempt_report.json` is a reservation whose attempt was cancelled or killed before it recorded anything; the snapshot never shows it. An attempt's report may be missing too (see [Snapshot shows an attempt still running](#snapshot-shows-an-attempt-still-running)).
 
 ```bash
-ls $YGG_EVENT_SPOOL/<realm>/<plan_id>/ | grep attempt_started | sort | tail -1
-grep -rl '"execution_id": "<execution_id>"' $YGG_EVENT_SPOOL/<realm>/<plan_id>/
+ls $YGG_EVENT_SPOOL/<realm>/<plan_id>/attempts/ | sort | tail -1
+find $YGG_EVENT_SPOOL/<realm>/<plan_id>/attempts/<execution_id> -name "*.json" | sort
 ```
 
 ---

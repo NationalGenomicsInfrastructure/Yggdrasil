@@ -61,6 +61,8 @@ A `continue_independent` plan whose request finished with failures does **not** 
 
 Once an attempt has run every step it could, its result is recorded even if the caller then shuts down. Stopping the daemon at that point does not throw the finished result away.
 
+The log line that resolves each request follows the same distinction. A finished request that succeeded is logged at INFO. A `continue_independent` request that ran every step it could and finished `failed` is logged at WARNING: its failures are recorded truthfully, and nothing malfunctioned. A finished preflight rejection, an unfinished request, and a result that could not be recorded are logged at ERROR. The step failures themselves are logged where they happen.
+
 ---
 
 ## Requesting a rerun
@@ -100,20 +102,28 @@ If recording is refused for good, because the plan was regenerated, deleted or r
 
 The ops consumer reads the event spool periodically in daemon mode, and once when `run-doc --run-once` exits. It writes one `plan_status` snapshot per plan to the operations store (`yggdrasil_ops` on CouchDB, or the dev SQLite file).
 
-A snapshot shows **one attempt**: the one whose execution ID orders highest, finished or not. That is normally the most recently admitted attempt, and replaying an old attempt's events cannot change the choice. How far that ordering can be relied on, across restarts, clocks and concurrent processes, is described in [Execution IDs and attempt order](../flow_api/overview.md#execution-ids-and-attempt-order). Every step is shown as that attempt left it. A step never takes an earlier attempt's state.
+A snapshot is the **execution status of one attempt**: the latest *observed* attempt, finished or not. An attempt is observed once it has published its start record or its report. Among those, the one whose execution ID orders highest is shown, which is normally the most recently started one; replaying an old attempt's events cannot change the choice. An attempt whose directory is still empty, because it was cancelled or killed between reserving its ID and publishing its start record, is never shown. How far the ordering can be relied on, across restarts, clocks and concurrent processes, is described in [Execution IDs and attempt order](../flow_api/overview.md#execution-ids-and-attempt-order). Every step is shown as that attempt left it. A step never takes an earlier attempt's state.
 
-An attempt shows as `running` until its report is published. An attempt that ended without publishing one, because event publication failed or the process was killed, keeps showing as `running` until a newer attempt is admitted. It did not finish its request, so the plan document does not record it. See [Attempt reports](../flow_api/overview.md#attempt-reports).
+An attempt shows as `running` until its report is published. An attempt that ended without publishing one, because event publication failed or the process was killed, keeps showing as `running` until a newer attempt is observed. It did not finish its request, so the plan document does not record it. See [Attempt reports](../flow_api/overview.md#attempt-reports).
 
 | Field | Content |
 |---|---|
 | `type`, `realm`, `plan_id`, `scope`, `updated_at` | Identity of the plan and time of the snapshot |
-| `projection` | `"attempt"`, or `"legacy"` for a plan whose spool has no attempt records (events published before attempts were recorded). A legacy projection shows each step's latest run, which need not belong to one attempt |
+| `projection` | `"attempt"`, or `"legacy"` for a plan with no observed attempt, whose spool holds only events published before attempts were correlated. A legacy projection shows each step's latest run, which need not belong to one attempt |
 | `attempt` | The attempt shown: `execution_id`, the `plan_generation` and `run_token` it captured, `failure_policy`, `execution_authority`, `execution_owner`, `started_at`, and `state` (`"running"` or `"finished"`). Once finished: `ended_at`, `termination_reason`, `outcome`, `is_drained`, `counts` per outcome plus `unreached` (every step without an outcome, interrupted ones included), and any attempt-level `diagnostic`, such as a preflight rejection. `null` for a legacy projection |
 | `steps` | One entry per planned step, keyed by step ID: `step_name`, `state`, `outcome`, `run_id`, `fingerprint`, `progress`, `artifacts`, `metrics`, `job`, `ts`, `error` for a failed step, and `direct_blockers` and `failed_ancestors` for a blocked one |
 
 A step's `state` is the event type that records its outcome: `step.succeeded`, `step.skipped` (reused), `step.failed` or `step.blocked`. While it runs, it is its latest lifecycle event. A step with no outcome is `pending` while the attempt runs. Once the attempt has ended, it is `interrupted` if it had started and `unreached` if it never did.
 
 The snapshot's `plan_generation` is the one the attempt captured. It is not necessarily the stored plan's current generation, which only the plan document holds.
+
+### Resetting the event spool
+
+Snapshots are read from the attempt directories described in [Event spool layout](../flow_api/overview.md#event-spool-layout). Event files in the earlier layout, such as `<plan_id>/<execution_id>_plan_attempt_started.json` beside the plan's step directories, are not read, and they neither affect new attempts nor block them. To start from a clean spool, stop Yggdrasil first, then delete the spool's contents or point `YGG_EVENT_SPOOL` at a new directory. Nothing else needs resetting, and Yggdrasil deletes nothing itself:
+
+- Plan documents, run tokens, work directories, artifacts and cache markers are unaffected. Clearing events does not request a rerun, and does not make a finished request run again.
+- A plan's stored `plan_status` snapshot stays as it was until new events are consumed for that plan. Deleting a plan's event directory does not remove its snapshot.
+- Deleting attempt directories erases what orders new attempts after a restart; see the limits in [Execution IDs and attempt order](../flow_api/overview.md#execution-ids-and-attempt-order).
 
 ---
 

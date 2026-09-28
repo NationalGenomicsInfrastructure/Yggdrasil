@@ -8,10 +8,12 @@ sequenceDiagram
   participant WD as Work dir
   participant Spool as Spool FS
 
-  Caller->>Eng: _run_attempt(plan, context with execution_id)
-  note right of Caller: execution_id allocated first,<br/>ordered after every recorded attempt
+  Caller->>Eng: reserve_execution_id(plan)
+  Eng->>Spool: list attempts/ (floor), then create attempts/{execution_id}/ exclusively
+  note right of Caller: ordered after every attempt directory;<br/>a taken ID is left alone and a later one tried (3 at most)
+  Caller->>Eng: _run_attempt(plan, context with the reserved execution_id)
   Eng->>Emt: emit(plan.attempt_started, step inventory)
-  Emt->>Spool: {execution_id}_plan_attempt_started.json
+  Emt->>Spool: attempts/{execution_id}/plan_attempt_started.json
   Eng->>Eng: preflight (ids, deps, cycles, policy, outputs, callables)
   opt plan rejected
     Eng->>Emt: emit(plan.attempt_report, preflight_rejected)
@@ -24,14 +26,14 @@ sequenceDiagram
     Eng->>Eng: fingerprint = fp(params + input digests + declared outputs)
     alt marker matches and every declared output exists
       Eng->>Emt: emit(step.skipped, reason=cache_hit)
-      Emt->>Spool: {step_id}/{run_id}/0001_step_skipped.json
+      Emt->>Spool: attempts/{execution_id}/steps/{step_id}/0001_step_skipped.json
       Eng->>Sch: reused (satisfies dependents)
     else run required
       Eng->>WD: remove success.fingerprint
       Eng->>Ctx: create (run_id, fingerprint, required outputs, correlation)
       Eng->>Fn: call(ctx, **params)
       Ctx->>Emt: emit(step.started)
-      Emt->>Spool: {step_id}/{run_id}/0001_step_started.json
+      Emt->>Spool: attempts/{execution_id}/steps/{step_id}/0001_step_started.json
       alt step returns and its declared outputs exist
         Ctx->>Emt: emit(step.succeeded)
         Emt->>Spool: 000N_step_succeeded.json
@@ -41,7 +43,7 @@ sequenceDiagram
         Ctx->>Emt: emit(step.failed)
         Emt->>Spool: 000N_step_failed.json
         opt transient error
-          Eng->>Emt: emit(step.retry_unimplemented)
+          Eng->>Emt: emit(step.retry_unimplemented), next in the step's stream
         end
         alt fail_fast
           Eng->>Emt: emit(plan.attempt_report, failed_fast)
@@ -50,13 +52,13 @@ sequenceDiagram
           Eng->>Sch: failed
           Sch-->>Eng: newly blocked dependents
           Eng->>Emt: emit(step.blocked) for each
-          Emt->>Spool: {step_id}/{execution_id}_step_blocked.json
+          Emt->>Spool: attempts/{execution_id}/steps/{step_id}/0001_step_blocked.json
         end
       end
     end
   end
   note over Eng,Spool: event-publication or marker failure, or cancellation<br/>between steps, ends the attempt under either policy;<br/>its report is then published unless event publication is what failed
   Eng->>Emt: emit(plan.attempt_report, completed, with every outcome and blocker)
-  Emt->>Spool: {execution_id}_plan_attempt_report.json
+  Emt->>Spool: attempts/{execution_id}/plan_attempt_report.json
   Eng-->>Caller: drained report (outcome failed if any step failed or was blocked)
   note right of Caller: coordinator records a finished request's<br/>outcome and token on the plan document
