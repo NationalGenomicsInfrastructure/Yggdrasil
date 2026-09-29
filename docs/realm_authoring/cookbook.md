@@ -86,7 +86,7 @@ WatchSpec(
 When one handler needs to dispatch to different plan shapes based on document content:
 
 ```python
-async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
     doc = payload["doc"]
     ctx: PlanningContext = payload["planning_ctx"]
 
@@ -105,7 +105,7 @@ async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
         scope=ctx.scope,
         steps=steps,
     )
-    return PlanDraft(plan=plan, auto_run=True, approvals_required=[], notes="")
+    return [PlanDraft(plan=plan, auto_run=True, approvals_required=[], notes="")]
 ```
 
 ---
@@ -127,7 +127,7 @@ return PlanDraft(
 )
 ```
 
-The plan is stored in `yggdrasil_plans` with `status="draft"`. It executes only after an operator sets `status="approved"` and increments `run_token`. (Currently there is no UI available to perform this task).
+The plan is stored in `yggdrasil_plans` with `status="draft"`. It executes once an operator sets `status="approved"`. (Currently there is no UI available to perform this task.) Approval is all `status` ever records: the outcome of a run is kept separately, and a later run is requested by raising `run_token`. See [Plan Execution](../reference/plan_execution.md).
 
 ---
 
@@ -136,8 +136,9 @@ The plan is stored in `yggdrasil_plans` with `status="draft"`. It executes only 
 Steps receive a `StepContext` providing workdir, emitter, scope, and realm. Decorate with `@step`:
 
 ```python
-from yggdrasil.flow.step import step
-from yggdrasil.flow.model import StepContext, StepResult
+from yggdrasil.flow.step import step, StepContext
+from yggdrasil.flow.model import StepResult
+from yggdrasil.flow.artifacts import SimpleArtifactRef
 
 
 @step
@@ -150,15 +151,17 @@ def run_pipeline(ctx: StepContext, config_file: str, threads: int = 4) -> StepRe
         "--threads", str(threads),
     ]
 
-    # ctx.workdir is a unique per-run directory
+    # ctx.workdir is the step's own directory, reused by every attempt
     result = subprocess.run(cmd, cwd=ctx.workdir, capture_output=True)
 
     if result.returncode != 0:
         raise RuntimeError(f"my_tool failed: {result.stderr.decode()}")
 
-    # Register output directory as artifact
+    # Register output directory as artifact.
+    # record_artifact() requires an ArtifactRefProtocol object, not a plain string.
+    # Use SimpleArtifactRef(key_name, folder) for the common case.
     outs_dir = ctx.workdir / ctx.scope["id"] / "output"
-    ctx.record_artifact("pipeline_output", path=outs_dir)
+    ctx.record_artifact(SimpleArtifactRef("pipeline_output", "output"), path=outs_dir)
 
     return StepResult(metrics={"returncode": result.returncode})
 ```
@@ -172,13 +175,13 @@ def run_pipeline(ctx: StepContext, config_file: str, threads: int = 4) -> StepRe
 | `plan_id` | `str` | Current plan ID |
 | `step_id` | `str` | Current step ID |
 | `step_name` | `str` | Human-readable step name |
-| `workdir` | `Path` | Per-run working directory |
+| `workdir` | `Path` | The step's work directory, `<work_root>/<plan_id>/<step_id>`, shared by every attempt at the plan |
 | `scope_dir` | `Path` | Shared scope directory across all steps in this plan |
 | `emitter` | `BaseEmitter` | Event emitter for progress/artifact events |
 | `run_mode` | `str` | `"auto"` or `"manual"` |
 | `fingerprint` | `str` | SHA-256 fingerprint for this run |
 | `run_id` | `str` | Unique run ID |
-| `data` | `DataAccess` | Injected DataAccess object for CouchDB reads (use blocking API: `ctx.data.couchdb(conn).get_blocking(id)`) |
+| `data` | `DataAccess` | Phase-aware gateway to configured data sources. Call `ctx.data.connection(conn)` to get a sync client for reads (`get`, `find`, `require`, …) and writes (`save`). |
 
 ---
 
@@ -274,7 +277,7 @@ def analysis_pipeline(scenario: dict) -> list[StepSpec]:
 ```python
 # my_realm/handler.py
 
-async def generate_plan_draft(self, payload):
+async def generate_plan_drafts(self, payload):
     doc = payload["doc"]
     ctx = payload["planning_ctx"]
 
@@ -311,11 +314,13 @@ def run_analysis(ctx: StepContext, scenario: dict) -> StepResult:
 To embed data fetched from CouchDB directly into step params as a **structured dict** (so the plan record shows exactly what was fetched and is queryable):
 
 ```python
-async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
     ctx: PlanningContext = payload["planning_ctx"]
 
     # Fetch at planning time — use the async API (handler runs in async context)
-    client = ctx.data.couchdb("config_db")
+    # connection() is the preferred backend-neutral form; couchdb() is a CouchDB-specific
+    # alias that validates the backend type and delegates to connection().
+    client = ctx.data.connection("config_db")
     doc = await client.get("config:pipeline_defaults")
 
     # Build a structured dict — not a formatted string
@@ -353,24 +358,66 @@ def run_processor(ctx: StepContext, ref_doc: dict) -> StepResult:
 
 **When to use:** When the step itself doesn't need live data access, but the plan record should document exactly what configuration was resolved at plan-generation time.  Using a structured dict (rather than a formatted string) keeps the plan record queryable and makes it clear what fields were inspected.
 
-**Alternative — fetch at *execution time* inside the step:** Steps are synchronous (`def`, not `async def`), so use the blocking variants of the DataAccess API:
+**Alternative — fetch at *execution time* inside the step:** Steps are synchronous (`def`, not `async def`). Call `ctx.data.connection(conn)` to get a synchronous client — all read methods return results directly:
 
 ```python
 @step
 def run_processor(ctx: StepContext, item_id: str) -> StepResult:
-    # Blocking fetch — safe inside a synchronous step
-    client = ctx.data.couchdb("config_db")
-    doc = client.get_blocking("config:pipeline_defaults")    # sync
-    # or: client.find_blocking(selector)
-    # or: client.require_blocking(doc_id)          — raises if not found
-    # or: client.find_one_blocking(selector)
-    # or: client.fetch_by_field_blocking(field, value)
-    # or: client.require_one_blocking(selector)    — raises if not found
+    # Execution steps are synchronous — connection() returns a sync client directly
+    client = ctx.data.connection("config_db")
+    doc = client.get("config:pipeline_defaults")         # returns dict or None
+    # or: client.find(selector)                          # list of matching docs
+    # or: client.require(doc_id)                         # raises DataAccessNotFoundError if absent
+    # or: client.find_one(selector)                      # first match or None
+    # or: client.fetch_by_field(field, value)            # equality shorthand
+    # or: client.require_one(selector)                   # raises DataAccessNotFoundError if no match
     config_path = doc["default_config"] if doc else "/fallback/defaults.yaml"
     # ...
 ```
 
 The fetch is visible via step events and metrics (not baked into plan params), which is appropriate when live data is needed at run time.
+
+---
+
+## Pattern 8b: Writing to CouchDB in a step
+
+Steps with write permission can call `save()` on the execution client. Pass a clean body dict — do not include `_id` or `_rev`; the client manages them. Provide exactly one of `doc_id`, `selector`, or `view` to identify the target document:
+
+```python
+@step
+def update_run_status(ctx: StepContext, run_id: str) -> StepResult:
+    client = ctx.data.connection("flowcell_db")
+
+    # Body must not contain _id or _rev — those are managed by the client
+    body = {"status": "complete", "processed_by": "yggdrasil"}
+
+    # Write by explicit document ID
+    result = client.save(body, doc_id=run_id, mode="upsert")
+    # result.status is "created" or "updated"
+    # result.old_rev / result.new_rev carry revision info
+    # result.identity → "doc_id"
+
+    return StepResult(metrics={"write_status": result.status, "new_rev": result.new_rev})
+```
+
+To let CouchDB auto-generate the document ID, use selector or view identity instead:
+
+```python
+# CouchDB generates the _id on create; selector matches the doc on update
+result = client.save(body, selector={"type": "run_status", "run_id": run_id}, mode="upsert")
+# result.identity → "selector"
+# result.doc_id   → CouchDB-generated ID (on create) or matched ID (on update)
+```
+
+**`mode` values:**
+
+| `mode` | Behaviour |
+|--------|-----------|
+| `"create"` | Fail if the document already exists (409) |
+| `"update"` | Fail if the document does not exist |
+| `"upsert"` | Create if absent, update if present; retries once on conflict |
+
+> **Note on write vs read:** A realm configured with only `"write"` permission can call `save()` but not `get()` or `find()`. Grant `"read"` explicitly for realms that need both.
 
 ---
 
@@ -405,6 +452,65 @@ def run_transform(
 ```
 
 The Engine computes `sha256(params + sha256(input_file))` as the fingerprint. If the file changes, the cached fingerprint mismatches and the step re-runs.
+
+---
+
+## Pattern 10: Independent branches that finish when one fails
+
+When a plan holds one branch per lane, sample or delivery, a failure in one branch need not stop the others. Build each branch from a recipe with stable, namespaced step IDs, point each branch's first step at the shared prerequisites, and set `failure_policy="continue_independent"`:
+
+```python
+# my_realm/recipes.py
+from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, Plan, StepSpec
+
+_PREFIX = "my_realm.steps"
+
+
+def lane_branch(lane: int, prerequisites: list[str]) -> list[StepSpec]:
+    """One lane's chain: process, then upload."""
+    ns = f"lane_{lane}"
+    return [
+        StepSpec(
+            step_id=f"{ns}__process",
+            name=f"Process lane {lane}",
+            fn_ref=f"{_PREFIX}.process_lane",
+            params={"lane": lane},
+            deps=list(prerequisites),
+            outputs={"result": "output/DONE"},  # sentinel in this step's workdir
+        ),
+        StepSpec(
+            step_id=f"{ns}__upload",
+            name=f"Upload lane {lane}",
+            fn_ref=f"{_PREFIX}.upload_lane",
+            params={"lane": lane},
+            deps=[f"{ns}__process"],
+        ),
+    ]
+
+
+def flowcell_plan(plan_id: str, realm: str, scope: dict, lanes: list[int]) -> Plan:
+    steps = [
+        StepSpec(
+            step_id="validate",
+            name="Validate inputs",
+            fn_ref=f"{_PREFIX}.validate",
+            params={},
+        ),
+    ]
+    for lane in lanes:
+        steps.extend(lane_branch(lane, prerequisites=["validate"]))
+    return Plan(
+        plan_id=plan_id,
+        realm=realm,
+        scope=scope,
+        steps=steps,
+        failure_policy=CONTINUE_INDEPENDENT_POLICY,
+    )
+```
+
+If `lane_2__process` fails, `lane_2__upload` is blocked, every other lane still runs, and the attempt ends failed. Its request counts as finished: rerunning it takes a raised `run_token`, and the rerun reuses the lanes that already succeeded.
+
+**When to use:** Branches that do not need each other's results. Make a shared step a prerequisite only of the branches that really need it. See [Dependencies and failure policy](guide.md#dependencies-and-failure-policy) for the choices, and [Plan Execution](../reference/plan_execution.md) for what operators see.
 
 ---
 

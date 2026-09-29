@@ -137,3 +137,8 @@ trashcan
 configurations
 yggdrasil_workspace
 implementation_plans
+
+# Local developer-only utilities (not part of the distributed project)
+tools/
+tests/test_dev_plan_approval_tool.py
+tests/test_internal_storage_smoke_tool.py

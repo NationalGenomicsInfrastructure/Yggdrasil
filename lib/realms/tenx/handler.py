@@ -31,10 +31,11 @@ def handle_project_change(payload: dict[str, Any]) -> None:
         emitter=FileSpoolEmitter(),
         source_doc=doc,
         reason=payload.get("reason", "project.updated"),
-        data=DataAccess("tenx"),
+        data=DataAccess("tenx", phase="planning"),
     )
 
-    draft = TenxPlanner().generate(ctx)
+    drafts = TenxPlanner().generate(ctx)
+    draft = drafts[0]
 
     # Persist draft for visibility/approval
     ops = OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))

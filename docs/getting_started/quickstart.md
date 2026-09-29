@@ -42,6 +42,14 @@ pip install -e .
 
 `requirements/lock.txt` is generated with `pip-compile --strip-extras` and pins exact versions.
 
+### Production / pip-installed
+
+For pip-installed deployments, choose a Yggdrasil workspace directory outside the source checkout and conda environment. Ensure `common/configurations/main.json` exists below it, then export `YGG_HOME` before starting Yggdrasil:
+
+```bash
+export YGG_HOME=/absolute/path/to/yggdrasil_workspace
+```
+
 ---
 
 ## Install an external realm (example: dataflow-dmx)
@@ -69,7 +77,8 @@ See [Configuration](configuration.md) for required config files.
 # Start the daemon (watches CouchDB and file-system sources)
 yggdrasil daemon
 
-# Or in dev mode (DEBUG logging, dev config overrides)
+# Or in dev mode (DEBUG logging; dev_main.json replaces main.json;
+# safe alongside a prod daemon when internal storage differs)
 yggdrasil --dev daemon
 ```
 
@@ -81,11 +90,18 @@ See [CLI reference](cli.md) for all commands and flags.
 
 ### Pre-commit hooks
 
+Install both hook stages:
+
 ```bash
-pre-commit install
+pre-commit install                        # commit-time hooks
+pre-commit install --hook-type pre-push   # push-time hooks
 ```
 
-This runs `ruff`, `black`, and `mypy` automatically on each commit.
+**Commit-time** (`pre-commit install`): `ruff`, `black`, and mypy on staged files only — fast, catches local errors before they land in the branch.
+
+**Push-time** (`--hook-type pre-push`): full-project mypy (same config as CI) and the full test suite — runs once before the branch leaves your machine.
+
+> CI remains the authoritative gate. The pre-push hooks are a convenience that surfaces whole-project type and test failures before the push, without slowing down individual commits.
 
 ### Everyday commands
 

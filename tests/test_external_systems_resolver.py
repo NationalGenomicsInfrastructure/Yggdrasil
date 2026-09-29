@@ -35,7 +35,7 @@ SAMPLE_CFG = {
             # No "auth" key — should fall back to defaults
         },
     },
-    "data_access_defaults": {
+    "defaults": {
         "couchdb": {
             "max_limit": 150,
         }
@@ -44,22 +44,34 @@ SAMPLE_CFG = {
         "projects_db": {
             "endpoint": "couchdb",
             "resource": {"db": "projects"},
-            # No data_access — not readable by realms
+            # No data_access — not accessible by realms
         },
         "flowcell_db": {
             "endpoint": "couchdb",
             "resource": {"db": "flowcells"},
             "data_access": {
-                "realm_allowlist": ["demux", "tenx"],
+                "realms": {
+                    "demux": {
+                        "planning": {"permissions": ["read"]},
+                        "execution": {"permissions": ["read", "write"]},
+                    },
+                    "tenx": {
+                        "execution": {"permissions": ["read"]},
+                    },
+                }
+                # No options → should use global defaults
             },
-            # No per-connection max_limit → should use global default (150)
         },
         "samplesheet_db": {
             "endpoint": "couchdb",
             "resource": {"db": "samplesheet_info"},
             "data_access": {
-                "realm_allowlist": ["demux"],
-                "max_limit": 50,  # per-connection override
+                "realms": {
+                    "demux": {
+                        "execution": {"permissions": ["read"]},
+                    }
+                },
+                "options": {"max_limit": 50},  # per-connection override
             },
         },
         "no_auth_db": {
@@ -188,6 +200,16 @@ class TestResolveConnection(unittest.TestCase):
         conn = resolve_connection("projects_db", SAMPLE_CFG)
         self.assertIsNone(conn.data_access)
 
+    def test_resource_field_populated(self):
+        """resource field contains raw resource dict from config."""
+        conn = resolve_connection("flowcell_db", SAMPLE_CFG)
+        self.assertEqual(conn.resource, {"db": "flowcells"})
+
+    def test_db_name_matches_resource_db(self):
+        """db_name matches resource["db"]."""
+        conn = resolve_connection("flowcell_db", SAMPLE_CFG)
+        self.assertEqual(conn.db_name, conn.resource["db"])
+
     # --- DataAccessPolicy construction ---
 
     def test_data_access_policy_present(self):
@@ -196,37 +218,75 @@ class TestResolveConnection(unittest.TestCase):
         self.assertIsNotNone(conn.data_access)
         self.assertIsInstance(conn.data_access, DataAccessPolicy)
 
-    def test_realm_allowlist_populated(self):
-        """realm_allowlist values are read correctly."""
+    def test_get_permissions_returns_correct_set(self):
+        """get_permissions returns correct frozenset for configured realm+phase."""
         conn = resolve_connection("flowcell_db", SAMPLE_CFG)
-        self.assertEqual(conn.data_access.realm_allowlist, ["demux", "tenx"])
+        perms = conn.data_access.get_permissions("demux", "execution")
+        self.assertEqual(perms, frozenset({"read", "write"}))
 
-    def test_global_max_limit_used_when_no_per_connection_override(self):
-        """Global data_access_defaults.couchdb.max_limit is used when no override."""
+    def test_get_permissions_planning_phase(self):
+        """get_permissions returns read-only for planning phase."""
         conn = resolve_connection("flowcell_db", SAMPLE_CFG)
-        # SAMPLE_CFG has global max_limit=150; flowcell_db has no per-connection override
-        self.assertEqual(conn.data_access.max_limit, 150)
+        perms = conn.data_access.get_permissions("demux", "planning")
+        self.assertEqual(perms, frozenset({"read"}))
 
-    def test_per_connection_max_limit_overrides_global(self):
-        """Per-connection max_limit overrides global default."""
+    def test_get_permissions_returns_empty_for_missing_realm(self):
+        """get_permissions returns frozenset() for a realm not in policy."""
+        conn = resolve_connection("flowcell_db", SAMPLE_CFG)
+        perms = conn.data_access.get_permissions("unknown_realm", "execution")
+        self.assertEqual(perms, frozenset())
+
+    def test_get_permissions_returns_empty_for_missing_phase(self):
+        """get_permissions returns frozenset() when realm exists but phase is absent."""
+        conn = resolve_connection("flowcell_db", SAMPLE_CFG)
+        # tenx has only "execution" configured, not "planning"
+        perms = conn.data_access.get_permissions("tenx", "planning")
+        self.assertEqual(perms, frozenset())
+
+    def test_global_options_used_when_no_connection_override(self):
+        """Global defaults.couchdb options are used when connection has no options."""
+        conn = resolve_connection("flowcell_db", SAMPLE_CFG)
+        # SAMPLE_CFG has global max_limit=150; flowcell_db has no options
+        self.assertEqual(conn.data_access.options.get("max_limit"), 150)
+
+    def test_per_connection_options_override_global(self):
+        """Connection-level options override global defaults."""
         conn = resolve_connection("samplesheet_db", SAMPLE_CFG)
-        self.assertEqual(conn.data_access.max_limit, 50)
+        self.assertEqual(conn.data_access.options.get("max_limit"), 50)
 
-    def test_builtin_default_max_limit_when_no_global(self):
-        """Built-in default (200) used when no global data_access_defaults.couchdb."""
+    def test_options_merged_global_then_connection(self):
+        """Connection options merged on top of global defaults (connection wins)."""
+        cfg = {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://host:5984"}},
+            "defaults": {"couchdb": {"max_limit": 200, "timeout": 30}},
+            "connections": {
+                "mydb": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                    "data_access": {
+                        "realms": {},
+                        "options": {"max_limit": 50},
+                    },
+                }
+            },
+        }
+        conn = resolve_connection("mydb", cfg)
+        self.assertEqual(conn.data_access.options, {"max_limit": 50, "timeout": 30})
+
+    def test_options_empty_when_no_defaults_or_connection_options(self):
+        """options is empty dict when no global defaults and no connection options."""
         cfg = {
             "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://host:5984"}},
             "connections": {
                 "mydb": {
                     "endpoint": "couchdb",
                     "resource": {"db": "mydb"},
-                    "data_access": {"realm_allowlist": ["realm_x"]},
+                    "data_access": {"realms": {}},
                 }
             },
-            # No data_access_defaults at all
         }
         conn = resolve_connection("mydb", cfg)
-        self.assertEqual(conn.data_access.max_limit, 200)
+        self.assertEqual(conn.data_access.options, {})
 
     # --- Error conditions ---
 
@@ -291,6 +351,79 @@ class TestResolveConnection(unittest.TestCase):
         conn = resolve_connection("no_auth_db", SAMPLE_CFG)
         self.assertEqual(conn.endpoint.user_env, "YGG_COUCH_USER")
         self.assertEqual(conn.endpoint.pass_env, "YGG_COUCH_PASS")
+
+
+# ---------------------------------------------------------------------------
+# TestResolveConnectionValidation — permission and phase validation
+# ---------------------------------------------------------------------------
+
+
+class TestResolveConnectionValidation(unittest.TestCase):
+    """Tests for config validation added in v0.3: unknown phases and permissions."""
+
+    def _make_cfg(self, permissions, phase="execution"):
+        return {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://h:5984"}},
+            "connections": {
+                "db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "x"},
+                    "data_access": {
+                        "realms": {"demux": {phase: {"permissions": permissions}}}
+                    },
+                }
+            },
+        }
+
+    def test_unknown_permission_raises_value_error(self):
+        """Typo in permissions list raises ValueError at resolve time."""
+        cfg = self._make_cfg(["reed", "write"])
+        with self.assertRaises(ValueError) as ctx:
+            resolve_connection("db", cfg)
+        self.assertIn("reed", str(ctx.exception))
+        self.assertIn("demux", str(ctx.exception))
+
+    def test_unknown_phase_raises_value_error(self):
+        """Typo in phase key raises ValueError at resolve time."""
+        cfg = self._make_cfg(["read"], phase="executin")
+        with self.assertRaises(ValueError) as ctx:
+            resolve_connection("db", cfg)
+        self.assertIn("executin", str(ctx.exception))
+        self.assertIn("demux", str(ctx.exception))
+
+    def test_valid_permissions_do_not_raise(self):
+        """Known-good permissions pass validation."""
+        cfg = self._make_cfg(["read", "write"])
+        conn = resolve_connection("db", cfg)
+        self.assertEqual(
+            conn.data_access.get_permissions("demux", "execution"),
+            frozenset({"read", "write"}),
+        )
+
+    def test_valid_phases_do_not_raise(self):
+        """Both 'planning' and 'execution' are accepted."""
+        cfg = {
+            "endpoints": {"couchdb": {"backend": "couchdb", "url": "http://h:5984"}},
+            "connections": {
+                "db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "x"},
+                    "data_access": {
+                        "realms": {
+                            "dmx": {
+                                "planning": {"permissions": ["read"]},
+                                "execution": {"permissions": ["read", "write"]},
+                            }
+                        }
+                    },
+                }
+            },
+        }
+        conn = resolve_connection("db", cfg)
+        self.assertEqual(
+            conn.data_access.get_permissions("dmx", "planning"),
+            frozenset({"read"}),
+        )
 
 
 if __name__ == "__main__":

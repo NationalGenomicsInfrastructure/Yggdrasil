@@ -60,7 +60,12 @@ Realms are the extension point for domain-specific workflow logic. External real
 
 ## Contributing
 
-Contributions are welcome. Open pull requests against the `dev` branch. Format with `black`, lint with `ruff`, type-check with `mypy`. Run `pre-commit install` so hooks fire automatically on commit.
+Contributions are welcome. Open pull requests against the `dev` branch. Format with `black`, lint with `ruff`, type-check with `mypy`. Install both hook stages so checks fire automatically:
+
+```bash
+pre-commit install                        # commit-time: formatting, linting, mypy on staged files
+pre-commit install --hook-type pre-push   # push-time: full-project mypy + test suite
+```
 
 ## License
 

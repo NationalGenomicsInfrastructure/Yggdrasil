@@ -1,8 +1,23 @@
+import logging
+import os
 import sys
 import unittest
 from io import StringIO
-from unittest.mock import Mock, call, patch
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, call, patch
 
+from requests.exceptions import ConnectionError as RequestsConnectionError
+
+from lib.core_utils.daemon_lock import DaemonLockError
+from lib.core_utils.errors import (
+    ExternalSystemUnavailableError,
+    InternalStorageConfigurationError,
+)
+from lib.couchdb.couchdb_connection import CouchDBClientFactory
+from lib.watchers.config_validation import (
+    WatcherConfigurationError,
+    WatcherConfigValidationIssue,
+)
 from yggdrasil.cli import main
 
 
@@ -93,6 +108,271 @@ class TestYggdrasilCLI(unittest.TestCase):
             mock_core.setup_watchers.assert_called_once()
             mock_asyncio_run.assert_called_once_with(mock_core.start())
 
+    def test_daemon_mode_acquires_local_lock(self):
+        """Test daemon mode acquires the local runtime lock before watchers start."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("asyncio.run"),
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/main.json")
+            mock_lock = MagicMock()
+            mock_core = Mock()
+            mock_core_class.return_value = mock_core
+
+            def acquire_lock(*args, **kwargs):
+                mock_core_class.assert_not_called()
+                return mock_lock
+
+            mock_acquire.side_effect = acquire_lock
+
+            main()
+
+            mock_acquire.assert_called_once_with(
+                dev_mode=False,
+                config_path=Path("/tmp/main.json"),
+            )
+            mock_lock.__enter__.assert_called_once()
+            mock_core.setup_realms.assert_called_once()
+            mock_core.setup_watchers.assert_called_once()
+
+    def test_dev_daemon_mode_acquires_same_local_lock(self):
+        """Test --dev daemon also acquires the coarse local runtime lock."""
+        sys.argv = ["yggdrasil", "--dev", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("asyncio.run"),
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/dev_main.json")
+            mock_acquire.return_value = MagicMock()
+            mock_core_class.return_value = Mock()
+
+            main()
+
+            mock_acquire.assert_called_once_with(
+                dev_mode=True,
+                config_path=Path("/tmp/dev_main.json"),
+            )
+
+    def test_daemon_lock_failure_exits_before_watcher_setup(self):
+        """Test a held local lock exits before watchers are configured."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("asyncio.run") as mock_asyncio_run,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_acquire.side_effect = DaemonLockError(
+                Path("/tmp/yggdrasil/daemon.lock"),
+                {"pid": 12345},
+            )
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            mock_core_class.assert_not_called()
+            mock_asyncio_run.assert_not_called()
+
+    def test_invalid_internal_storage_config_exits_cleanly(self):
+        """Invalid internal_storage config exits 1 (no uncaught traceback)."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire"),
+            patch("asyncio.run"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core_class.side_effect = InternalStorageConfigurationError(
+                "internal_storage.backend='sqlite' is only supported in dev mode"
+            )
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+
+    def test_daemon_watcher_config_error_exits_cleanly(self):
+        """Watcher config errors are logged without starting the daemon."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        issue = WatcherConfigValidationIssue(
+            kind="invalid_connection",
+            realms=("dmx_realm",),
+            backend="couchdb",
+            connection="demux_sample_info_db",
+            detail="connection is not configured",
+        )
+        error = WatcherConfigurationError(
+            [issue],
+            config_path=Path("/tmp/main.json"),
+        )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("yggdrasil.cli.custom_logger") as mock_custom_logger,
+            patch("asyncio.run") as mock_asyncio_run,
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/main.json")
+            mock_acquire.return_value = MagicMock()
+            mock_logger = Mock()
+            mock_custom_logger.return_value = mock_logger
+            mock_core = Mock()
+            mock_core.setup_watchers.side_effect = error
+            mock_core_class.return_value = mock_core
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            self.assertIsNone(context.exception.__cause__)
+            mock_core_class.assert_called_once_with(
+                self.mock_config,
+                config_path=Path("/tmp/main.json"),
+            )
+            mock_core.setup_realms.assert_called_once()
+            mock_core.setup_watchers.assert_called_once()
+            mock_asyncio_run.assert_not_called()
+            mock_logger.error.assert_called_once_with("%s", error)
+
+    def test_daemon_external_system_unavailable_exits_cleanly(self):
+        """Unreachable external systems are logged without a traceback."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        error = ExternalSystemUnavailableError(
+            "CouchDB",
+            "http://localhost:5984",
+            hint="Check network/VPN connectivity.",
+        )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("yggdrasil.cli.custom_logger") as mock_custom_logger,
+            patch("asyncio.run") as mock_asyncio_run,
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/dev_main.json")
+            mock_acquire.return_value = MagicMock()
+            mock_logger = Mock()
+            mock_custom_logger.return_value = mock_logger
+            # Simulate connection failure during core construction
+            # (YggdrasilCore.__init__ -> OpsConsumerService -> OpsWriter)
+            mock_core_class.side_effect = error
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            self.assertIsNone(context.exception.__cause__)
+            mock_asyncio_run.assert_not_called()
+            # The actually-loaded config file is reported alongside the error
+            mock_logger.error.assert_called_once_with(
+                "%s (config file: %s)", error, Path("/tmp/dev_main.json")
+            )
+
+    def test_daemon_couchdb_failure_emits_one_error_record(self):
+        """The CLI is the sole ERROR-level reporter for connection failures."""
+        sys.argv = ["yggdrasil", "daemon"]
+
+        def fail_during_core_construction(*args, **kwargs):
+            return CouchDBClientFactory.create_client(
+                url="http://localhost:5984",
+                user_env="TEST_USER",
+                pass_env="TEST_PASS",
+            )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.configure_logging"),
+            patch(
+                "yggdrasil.cli.YggdrasilCore",
+                side_effect=fail_during_core_construction,
+            ),
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+            patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator"),
+            patch(
+                "lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1",
+                side_effect=RequestsConnectionError("Connection refused"),
+            ),
+            patch.dict(
+                os.environ,
+                {"TEST_USER": "admin", "TEST_PASS": "secret"},
+            ),
+        ):
+            mock_loader = mock_config_loader.return_value
+            mock_loader.load_config.return_value = self.mock_config
+            mock_loader.loaded_path = Path("/tmp/main.json")
+            mock_acquire.return_value = MagicMock()
+
+            with self.assertLogs(level="DEBUG") as captured:
+                with self.assertRaises(SystemExit) as context:
+                    main()
+
+        self.assertEqual(context.exception.code, 1)
+        error_records = [
+            record for record in captured.records if record.levelno == logging.ERROR
+        ]
+        self.assertEqual(len(error_records), 1)
+        self.assertEqual(error_records[0].name, "yggdrasil.cli")
+        self.assertIn("Cannot reach CouchDB", error_records[0].getMessage())
+
+        factory_records = [
+            record
+            for record in captured.records
+            if record.name == "lib.couchdb.couchdb_connection"
+            and "Failed to connect to CouchDB" in record.getMessage()
+        ]
+        self.assertEqual(len(factory_records), 1)
+        self.assertEqual(factory_records[0].levelno, logging.DEBUG)
+
+    def test_run_doc_external_system_unavailable_exits_cleanly(self):
+        """run-doc mode gets the same clean handling as daemon mode."""
+        sys.argv = ["yggdrasil", "run-doc", "DOC123"]
+
+        error = ExternalSystemUnavailableError(
+            "CouchDB",
+            "http://localhost:5984",
+        )
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.custom_logger") as mock_custom_logger,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_logger = Mock()
+            mock_custom_logger.return_value = mock_logger
+            mock_core_class.side_effect = error
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+            self.assertEqual(context.exception.code, 1)
+            self.assertIsNone(context.exception.__cause__)
+            mock_logger.error.assert_called_once_with("%s", error)
+
     def test_daemon_mode_with_dev_flag(self):
         """Test daemon mode with development flag."""
         sys.argv = ["yggdrasil", "--dev", "daemon"]
@@ -136,6 +416,25 @@ class TestYggdrasilCLI(unittest.TestCase):
                 force_overwrite=False,
             )
             mock_session.init_manual_submit.assert_called_once_with(False)
+
+    def test_run_doc_mode_does_not_acquire_daemon_lock(self):
+        """Test one-off run-doc mode does not take the daemon runtime lock."""
+        sys.argv = ["yggdrasil", "run-doc", "test_doc_id", "--plan-only"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.create_plan_from_doc.return_value = "pln_test_123"
+            mock_core_class.return_value = mock_core
+
+            main()
+
+            mock_acquire.assert_not_called()
+            mock_core.create_plan_from_doc.assert_called_once()
 
     def test_run_doc_mode_with_manual_submit(self):
         """Test run-doc mode with manual submit flag uses plan-only."""
@@ -897,6 +1196,29 @@ class TestRunDocModeFlags(unittest.TestCase):
             )
             # Should NOT call create_plan_from_doc
             mock_core.create_plan_from_doc.assert_not_called()
+
+    def test_run_doc_run_once_failure_exits_nonzero(self):
+        """A failed run-once execution's exit code reaches the process unchanged.
+
+        run_once_with_watcher returns 1 when a plan's execution did not
+        succeed, including a continue_independent plan that finished its
+        healthy branches but failed overall.
+        """
+        sys.argv = ["yggdrasil", "run-doc", "P12345", "--run-once"]
+
+        with (
+            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
+            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
+            patch("yggdrasil.cli.YggSession"),
+        ):
+            mock_config_loader.return_value.load_config.return_value = self.mock_config
+            mock_core = Mock()
+            mock_core.run_once_with_watcher.return_value = 1
+            mock_core_class.return_value = mock_core
+
+            with self.assertRaises(SystemExit) as context:
+                main()
+            self.assertEqual(context.exception.code, 1)
 
     def test_run_doc_run_once_short_flag(self):
         """Test short -r flag for run-once mode."""

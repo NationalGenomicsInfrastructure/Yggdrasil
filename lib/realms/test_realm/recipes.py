@@ -9,11 +9,22 @@ Each recipe represents a different test scenario:
 - fail_mid_plan: Fails in the middle of execution
 - long_running: Extended sleep for timeout testing
 - artifact_write: Tests artifact registration
+- branch_failure: Independent branches after shared validation; one branch
+  and the metadata update fail, the other branch completes
+- branch_failure_metadata_required: The same plan, with the metadata update
+  a declared prerequisite of every branch
+
+A recipe's plans run under the fail_fast policy unless
+RECIPE_FAILURE_POLICIES names another (see default_failure_policy).
 """
 
 from typing import Any
 
-from yggdrasil.flow.model import StepSpec
+from yggdrasil.flow.model import (
+    CONTINUE_INDEPENDENT_POLICY,
+    DEFAULT_FAILURE_POLICY,
+    StepSpec,
+)
 
 # Module path for fn_ref resolution by Engine
 _FN_REF_PREFIX = "lib.realms.test_realm.steps"
@@ -358,17 +369,189 @@ def artifact_write(
 
 
 # ---------------------------------------------------------------------------
-# Recipe: data_fetch_plan  (planning-time — called from handler, not registry)
+# Recipes: branch_failure and branch_failure_metadata_required
+# ---------------------------------------------------------------------------
+
+# The lanes a branching plan has a branch for, and the lane whose processing
+# fails.
+_BRANCH_LANES = (1, 2)
+_FAILING_LANE = 2
+
+
+def branch_failure(
+    overrides: dict[str, dict[str, Any]] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan of independent lane branches in which one branch fails.
+
+    Shared validation comes first. The metadata update and both lane branches
+    depend on it, and on nothing else. The metadata update fails, and so does
+    lane 2 partway through its branch. Under continue_independent, this
+    recipe's default policy, lane 1 still completes, lane 2's upload is
+    blocked, and the attempt ends failed.
+
+    Steps:
+        1. validate_shared: Echo (succeeds)
+        2. update_metadata: Always fails (after validate_shared)
+        3. lane_1__prepare: Write lane_1_config.txt (after validate_shared)
+        4. lane_1__process: Echo (after lane_1__prepare)
+        5. lane_1__upload: Echo (after lane_1__process)
+        6. lane_2__prepare: Write lane_2_config.txt (after validate_shared)
+        7. lane_2__process: Always fails (after lane_2__prepare)
+        8. lane_2__upload: Echo (after lane_2__process), so blocked
+
+    Args:
+        overrides: Optional dict mapping step_id to param overrides
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    return _branching_steps(metadata_required=False, overrides=overrides or {})
+
+
+def branch_failure_metadata_required(
+    overrides: dict[str, dict[str, Any]] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate the branch_failure plan with the metadata update required.
+
+    The same steps and failures as branch_failure, except that each lane
+    branch's first step also depends on update_metadata. Its failure blocks
+    both branches under continue_independent, this recipe's default policy,
+    so lane 2's processing is never invoked.
+
+    Steps:
+        1. validate_shared: Echo (succeeds)
+        2. update_metadata: Always fails (after validate_shared)
+        3. lane_1__prepare: Write lane_1_config.txt (after validate_shared
+           and update_metadata), so blocked, like the rest of lane 1
+        4. lane_1__process: Echo (after lane_1__prepare)
+        5. lane_1__upload: Echo (after lane_1__process)
+        6. lane_2__prepare: Write lane_2_config.txt (after validate_shared
+           and update_metadata), so blocked, like the rest of lane 2
+        7. lane_2__process: Always fails (after lane_2__prepare)
+        8. lane_2__upload: Echo (after lane_2__process)
+
+    Args:
+        overrides: Optional dict mapping step_id to param overrides
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    return _branching_steps(metadata_required=True, overrides=overrides or {})
+
+
+def _branching_steps(
+    *, metadata_required: bool, overrides: dict[str, dict[str, Any]]
+) -> list[StepSpec]:
+    """
+    Build the plan both branching recipes share.
+
+    Whether the metadata update is a prerequisite of the branches is the only
+    difference between the two recipes, and only their dependencies express
+    it: the engine gives no step special treatment because of its name.
+
+    Each branch's first step writes a file and declares it as a required
+    output, so that step is reused on a rerun only while the file exists. The
+    declaration is made after the overrides are applied, so that it names the
+    file the step actually writes.
+
+    Args:
+        metadata_required: Whether each branch's first step also depends on
+            the metadata update.
+        overrides: Param overrides by step_id.
+
+    Returns:
+        list[StepSpec]: The steps, in plan order.
+    """
+    branch_prerequisites = ["validate_shared"]
+    if metadata_required:
+        branch_prerequisites.append("update_metadata")
+
+    steps = [
+        _make_step(
+            step_id="validate_shared",
+            name="Validate Shared Inputs",
+            fn_name="step_echo",
+            params={"message": "Shared inputs validated"},
+        ),
+        _make_step(
+            step_id="update_metadata",
+            name="Update Metadata",
+            fn_name="step_fail",
+            params={"error_message": "Planned metadata update failure"},
+            deps=["validate_shared"],
+        ),
+    ]
+    for lane in _BRANCH_LANES:
+        steps.extend(_lane_branch(lane, branch_prerequisites))
+
+    steps = _apply_overrides(steps, overrides)
+    for spec in steps:
+        if spec.step_id.endswith("__prepare"):
+            spec.outputs = {"lane_config": spec.params["filename"]}
+    return steps
+
+
+def _lane_branch(lane: int, prerequisites: list[str]) -> list[StepSpec]:
+    """
+    Build one lane's branch: prepare, then process, then upload.
+
+    Args:
+        lane: The lane number; the failing lane's processing always fails.
+        prerequisites: The steps the branch's first step depends on.
+
+    Returns:
+        list[StepSpec]: The branch's steps, in dependency order.
+    """
+    prepare = f"lane_{lane}__prepare"
+    process = f"lane_{lane}__process"
+    if lane == _FAILING_LANE:
+        process_fn = "step_fail"
+        process_params = {"error_message": f"Planned failure processing lane {lane}"}
+    else:
+        process_fn = "step_echo"
+        process_params = {"message": f"Lane {lane} processed"}
+
+    return [
+        _make_step(
+            step_id=prepare,
+            name=f"Prepare Lane {lane}",
+            fn_name="step_write_file",
+            params={
+                "filename": f"lane_{lane}_config.txt",
+                "content": f"Configuration for lane {lane}",
+            },
+            deps=list(prerequisites),
+        ),
+        _make_step(
+            step_id=process,
+            name=f"Process Lane {lane}",
+            fn_name=process_fn,
+            params=process_params,
+            deps=[prepare],
+        ),
+        _make_step(
+            step_id=f"lane_{lane}__upload",
+            name=f"Upload Lane {lane}",
+            fn_name="step_echo",
+            params={"message": f"Lane {lane} uploaded"},
+            deps=[process],
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Recipe: data_fetch_plan
 # ---------------------------------------------------------------------------
 
 
 def data_fetch_plan_steps(ref_dict: dict) -> list[StepSpec]:
     """
-    Generate steps for the data_fetch_plan scenario.
+    Internal helper called by the handler (Mode 1) and by data_fetch_plan().
+    Requires the already-fetched reference data to be passed in.
 
-    This function is NOT in the RECIPES registry because it requires the
-    already-fetched reference data to be passed in at plan-generation time.
-    The handler performs an async CouchDB fetch during ``generate_plan_draft``
+    The handler performs an async CouchDB fetch during ``generate_plan_drafts``
     and then calls this function so the result is baked into the step params
     as a **structured dict** — not a formatted string.
 
@@ -433,7 +616,7 @@ def metadata_harvest_steps(scenario: dict) -> list[StepSpec]:
     extracted from the triggering document to be passed in at plan-generation
     time.  The handler harvests domain fields (``input_path``, ``mode``,
     ``priority``, ``sample_id``, ``flags``) from the scenario doc during
-    ``generate_plan_draft`` and calls this function so the metadata is baked
+    ``generate_plan_drafts`` and calls this function so the metadata is baked
     as a **structured dict** into ``StepSpec.params``.
 
     This demonstrates the "real realm" pattern: handlers map domain-document
@@ -484,7 +667,7 @@ def data_fetch_exec(
     """
     Generate a plan that fetches from CouchDB at execution time.
 
-    The step_fetch_from_db step uses ctx.data.couchdb() at runtime, so the
+    The step_fetch_from_db step uses ctx.data.connection() at runtime, so the
     fetch happens when the Engine runs the step — not during planning. The
     fetched document appears in the step's emitted events and result metrics,
     which makes it visible in the execution record.
@@ -537,8 +720,8 @@ def data_access_denied(
 
     Two denial cases are tested in sequence:
       1. projects_db — has no data_access block → DataAccessDeniedError (no policy)
-      2. mock_resource — has data_access but test_realm not in allowlist
-             → DataAccessDeniedError (realm not in allowlist)
+      2. mock_resource — has data_access but test_realm not in realms config
+             → DataAccessDeniedError (realm not configured)
 
     Each step succeeds only if the expected denial is raised; it fails hard
     if access is unexpectedly granted.
@@ -564,8 +747,8 @@ def data_access_denied(
             params={"connection": "projects_db"},
         ),
         _make_step(
-            step_id="verify_not_allowlisted",
-            name="Verify Not-Allowlisted Denial",
+            step_id="verify_not_configured",
+            name="Verify Realm-Not-Configured Denial",
             fn_name="step_expect_denied",
             params={"connection": "mock_resource"},
             deps=["verify_no_policy"],
@@ -575,7 +758,7 @@ def data_access_denied(
             name="All Denials Verified",
             fn_name="step_echo",
             params={"message": "All data-access denial cases passed as expected!"},
-            deps=["verify_not_allowlisted"],
+            deps=["verify_not_configured"],
         ),
     ]
 
@@ -594,10 +777,8 @@ def data_fetch_all_methods(
     Exercise every read method on CouchDBReadClient in sequence.
 
     Uses step_exercise_all_fetch_methods which calls get, require, find,
-    find_one, fetch_by_field, and require_one in a single step. Each
-    method's result is reported in the step metrics and emitted as a
-    step.all_fetch_methods event so all outcomes are visible in the
-    execution record.
+    find_one, fetch_by_field, and require_one in a single step against the
+    phase-aware CouchDBExecutionClient.
 
     Steps:
         1. exercise_all: Runs all six fetch methods against yggdrasil_db
@@ -647,7 +828,7 @@ def data_verify_limit_clamping(
     """
     Verify that DataAccess clamps find() results to policy.max_limit.
 
-    Uses the ``yggdrasil_db_clamped`` connection (max_limit: 2). The step
+    Uses the ``yggdrasil_db_clamped`` connection (data_access.options.max_limit: 2). The step
     requests 100 documents but expects at most 2 to be returned, proving
     the policy is enforced by CouchDBReadClient regardless of what the
     caller requests.
@@ -695,6 +876,162 @@ def data_verify_limit_clamping(
 
 
 # ---------------------------------------------------------------------------
+# Recipe: data_write_exec
+# ---------------------------------------------------------------------------
+
+
+def data_write_exec(
+    overrides: dict[str, Any] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that writes a document to CouchDB at execution time.
+
+    Proves that a step with execution write permission can call
+    client.save() successfully via ctx.data.connection(). The write result
+    (status, doc_id, old_rev, new_rev) is returned in step metrics and
+    emitted as a step.write_result event so it is visible in the execution
+    record.
+
+    Steps:
+        1. write_doc: Write data_access_test:write_result to test_realm_write_db
+        2. echo_confirm: Confirm write completed (depends on write_doc)
+
+    Args:
+        overrides: Optional param overrides by step_id.
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="write_doc",
+            name="Write Doc to DB",
+            fn_name="step_write_to_db",
+            params={
+                "connection": "test_realm_write_db",
+                "doc_id": "data_access_test:write_result",
+                "mode": "upsert",
+            },
+        ),
+        _make_step(
+            step_id="echo_confirm",
+            name="Confirm Write",
+            fn_name="step_echo",
+            params={"message": "Execution-time CouchDB write complete!"},
+            deps=["write_doc"],
+        ),
+    ]
+
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
+# Recipe: data_write_only_permission
+# ---------------------------------------------------------------------------
+
+
+def data_write_only_permission(
+    overrides: dict[str, Any] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that proves "write" permission does not imply "read".
+
+    Uses a connection configured with execution permissions ["write"] only.
+    The first step calls put() — which must succeed. The second step calls
+    get() on the same connection — which must raise DataAccessDeniedError.
+    The second step succeeds only if that denial is raised.
+
+    Steps:
+        1. write_only_put: put() to test_realm_write_only_db — must succeed
+        2. write_only_read_denied: get() on same connection — denial expected
+
+    Args:
+        overrides: Optional param overrides by step_id.
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="write_only_put",
+            name="Write-Only Put",
+            fn_name="step_write_to_db",
+            params={
+                "connection": "test_realm_write_db",
+                "doc_id": "data_access_test:write_only_probe",
+                "mode": "upsert",
+            },
+        ),
+        _make_step(
+            step_id="write_only_read_denied",
+            name="Read Must Be Denied",
+            fn_name="step_expect_read_denied",
+            params={
+                "connection": "test_realm_write_db",
+                "doc_id": "data_access_test:write_only_probe",
+            },
+            deps=["write_only_put"],
+        ),
+    ]
+
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
+# Recipe: data_write_no_id
+# ---------------------------------------------------------------------------
+
+
+def data_write_no_id(
+    overrides: dict[str, Any] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that writes a document to CouchDB without supplying a _id.
+
+    Uses the selector identity path of save() so CouchDB auto-generates the
+    document ID on create. The resolved/generated doc_id appears in step metrics,
+    along with identity="selector" and operation="upsert" to make the write
+    path visible for verification.
+
+    Steps:
+        1. write_doc_no_id: Write with selector identity, no explicit _id
+        2. echo_confirm: Confirm write completed (depends on write_doc_no_id)
+
+    Args:
+        overrides: Optional param overrides by step_id.
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="write_doc_no_id",
+            name="Write Doc Without _id",
+            fn_name="step_write_to_db_no_id",
+            params={
+                "connection": "test_realm_write_db",
+                "mode": "upsert",
+            },
+        ),
+        _make_step(
+            step_id="echo_confirm",
+            name="Confirm Write",
+            fn_name="step_echo",
+            params={"message": "CouchDB auto-generated ID write complete!"},
+            deps=["write_doc_no_id"],
+        ),
+    ]
+
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
 # Helper: Apply parameter overrides
 # ---------------------------------------------------------------------------
 
@@ -735,11 +1072,39 @@ RECIPES: dict[str, Any] = {
     "fail_mid_plan": fail_mid_plan,
     "long_running": long_running,
     "artifact_write": artifact_write,
+    "branch_failure": branch_failure,
+    "branch_failure_metadata_required": branch_failure_metadata_required,
     "data_fetch_exec": data_fetch_exec,
     "data_access_denied": data_access_denied,
     "data_fetch_all_methods": data_fetch_all_methods,
     "data_verify_limit_clamping": data_verify_limit_clamping,
+    "data_write_exec": data_write_exec,
+    "data_write_only_permission": data_write_only_permission,
+    "data_write_no_id": data_write_no_id,
 }
+
+# Failure policy of a recipe's plans when the scenario document names none.
+# Recipes not listed here build fail_fast plans.
+RECIPE_FAILURE_POLICIES: dict[str, str] = {
+    "branch_failure": CONTINUE_INDEPENDENT_POLICY,
+    "branch_failure_metadata_required": CONTINUE_INDEPENDENT_POLICY,
+}
+
+
+def default_failure_policy(recipe_name: str | None) -> str:
+    """
+    Get the failure policy a recipe's plans run under by default.
+
+    Args:
+        recipe_name: The scenario's recipe; None for custom steps.
+
+    Returns:
+        str: The policy RECIPE_FAILURE_POLICIES names for the recipe, else
+        fail_fast.
+    """
+    if recipe_name is None:
+        return DEFAULT_FAILURE_POLICY
+    return RECIPE_FAILURE_POLICIES.get(recipe_name, DEFAULT_FAILURE_POLICY)
 
 
 def get_recipe(name: str):

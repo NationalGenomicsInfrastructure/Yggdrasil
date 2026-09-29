@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from collections.abc import Mapping
 from datetime import datetime
@@ -6,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.core_utils.config_loader import ConfigLoader
+from lib.core_utils.ygg_session import YggSession
 
 try:
     from rich.logging import RichHandler
@@ -177,8 +179,10 @@ def configure_logging(debug: bool = False, console: bool = True) -> None:
     log_dir = Path(configs["yggdrasil"]["log_dir"])
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-mode marker + PID keep concurrent processes in separate log files.
     timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
-    log_file = log_dir / f"yggdrasil_{timestamp}.log"
+    mode_marker = "dev_" if YggSession.is_dev() else ""
+    log_file = log_dir / f"yggdrasil_{mode_marker}{timestamp}_{os.getpid()}.log"
 
     log_level = logging.DEBUG if debug else logging.INFO
 

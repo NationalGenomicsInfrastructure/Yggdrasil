@@ -50,6 +50,11 @@ from lib.watchers.backends.checkpoint_store import (
     InMemoryCheckpointStore,
 )
 from lib.watchers.backends.couchdb import CouchDBBackend
+from lib.watchers.config_validation import (
+    WatcherConfigurationError,
+    WatcherConfigValidationIssue,
+    validate_watcher_config_wiring,
+)
 from lib.watchers.filter_eval import FilterResult, evaluate_filter
 from lib.watchers.manager import WatcherBackendGroup, WatcherManager
 from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
@@ -74,4 +79,8 @@ __all__ = [
     # Manager
     "WatcherManager",
     "WatcherBackendGroup",
+    # Config validation
+    "WatcherConfigValidationIssue",
+    "WatcherConfigurationError",
+    "validate_watcher_config_wiring",
 ]

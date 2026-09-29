@@ -31,7 +31,7 @@ class _ProjectHandlerA(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "project", "id": doc.get("project_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -45,7 +45,7 @@ class _ProjectHandlerB(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "project", "id": doc.get("project_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -59,7 +59,7 @@ class _FlowcellHandler(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "flowcell", "id": doc.get("flowcell_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -73,7 +73,7 @@ class _CouchDBDocHandler(BaseHandler):
     def derive_scope(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "doc", "id": doc.get("_id", "?")}
 
-    async def generate_plan_draft(self, payload: dict[str, Any]) -> PlanDraft:
+    async def generate_plan_drafts(self, payload: dict[str, Any]) -> list[PlanDraft]:
         raise NotImplementedError
 
     def __call__(self, payload: dict[str, Any]) -> None:
@@ -105,9 +105,13 @@ class TestSetupRealms(unittest.TestCase):
         self.db_patcher = patch(
             "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
         )
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
+        self.mock_storage = self.storage_patcher.start().return_value
 
         ops_inst = Mock()
         ops_inst.start = Mock()
@@ -121,6 +125,7 @@ class TestSetupRealms(unittest.TestCase):
         self.ops_patcher.stop()
         self.engine_patcher.stop()
         self.db_patcher.stop()
+        self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
     def _make_core(self) -> YggdrasilCore:
@@ -248,7 +253,7 @@ class TestSetupRealms(unittest.TestCase):
             def derive_scope(self, doc):
                 return {}
 
-            async def generate_plan_draft(self, payload):
+            async def generate_plan_drafts(self, payload):
                 raise NotImplementedError
 
             def __call__(self, payload):
@@ -278,7 +283,7 @@ class TestSetupRealms(unittest.TestCase):
             def derive_scope(self, doc):
                 return {}
 
-            async def generate_plan_draft(self, payload):
+            async def generate_plan_drafts(self, payload):
                 raise NotImplementedError
 
             def __call__(self, payload):
@@ -384,6 +389,36 @@ class TestSetupRealms(unittest.TestCase):
             ("valid_target", "couchdb_handler"), core._handler_identity_registry
         )
 
+    @patch("importlib.metadata.entry_points", return_value=[])
+    @patch("lib.core_utils.yggdrasil_core.discover_realms")
+    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    def test_setup_realms_does_not_validate_watcher_connections(
+        self, _test_enabled, mock_discover, _mock_eps
+    ):
+        """setup_realms wires WatchSpecs but leaves daemon config validation to setup_watchers."""
+        spec = WatchSpec(
+            backend="couchdb",
+            connection="missing_daemon_only_db",
+            event_type=EventType.COUCHDB_DOC_CHANGED,
+            build_scope=lambda e: {"kind": "doc", "id": e.id},
+            build_payload=lambda e: {"doc": e.doc},
+            target_handlers=["couchdb_handler"],
+        )
+        desc = RealmDescriptor(
+            realm_id="daemon_only",
+            handler_classes=[_CouchDBDocHandler],
+            watchspecs=[spec],
+        )
+        mock_discover.return_value = [desc]
+
+        core = self._make_core()
+        core.setup_realms()
+
+        self.assertIsNotNone(core.watcher_manager)
+        self.assertIn(
+            ("daemon_only", "couchdb_handler"), core._handler_identity_registry
+        )
+
     # --- Legacy handler wrapping ---
 
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
@@ -442,9 +477,13 @@ class TestHandleEventRouting(unittest.TestCase):
         self.db_patcher = patch(
             "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
         )
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
+        self.mock_storage = self.storage_patcher.start().return_value
 
         ops_inst = Mock()
         ops_inst.start = Mock()
@@ -458,6 +497,7 @@ class TestHandleEventRouting(unittest.TestCase):
         self.ops_patcher.stop()
         self.engine_patcher.stop()
         self.db_patcher.stop()
+        self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
     def _make_core_with_handlers(self):
@@ -631,9 +671,13 @@ class TestGetRealmHelpers(unittest.TestCase):
         self.db_patcher = patch(
             "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
         )
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
+        self.mock_storage = self.storage_patcher.start().return_value
 
         ops_inst = Mock()
         ops_inst.start = Mock()
@@ -644,6 +688,7 @@ class TestGetRealmHelpers(unittest.TestCase):
         self.ops_patcher.stop()
         self.engine_patcher.stop()
         self.db_patcher.stop()
+        self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
     def test_get_realm_handler_ids(self):

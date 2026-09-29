@@ -21,6 +21,7 @@ from urllib3.exceptions import HTTPError as Urllib3HTTPError
 from urllib3.exceptions import ProtocolError
 
 from lib.core_utils.logging_utils import custom_logger
+from lib.couchdb.couchdb_models import ChangesBatch
 
 
 class ChangesFetcher:
@@ -44,6 +45,7 @@ class ChangesFetcher:
         include_docs: bool = True,
         retry_delay_sec: float = 2.0,
         max_retries: int = 3,
+        longpoll_timeout_ms: int = 60_000,
         logger: logging.Logger | None = None,
     ):
         """
@@ -54,14 +56,17 @@ class ChangesFetcher:
             include_docs: Include full documents in _changes feed (default True)
             retry_delay_sec: Delay in seconds before retrying (default 2.0)
             max_retries: Max retry attempts on transient errors (default 3)
+            longpoll_timeout_ms: CouchDB longpoll timeout in ms (default 60000)
             logger: Optional logger instance; uses module logger if None
         """
         self.db_handler = db_handler
         self.include_docs = include_docs
         self.retry_delay_sec = retry_delay_sec
         self.max_retries = max_retries
+        self.longpoll_timeout_ms = longpoll_timeout_ms
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self._last_seq: str | None = None
+        self._last_pending: int = 0
 
     @property
     def last_seq(self) -> str | None:
@@ -71,6 +76,8 @@ class ChangesFetcher:
     async def fetch_changes(
         self,
         since: str | None = None,
+        feed: str = "normal",
+        timeout_ms: int | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Fetch changes from the _changes feed, starting from 'since' seq.
@@ -80,30 +87,46 @@ class ChangesFetcher:
 
         Args:
             since: CouchDB sequence number to start from (None = start from beginning)
+            feed: CouchDB feed mode — "normal" or "longpoll" (default "normal")
+            timeout_ms: CouchDB longpoll timeout in ms; only relevant for longpoll feed
 
         Yields:
             Dict containing change entry: {"id": doc_id, "seq": seq, "doc": doc_dict, ...}
 
         Raises:
-            ApiException: On connection failures (caller handles retry logic)
+            requests.exceptions.RequestException: On poll failures from the _changes feed
+                (raised by fetch_changes_raw; caller handles retry logic)
+            ApiException: On non-404 server errors from fetch_document_by_id
+                (only when include_docs=True and the document fetch fails)
         """
         if since is None:
             since = "0"
 
-        # Single-pass batch from handler wrapper.
-        # No retry logic here; exceptions propagate to caller (stream_changes_continuously)
-        # for centralized retry/backoff handling.
-        results, last_seq = await asyncio.to_thread(
-            self.db_handler.fetch_changes_batch,
+        batch: ChangesBatch = await asyncio.to_thread(
+            self.db_handler.fetch_changes_raw,
             since=since,
-            include_docs=self.include_docs,
-            feed="normal",
+            feed=feed,
+            **({"timeout_ms": timeout_ms} if timeout_ms is not None else {}),
         )
-        self._last_seq = last_seq
+        self._last_seq = str(batch.last_seq) if batch.last_seq is not None else None
+        self._last_pending = batch.pending
 
-        for change in results:
-            if "id" in change and "seq" in change:
-                yield change
+        for row in batch.rows:
+            if row.id.startswith(("_design/", "_local/")):
+                continue
+            change: dict[str, Any] = {
+                "id": row.id,
+                "seq": row.seq,
+                "deleted": row.deleted,
+            }
+            if self.include_docs and not row.deleted:
+                doc = await asyncio.to_thread(
+                    self.db_handler.fetch_document_by_id, row.id
+                )
+                change["doc"] = (
+                    doc  # None if 404; PlanWatcher._evaluate_change handles this
+                )
+            yield change
 
     async def stream_changes_continuously(
         self,
@@ -129,17 +152,26 @@ class ChangesFetcher:
 
         current_seq = since
         retry_count = 0
+        feed_mode = "normal"
 
         while True:
             try:
                 self._logger.debug(
-                    "Polling changes from db='%s' since='%s'",
+                    "Polling changes from db='%s' since='%s' feed=%s",
                     self.db_handler.db_name,
                     current_seq,
+                    feed_mode,
                 )
 
-                # Fetch next batch
-                async for change in self.fetch_changes(since=current_seq):
+                # Fetch next batch; pass longpoll timeout when in longpoll mode
+                timeout_ms = (
+                    self.longpoll_timeout_ms if feed_mode == "longpoll" else None
+                )
+                async for change in self.fetch_changes(
+                    since=current_seq,
+                    feed=feed_mode,
+                    timeout_ms=timeout_ms,
+                ):
                     if "seq" in change:
                         current_seq = change["seq"]
                     yield change
@@ -151,31 +183,41 @@ class ChangesFetcher:
 
                 if retry_count > 0:
                     self._logger.debug(
-                        "Recovered after retries; sleeping %.1fs before next poll",
-                        poll_interval_sec,
+                        "Recovered after retries; resuming with feed=%s",
+                        feed_mode,
                     )
                 retry_count = 0
 
-            except ApiException as e:
-                if e.code == 404:
-                    # DB doesn't exist or was deleted
-                    self._logger.error(
-                        "Database '%s' not found (404)", self.db_handler.db_name
+                # Switch feed mode based on pending changes
+                new_mode = "normal" if self._last_pending > 0 else "longpoll"
+                if new_mode != feed_mode:
+                    self._logger.debug(
+                        "Feed mode: %s → %s (pending=%d)",
+                        feed_mode,
+                        new_mode,
+                        self._last_pending,
                     )
-                    raise
-                elif e.code in (500, 503):
+                    feed_mode = new_mode
+
+            except ApiException as e:
+                # ApiException can only reach here from fetch_document_by_id()
+                # (fetch_changes_raw uses requests, not the IBM SDK).
+                # fetch_document_by_id returns None for 404 and never raises it.
+                if e.status_code in (500, 503):
                     # Transient server error
                     retry_count += 1
                     if retry_count > self.max_retries:
                         self._logger.error(
-                            "Max retries (%d) exceeded; aborting continuous stream",
+                            "Max retries (%d) exceeded; backing off 60s before resuming",
                             self.max_retries,
                         )
-                        raise
+                        await asyncio.sleep(60.0)
+                        retry_count = 0
+                        continue
                     backoff = self.retry_delay_sec * (2 ** (retry_count - 1))
                     self._logger.warning(
-                        "Transient error (code=%d); retry %d/%d after %.1fs",
-                        e.code,
+                        "Transient error (status=%d); retry %d/%d after %.1fs",
+                        e.status_code,
                         retry_count,
                         self.max_retries,
                         backoff,
@@ -197,10 +239,12 @@ class ChangesFetcher:
                 retry_count += 1
                 if retry_count > self.max_retries:
                     self._logger.error(
-                        "Max retries (%d) exceeded after transient connection errors; aborting continuous stream",
+                        "Max retries (%d) exceeded; backing off 60s before resuming",
                         self.max_retries,
                     )
-                    raise
+                    await asyncio.sleep(60.0)
+                    retry_count = 0
+                    continue
                 backoff = self.retry_delay_sec * (2 ** (retry_count - 1))
                 self._logger.warning(
                     "Transient connection error; retry %d/%d after %.1fs: %s",
@@ -215,5 +259,6 @@ class ChangesFetcher:
                 self._logger.exception("Unexpected error in continuous stream: %s", e)
                 raise
 
-            # Sleep before next poll
-            await asyncio.sleep(poll_interval_sec)
+            # Only sleep between polls in normal mode; longpoll already blocks in CouchDB
+            if feed_mode == "normal":
+                await asyncio.sleep(poll_interval_sec)

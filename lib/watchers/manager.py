@@ -5,7 +5,7 @@ Responsibilities:
 - Instantiate backend instances (one per unique resource)
 - Start/stop backends concurrently
 - Validate backend type consistency
-- Collect WatchSpecs from realms
+- Register BoundWatchSpecs and deduplicate backend groups
 - Fan-out raw events to matching WatchSpecs with filter evaluation
 - Transform raw events into domain-level YggdrasilEvents
 """
@@ -15,12 +15,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from lib.core_utils.external_systems_resolver import resolve_connection
 from lib.core_utils.logging_utils import custom_logger
 from lib.watchers.abstract_watcher import YggdrasilEvent
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import CouchDBCheckpointStore
+from lib.watchers.config_validation import validate_watcher_config_wiring
 from lib.watchers.filter_eval import FilterResult, evaluate_filter, raw_event_to_dict
 
 if TYPE_CHECKING:
@@ -68,13 +71,13 @@ class WatcherManager:
     Orchestrates watcher backend lifecycle.
 
     The WatcherManager is responsible for:
-    - Collecting watcher groups from WatchSpecs (Phase 2)
+    - Accepting BoundWatchSpecs via add_watchspec() and deduplicating backend groups internally
     - Deduplicating backends (one per unique resource)
     - Resolving connection configuration from endpoints + connections
     - Instantiating and managing backend lifecycle
     - Validating backend type consistency
 
-    Configuration structure expected in self.config:
+    Configuration structure required for ``config``:
         {
             "endpoints": {
                 "couchdb": {
@@ -97,8 +100,8 @@ class WatcherManager:
         config = load_config()
         manager = WatcherManager(config)
 
-        # Add watcher groups (typically done by realm discovery in Phase 2)
-        manager.add_watcher_group("couchdb", "projects_db")
+        # Register BoundWatchSpecs (typically done during realm setup)
+        manager.add_watchspec(bound_spec)
 
         # Start all backends
         await manager.start()
@@ -112,86 +115,63 @@ class WatcherManager:
     # Backend registry: maps backend type names to classes
     _backend_registry: dict[str, type[WatcherBackend]] = {}
 
-    # Config key in main.json for external systems
-    CONFIG_KEY = "external_systems"
-
     def __init__(
         self,
-        config: dict[str, Any] | None = None,
+        config: dict[str, Any],
         on_event: Callable[[YggdrasilEvent], None] | None = None,
         checkpoint_store: CheckpointStore | None = None,
         logger: logging.Logger | None = None,
+        watcher_policy: dict[str, Any] | None = None,
+        config_path: str | Path | None = None,
     ):
         """
         Initialize the WatcherManager.
 
         Args:
-            config: Configuration dict with "endpoints" and "connections" keys.
-                    If None, loads from ConfigLoader("main.json")["external_systems"].
+            config: The ``external_systems`` config slice with "endpoints" and
+                    "connections" keys. Typically ``main_config["external_systems"]``.
+                    Structure::
+
+                        {
+                            "endpoints": {
+                                "couchdb": {
+                                    "backend": "couchdb",
+                                    "url": "https://...",
+                                    "auth": {"user_env": "...", "pass_env": "..."}
+                                }
+                            },
+                            "connections": {
+                                "projects_db": {
+                                    "endpoint": "couchdb",
+                                    "resource": {"db": "projects"}
+                                }
+                            }
+                        }
+
             on_event: Callback invoked for each transformed YggdrasilEvent.
                       Typically YggdrasilCore.handle_event.
             checkpoint_store: Storage for backend checkpoints.
                               Defaults to CouchDBCheckpointStore.
             logger: Optional logger instance.
-
-        The config structure expected:
-            {
-                "endpoints": {
-                    "couchdb": {
-                        "backend": "couchdb",
-                        "url": "https://...",
-                        "auth": {"user_env": "...", "pass_env": "..."}
-                    }
-                },
-                "connections": {
-                    "projects_db": {
-                        "endpoint": "couchdb",
-                        "resource": {"db": "projects"}
-                    }
-                }
-            }
-
-        If not passed explicitly, config is loaded from:
-            ConfigLoader().load_config("main.json")["external_systems"]
+            watcher_policy: Optional dict with retry policy overrides:
+                            ``max_observation_retries`` (int, default 3) and
+                            ``observation_retry_delay_s`` (float, default 1.0).
+                            If None or empty, hardcoded defaults are used.
+                            Typically ``main_config.get("watchers", {})``.
+            config_path: Optional path to the loaded config file for diagnostics.
         """
-        if config is None:
-            config = self._load_default_config()
-
         self.config = config
         self._on_event = on_event
         self.checkpoint_store = checkpoint_store or CouchDBCheckpointStore()
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
+        self._watcher_policy_override = watcher_policy
+        self.config_path = Path(config_path) if config_path is not None else None
 
         self._watcher_groups: dict[tuple[str, str], WatcherBackendGroup] = {}
         # BoundWatchSpecs grouped by backend group key
         self._bound_specs: dict[tuple[str, str], list[BoundWatchSpec]] = {}
         self._consumer_tasks: list[asyncio.Task[None]] = []
         self._running = False
-
-    @classmethod
-    def _load_default_config(cls) -> dict[str, Any]:
-        """
-        Load external_systems config from main.json via ConfigLoader.
-
-        Returns:
-            Dict with "endpoints" and "connections" keys.
-
-        Raises:
-            KeyError: If "external_systems" key is missing from main.json
-        """
-        from lib.core_utils.config_loader import ConfigLoader
-
-        full_config = ConfigLoader().load_config("main.json")
-        external_systems = full_config.get(cls.CONFIG_KEY)
-
-        if external_systems is None:
-            logger.warning(
-                "No '%s' key found in main.json; using empty config",
-                cls.CONFIG_KEY,
-            )
-            return {"endpoints": {}, "connections": {}}
-
-        return external_systems
 
     # -------------------------------------------------------------------------
     # Backend Registry
@@ -221,19 +201,19 @@ class WatcherManager:
         return dict(cls._backend_registry)
 
     # -------------------------------------------------------------------------
-    # Watcher Group Management
+    # Backend Group Management (internal)
     # -------------------------------------------------------------------------
 
-    def add_watcher_group(
+    def _ensure_watcher_group(
         self,
         backend_type: str,
         connection: str,
     ) -> WatcherBackendGroup:
         """
-        Add a watcher backend group if not already present.
+        Ensure a watcher backend group exists for (backend_type, connection),
+        creating it if needed. Returns the existing group on duplicate.
 
-        Returns existing group if duplicate (deduplication).
-        The connection fully identifies the resource via config.
+        Called internally by add_watchspec().
 
         Args:
             backend_type: Backend type identifier (e.g., "couchdb")
@@ -253,7 +233,7 @@ class WatcherManager:
             connection=connection,
         )
         self._watcher_groups[key] = group
-        self._logger.info("Added watcher group: %s", key)
+        self._logger.info("Created watcher backend group: %s", key)
         return group
 
     def get_watcher_groups(self) -> dict[tuple[str, str], WatcherBackendGroup]:
@@ -278,7 +258,7 @@ class WatcherManager:
         key = bound_spec.backend_group_key
 
         # Ensure backend group exists (dedup)
-        self.add_watcher_group(
+        self._ensure_watcher_group(
             backend_type=bound_spec.spec.backend,
             connection=bound_spec.spec.connection,
         )
@@ -298,6 +278,23 @@ class WatcherManager:
         """Return a copy of the bound specs dict."""
         return {k: list(v) for k, v in self._bound_specs.items()}
 
+    def validate_configuration(self) -> None:
+        """
+        Validate registered WatchSpecs against watcher/config wiring.
+
+        Raises:
+            WatcherConfigurationError: If any wiring issue is found.
+        """
+        bound_specs = [
+            bound_spec for specs in self._bound_specs.values() for bound_spec in specs
+        ]
+        validate_watcher_config_wiring(
+            bound_specs=bound_specs,
+            external_systems=self.config,
+            backend_registry=self._backend_registry,
+            config_path=self.config_path,
+        )
+
     # -------------------------------------------------------------------------
     # Configuration Resolution
     # -------------------------------------------------------------------------
@@ -312,7 +309,7 @@ class WatcherManager:
         Algorithm:
         1. Delegate endpoint + connection lookup to resolve_connection()
         2. Build base config from resolved endpoint (backend, url)
-        3. Merge global watcher defaults (start_seq etc.)
+        3. Merge backend-specific defaults (defaults[backend_type])
         4. Merge per-connection watch settings (poll_interval, limit etc.)
         5. Merge resource (db, path, etc.)
         6. Pass auth env var names (not values) for backend credential resolution
@@ -335,8 +332,6 @@ class WatcherManager:
         Raises:
             KeyError: If connection, endpoint, or required URL is missing
         """
-        from lib.core_utils.external_systems_resolver import resolve_connection
-
         # Delegate endpoint + connection lookup to shared resolver
         resolved_conn = resolve_connection(connection_name, self.config)
 
@@ -346,11 +341,12 @@ class WatcherManager:
             "url": resolved_conn.endpoint.url,
         }
 
-        # Merge watch-specific settings (WatcherManager-only concern).
-        # Precedence: defaults < connection.watch < resource
-        defaults = self.config.get("defaults", {})
-        if isinstance(defaults, dict):
-            resolved.update(defaults)
+        # Merge backend-specific defaults. Precedence: defaults[backend] < connection.watch < resource
+        backend_defaults = (self.config.get("defaults") or {}).get(
+            resolved_conn.endpoint.backend_type, {}
+        )
+        if isinstance(backend_defaults, dict):
+            resolved.update(backend_defaults)
 
         connections = self.config.get("connections", {})
         conn = connections.get(connection_name, {})
@@ -375,6 +371,26 @@ class WatcherManager:
     # Backend Instantiation
     # -------------------------------------------------------------------------
 
+    def _resolve_watcher_policy(self) -> dict[str, Any]:
+        """Return the resolved watcher retry policy.
+
+        Uses the ``watcher_policy`` dict passed at construction time.
+        Missing or unset keys fall back to the defaults specified in
+        the ``dict.get()`` calls below (``3`` and ``1.0``).
+
+        Returns:
+            Dict with keys:
+            - ``max_observation_retries`` (int, default 3)
+            - ``observation_retry_delay_s`` (float, default 1.0)
+        """
+        raw: dict[str, Any] = self._watcher_policy_override or {}
+        return {
+            "max_observation_retries": int(raw.get("max_observation_retries", 3)),
+            "observation_retry_delay_s": float(
+                raw.get("observation_retry_delay_s", 1.0)
+            ),
+        }
+
     def _instantiate_watcher_backends(self) -> None:
         """
         Instantiate WatcherBackend for each group.
@@ -383,10 +399,13 @@ class WatcherManager:
         group.backend_type.
 
         Raises:
-            ValueError: If backend type is unknown or mismatched
-            KeyError: If connection config is invalid
+            WatcherConfigurationError: If watcher/config wiring is invalid
+            KeyError: If connection config is invalid after validation
             RuntimeError: If env var resolution fails
         """
+        self.validate_configuration()
+        policy = self._resolve_watcher_policy()
+
         for key, group in self._watcher_groups.items():
             if group.backend_instance is not None:
                 continue
@@ -409,6 +428,19 @@ class WatcherManager:
                     f"endpoint says '{endpoint_backend}'"
                 )
 
+            # Merge global watcher policy on top of connection config.
+            # Policy keys are unlikely to collide with connection-specific keys;
+            # warn if they do to surface misconfiguration early.
+            for policy_key in policy:
+                if policy_key in config:
+                    self._logger.warning(
+                        "Watcher policy key '%s' shadows a connection config key "
+                        "for connection '%s'; policy value wins.",
+                        policy_key,
+                        group.connection,
+                    )
+            config = {**config, **policy}
+
             # Stable backend_key: {backend}:{connection}
             backend_key = f"{group.backend_type}:{group.connection}"
 
@@ -428,8 +460,8 @@ class WatcherManager:
         """
         Start all registered watcher backends.
 
-        Phase 1: Starts backends only (no consumption).
-        Phase 2 will add event consumption tasks.
+        Instantiates backends (if not already done), starts them concurrently,
+        then spawns one consumer task per registered backend group.
 
         Contract:
         - Instantiates backends if not already done
@@ -646,7 +678,7 @@ class WatcherManager:
         self._logger.info("WatcherManager stopping...")
         self._running = False
 
-        # Cancel consumer tasks (Phase 2)
+        # Cancel consumer tasks
         for task in self._consumer_tasks:
             task.cancel()
 

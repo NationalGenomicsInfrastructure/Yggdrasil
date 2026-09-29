@@ -1,19 +1,46 @@
 flowchart TB
-    subgraph Infrastructure
+    subgraph External["External Systems"]
+      DB[("CouchDB<br/>projects / status DBs")]
+      FS[/"File System (Miarka)"/]
       HPC[HPC]
-      DB[CouchDB]
-      FS[File System / Miarka]
     end
 
-    subgraph Yggdrasil
-    W["Watchers<br/>(FileSystemWatcher, CouchDBWatcher)"]
-    Y[YggdrasilCore]
-    R["Realms/Processors<br/>(FlowcellRealm, DeliveryRealm, etc.)"]
+    subgraph Watching["Watching (lib/watchers)"]
+      WB["Watcher backends<br/>(_changes polling, checkpoints)"]
+      WM["WatcherManager<br/>(WatchSpec filter_expr, scope, payload)"]
     end
 
-    FS --> W
-    DB --> W
-    W --> Y
-    Y --> R
-    R --> HPC
-    R --> DB
+    subgraph CoreRealms["Core & Realms"]
+      Y["YggdrasilCore<br/>(EventType → handler routing)"]
+      H["Realm handlers<br/>(derive_scope, generate_plan_drafts)"]
+    end
+
+    subgraph Execution["Plan Execution"]
+      PDB[("yggdrasil_plans")]
+      PW["PlanWatcher"]
+      C["PlanExecutionCoordinator<br/>(admission, one attempt per plan, finalization)"]
+      E["Engine<br/>(dependency scheduler, failure policy,<br/>per-step workdirs, fingerprint + output reuse)"]
+    end
+
+    subgraph Ops["Ops Status"]
+      SP[/"Event spool<br/>$YGG_EVENT_SPOOL"/]
+      OC["OpsConsumerService<br/>(FileSpoolConsumer: one attempt per snapshot)"]
+      ODB[("ops DB<br/>plan_status docs")]
+    end
+
+    DB -->|"_changes"| WB
+    FS --> WB
+    WB -->|RawWatchEvent| WM
+    WM -->|YggdrasilEvent| Y
+    Y --> H
+    H -->|PlanDraft| Y
+    Y -->|save_plan| PDB
+    PDB -->|"_changes"| PW
+    PW -->|PLAN_EXECUTION event| Y
+    Y -->|submit plan| C
+    C -->|run attempt| E
+    C -->|record outcome + token| PDB
+    E -->|"@step functions"| HPC
+    E -->|attempt + step events| SP
+    SP --> OC
+    OC --> ODB

@@ -1,11 +1,20 @@
+import errno
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from yggdrasil.flow.artifacts import SimpleArtifactRef
+from yggdrasil.flow.errors import (
+    OrchestrationError,
+    PermanentStepError,
+    TransientStepError,
+)
+from yggdrasil.flow.events.correlation import ExecutionCorrelation
 from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import Artifact, StepResult
+from yggdrasil.flow.outputs import MISSING_REQUIRED_OUTPUTS_CODE
 from yggdrasil.flow.step import StepContext, step
 
 
@@ -548,6 +557,88 @@ class TestStepContext(unittest.TestCase):
         actual_pcts = [call[0][0]["progress"] for call in calls]
         self.assertEqual(actual_pcts, percentages)
 
+    # =====================================================
+    # EXECUTION CORRELATION TESTS
+    # =====================================================
+
+    def test_context_outside_an_attempt_publishes_uncorrelated_events(self):
+        self.ctx.emit("test.event")
+
+        emitted = self.mock_emitter.emit.call_args[0][0]
+        for key in ("execution_id", "plan_generation", "run_token"):
+            self.assertNotIn(key, emitted)
+
+    def test_context_in_an_attempt_stamps_every_event_it_publishes(self):
+        correlation = ExecutionCorrelation(
+            execution_id="exec_1", plan_generation="gen", run_token=4
+        )
+        self.ctx.correlation = correlation
+        (self.workdir / "out.txt").write_text("x", encoding="utf-8")
+
+        self.ctx.emit("test.event")
+        self.ctx.progress(50)
+        self.ctx.record_artifact(
+            SimpleArtifactRef(key_name="out", folder=".", filename="out.txt"),
+            path=self.workdir / "out.txt",
+        )
+
+        events = [call[0][0] for call in self.mock_emitter.emit.call_args_list]
+        self.assertEqual(len(events), 3)
+        for emitted in events:
+            with self.subTest(type=emitted["type"]):
+                self.assertEqual(
+                    {key: emitted[key] for key in correlation.event_fields()},
+                    correlation.event_fields(),
+                )
+
+    def test_context_in_an_attempt_files_events_in_its_step_stream(self):
+        self.ctx.correlation = ExecutionCorrelation(
+            execution_id="20260924T120000000001Z_c68e"
+        )
+
+        self.ctx.emit("step.started")
+        self.ctx.progress(50)
+
+        paths = [
+            call[0][0]["_spool_path"] for call in self.mock_emitter.emit.call_args_list
+        ]
+        self.assertEqual(
+            paths,
+            [
+                {
+                    "realm": "test_realm",
+                    "plan_id": "test_plan_001",
+                    "execution_id": "20260924T120000000001Z_c68e",
+                    "step_id": "test_step_001",
+                    "filename": name,
+                }
+                for name in ("0001_step_started.json", "0002_step_progress.json")
+            ],
+        )
+
+    def test_every_event_carries_its_run_id(self):
+        self.ctx.emit("step.started")
+
+        self.assertEqual(self.mock_emitter.emit.call_args[0][0]["run_id"], "run_001")
+
+    def test_concurrent_events_never_share_a_number(self):
+        # Write traces share this counter, and a step may publish from threads
+        # of its own; a repeated number would overwrite a file.
+        start = threading.Barrier(8)
+
+        def publish() -> None:
+            start.wait(5.0)
+            for _ in range(100):
+                self.ctx._next_seq()
+
+        threads = [threading.Thread(target=publish) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5.0)
+
+        self.assertEqual(self.ctx._next_seq(), 801)
+
 
 class TestStepDecorator(unittest.TestCase):
     """
@@ -1066,6 +1157,318 @@ class TestStepDecorator(unittest.TestCase):
         # Should create empty StepResult
         self.assertIsInstance(result, StepResult)
         self.assertEqual(len(result.artifacts), 0)
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Collect every exception reachable via __cause__/__context__.
+
+    Deliberately follows both links rather than assuming a particular nesting
+    depth: when a failure-report publication fails, the original step error ends
+    up several hops down the chain, not as the immediate __context__.
+
+    Args:
+        exc: The exception to walk from.
+
+    Returns:
+        list[BaseException]: exc and every exception chained behind it.
+    """
+    collected: list[BaseException] = []
+    visited: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in visited:
+            continue
+        visited.add(id(current))
+        collected.append(current)
+        pending.append(current.__cause__)
+        pending.append(current.__context__)
+    return collected
+
+
+class TestStepWrapperOrchestrationOrdering(unittest.TestCase):
+    """The @step wrapper must not report through a broken reporting channel.
+
+    Its except clauses are ordered so OrchestrationError is caught first. Without
+    that, a failed step.succeeded emit would fall into the generic handler, which
+    would then emit step.failed on the same broken emitter - replacing the
+    original error with a confusing chained one.
+    """
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.workdir = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _ctx(self, fail_on: set[str]) -> StepContext:
+        """Build a context whose emitter fails on the given event types."""
+        emitted: list[str] = []
+
+        def emit(event):
+            emitted.append(event["type"])
+            if event["type"] in fail_on:
+                raise OSError(f"spool unavailable for {event['type']}")
+
+        emitter = Mock(spec=EventEmitter)
+        emitter.emit.side_effect = emit
+        ctx = StepContext(
+            realm="test",
+            scope={"kind": "project", "id": "P1"},
+            plan_id="plan_1",
+            step_id="s1",
+            step_name="n1",
+            workdir=self.workdir,
+            scope_dir=self.workdir,
+            emitter=emitter,
+        )
+        ctx.emitted = emitted  # type: ignore[attr-defined]
+        return ctx
+
+    def test_emitter_failure_surfaces_as_orchestration_error(self):
+        @step
+        def any_step(ctx: StepContext, **kwargs) -> StepResult:
+            return StepResult()
+
+        ctx = self._ctx({"step.started"})
+
+        with self.assertRaises(OrchestrationError) as cm:
+            any_step(ctx)
+
+        self.assertIn("Event publication failed", str(cm.exception))
+
+    def test_failing_success_emit_is_not_reported_as_a_step_failure(self):
+        @step
+        def any_step(ctx: StepContext, **kwargs) -> StepResult:
+            return StepResult()
+
+        ctx = self._ctx({"step.succeeded"})
+
+        with self.assertRaises(OrchestrationError):
+            any_step(ctx)
+
+        self.assertNotIn("step.failed", ctx.emitted)
+
+    def test_orchestration_error_from_the_step_body_is_not_reclassified(self):
+        """ctx.progress()/ctx.record_artifact() publication inside a body."""
+
+        @step
+        def progressing_step(ctx: StepContext, **kwargs) -> StepResult:
+            ctx.progress(50, "halfway")
+            return StepResult()
+
+        ctx = self._ctx({"step.progress"})
+
+        with self.assertRaises(OrchestrationError):
+            progressing_step(ctx)
+
+        self.assertNotIn("step.failed", ctx.emitted)
+
+    def test_failing_failure_emit_preserves_both_causes(self):
+        """Both causes survive; the original error is not hidden."""
+
+        @step
+        def failing_step(ctx: StepContext, **kwargs) -> StepResult:
+            raise PermanentStepError("the realm's own work failed")
+
+        ctx = self._ctx({"step.failed"})
+
+        with self.assertRaises(OrchestrationError) as cm:
+            failing_step(ctx)
+
+        raised = cm.exception
+        # The original error survives in the message, so it is not lost even to
+        # a caller that only logs str(exc).
+        self.assertIn("the realm's own work failed", str(raised))
+        self.assertIn("PermanentStepError", str(raised))
+
+        # ...and both exception objects remain reachable through the chain,
+        # wherever in it they happen to sit.
+        chain = _exception_chain(raised)
+        self.assertTrue(
+            any(
+                isinstance(e, PermanentStepError)
+                and "the realm's own work failed" in str(e)
+                for e in chain
+            ),
+            f"original step error missing from chain: {chain}",
+        )
+        self.assertTrue(
+            any(
+                isinstance(e, OSError) and "spool unavailable" in str(e) for e in chain
+            ),
+            f"publication failure missing from chain: {chain}",
+        )
+
+    def test_transient_failure_emit_failure_also_preserves_both_causes(self):
+        @step
+        def flaky_step(ctx: StepContext, **kwargs) -> StepResult:
+            raise TransientStepError("temporary glitch")
+
+        ctx = self._ctx({"step.failed"})
+
+        with self.assertRaises(OrchestrationError) as cm:
+            flaky_step(ctx)
+
+        chain = _exception_chain(cm.exception)
+        self.assertTrue(
+            any(isinstance(e, TransientStepError) for e in chain),
+            f"original step error missing from chain: {chain}",
+        )
+
+    def test_unexpected_error_failure_emit_failure_preserves_both_causes(self):
+        @step
+        def broken_step(ctx: StepContext, **kwargs) -> StepResult:
+            raise RuntimeError("unexpected")
+
+        ctx = self._ctx({"step.failed"})
+
+        with self.assertRaises(OrchestrationError) as cm:
+            broken_step(ctx)
+
+        chain = _exception_chain(cm.exception)
+        self.assertTrue(
+            any(isinstance(e, RuntimeError) and "unexpected" in str(e) for e in chain),
+            f"original step error missing from chain: {chain}",
+        )
+
+    def test_step_failure_still_propagates_when_publication_works(self):
+        """The ordinary path is unchanged."""
+
+        @step
+        def failing_step(ctx: StepContext, **kwargs) -> StepResult:
+            raise PermanentStepError("boom")
+
+        ctx = self._ctx(set())
+
+        with self.assertRaises(PermanentStepError):
+            failing_step(ctx)
+
+        self.assertIn("step.failed", ctx.emitted)
+
+
+class TestStepWrapperRequiredOutputs(unittest.TestCase):
+    """A step is reported succeeded only once its required outputs exist.
+
+    Validation lives in the wrapper because the wrapper, not the engine,
+    publishes step.succeeded: by the time the engine regains control, success
+    has already been published.
+    """
+
+    def setUp(self):
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.workdir = Path(temp_dir.name)
+        self.events: list[dict] = []
+        emitter = Mock(spec=EventEmitter)
+        emitter.emit.side_effect = self.events.append
+        self.ctx = StepContext(
+            realm="test",
+            scope={"kind": "project", "id": "P1"},
+            plan_id="plan_1",
+            step_id="materialize_config",
+            step_name="materialize_config",
+            workdir=self.workdir,
+            scope_dir=self.workdir,
+            emitter=emitter,
+            required_outputs={
+                "config": self.workdir / "demux.config",
+                "sheet": self.workdir / "samplesheet.csv",
+            },
+        )
+
+    def types(self) -> list[str]:
+        """Event types published so far, in order."""
+        return [event["type"] for event in self.events]
+
+    def test_required_outputs_default_to_none(self):
+        ctx = StepContext(
+            realm="r",
+            scope={},
+            plan_id="p",
+            step_id="s",
+            step_name="s",
+            workdir=self.workdir,
+            scope_dir=self.workdir,
+            emitter=Mock(spec=EventEmitter),
+        )
+
+        self.assertEqual(ctx.required_outputs, {})
+
+    def test_outputs_written_by_the_body_let_success_be_published(self):
+        @step
+        def materialize(ctx: StepContext) -> StepResult:
+            for path in ctx.required_outputs.values():
+                path.write_text("content", encoding="utf-8")
+            return StepResult()
+
+        materialize(self.ctx)
+
+        self.assertEqual(self.types(), ["step.started", "step.succeeded"])
+
+    def test_missing_output_is_one_failed_event_and_never_a_success(self):
+        @step
+        def forgetful(ctx: StepContext) -> StepResult:
+            ctx.required_outputs["config"].write_text("content", encoding="utf-8")
+            return StepResult()
+
+        with self.assertRaises(PermanentStepError) as cm:
+            forgetful(self.ctx)
+
+        self.assertEqual(self.types(), ["step.started", "step.failed"])
+        failed = self.events[-1]
+        self.assertEqual(failed["kind"], "permanent")
+        self.assertEqual(failed["code"], MISSING_REQUIRED_OUTPUTS_CODE)
+        self.assertEqual(cm.exception.code, MISSING_REQUIRED_OUTPUTS_CODE)
+        # Names what is missing, and only that.
+        self.assertIn("sheet", failed["error"])
+        self.assertIn(str(self.workdir / "samplesheet.csv"), failed["error"])
+        self.assertNotIn("'config'", failed["error"])
+
+    def test_step_without_required_outputs_is_unaffected(self):
+        @step
+        def plain(ctx: StepContext) -> StepResult:
+            return StepResult()
+
+        self.ctx.required_outputs = {}
+
+        with patch.object(Path, "stat", side_effect=AssertionError("stat called")):
+            plain(self.ctx)
+
+        self.assertEqual(self.types(), ["step.started", "step.succeeded"])
+
+    def test_body_failure_is_reported_as_itself_not_as_missing_outputs(self):
+        """Outputs are checked only after the body returns."""
+
+        @step
+        def broken(ctx: StepContext) -> StepResult:
+            raise TransientStepError("cluster busy")
+
+        with self.assertRaises(TransientStepError):
+            broken(self.ctx)
+
+        self.assertEqual(self.types(), ["step.started", "step.failed"])
+        self.assertEqual(self.events[-1]["kind"], "transient")
+        self.assertIsNone(self.events[-1]["code"])
+
+    def test_output_check_that_cannot_complete_is_infrastructure(self):
+        """Not reported as this step's failure, and not as its success."""
+
+        @step
+        def materialize(ctx: StepContext) -> StepResult:
+            for path in ctx.required_outputs.values():
+                path.write_text("content", encoding="utf-8")
+            return StepResult()
+
+        with patch.object(
+            Path, "stat", side_effect=PermissionError(errno.EACCES, "denied")
+        ):
+            with self.assertRaises(OrchestrationError) as cm:
+                materialize(self.ctx)
+
+        self.assertNotIsInstance(cm.exception, PermanentStepError)
+        self.assertEqual(self.types(), ["step.started"])
 
 
 if __name__ == "__main__":

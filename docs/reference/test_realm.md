@@ -29,20 +29,37 @@ Standard recipes (selected via `"recipe"` field, in RECIPES registry):
 - **fail_mid_plan**: Succeeds initially (echo → sleep), then fails mid-execution
 - **long_running**: Extended sleep (30s default) for testing responsiveness
 - **artifact_write**: Creates files and registers artifacts
+- **branch_failure**: Shared validation, a metadata update and two lane branches; the metadata update and lane 2 fail, lane 1 completes (`continue_independent` by default)
+- **branch_failure_metadata_required**: The same plan with the metadata update a prerequisite of both lanes, so both are blocked (`continue_independent` by default)
 - **data_fetch_exec**: Fetches a CouchDB doc at *execution time* inside the step
 - **data_access_denied**: Verifies DataAccess correctly rejects unauthorized connections
-- **data_fetch_all_methods**: Exercises every CouchDBReadClient read method
-- **data_verify_limit_clamping**: Confirms `find()` results are clamped by `policy.max_limit`
+- **data_fetch_all_methods**: Exercises every read method on the execution-phase DataAccess client
+- **data_verify_limit_clamping**: Confirms `find()` results are clamped to the effective `max_limit` from `data_access.options`
+- **data_write_exec**: Writes a document to CouchDB at execution time via `client.save()`; proves write permission works end-to-end
+- **data_write_only_permission**: Proves write permission does not imply read; `save()` must succeed, `get()` must raise `DataAccessDeniedError`
+- **data_write_no_id**: Writes a document without supplying a `_id`; CouchDB auto-generates the ID via selector identity; the resolved `doc_id` appears in step metrics
 
 Planning-time recipes (handler processes the doc before building steps; not in RECIPES registry):
 - **data_fetch_plan**: Async-fetches a CouchDB doc *during planning*; bakes the result as a structured `ref_doc` dict into step params.
 - **metadata_harvest**: Extracts domain fields (`input_path`, `mode`, `priority`, `sample_id`, `flags`) from the scenario doc; bakes them as a structured `scenario` dict into step params.
 
+Every plan runs under the scenario's `failure_policy` field when it has one (`"fail_fast"` or `"continue_independent"`; any other value rejects the scenario). Without it, the `branch_failure` recipes run under `continue_independent`, and every other recipe and custom steps under `fail_fast`. So any recipe can be compared under both policies:
+
+```json
+{
+  "_id": "test_scenario:mid_plan_continue",
+  "type": "ygg_test_scenario",
+  "recipe": "fail_mid_plan",
+  "failure_policy": "continue_independent"
+}
+```
+
 Available steps (for custom mode):
 
 > All test realm steps are decorated with `@step`, so lifecycle events (`step.started`,
 > `step.succeeded`, `step.failed`) are emitted automatically by the decorator. Exceptions
-> still bubble up so the Engine stops the plan on failure.
+> still bubble up to the Engine: a `fail_fast` plan stops at the first failure, while a
+> `continue_independent` plan blocks the failed step's dependents and runs the rest.
 
 - **step_echo**: Echo message (params: `message`)
 - **step_sleep**: Configurable sleep with progress events (params: `duration_sec`)
@@ -51,9 +68,12 @@ Available steps (for custom mode):
 - **step_write_file**: Write file to workdir (params: `filename`, `content`)
 - **step_fetch_from_db**: Fetch a CouchDB document at execution time (params: `connection`, `doc_id`)
 - **step_expect_denied**: Assert that DataAccess correctly rejects a restricted connection (params: `connection`)
-- **step_exercise_all_fetch_methods**: Exercise every CouchDBReadClient read method in one step (params: `connection`, `doc_id`, `selector_type`)
-- **step_verify_limit_clamping**: Assert that `find()` results are clamped to `policy.max_limit` (params: `connection`, `selector_type`, `request_limit`, `expected_max`)
+- **step_exercise_all_fetch_methods**: Exercise every read method on the execution-phase DataAccess client in one step (params: `connection`, `doc_id`, `selector_type`)
+- **step_verify_limit_clamping**: Assert that `find()` results are clamped to the effective `max_limit` from `data_access.options` (params: `connection`, `selector_type`, `request_limit`, `expected_max`)
 - **step_emit_metadata**: Emit structured metadata baked into the plan at planning time (params: `scenario` dict and/or `ref_doc` dict)
+- **step_write_to_db**: Write a document via `client.save(doc, doc_id=..., mode=...)` with write permission; returns `write_status`, `doc_id`, `old_rev`, `new_rev` in metrics (params: `connection`, `doc_id`, `mode`)
+- **step_write_to_db_no_id**: Write a document using Mango selector identity — no `_id` supplied, CouchDB auto-generates it; returns `write_status`, `doc_id`, `old_rev`, `new_rev`, `identity`, `operation` in metrics (params: `connection`, `selector`, `mode`)
+- **step_expect_read_denied**: Assert that `client.get()` raises `DataAccessDeniedError` on a write-only connection; step succeeds only if denial is raised (params: `connection`, `doc_id`)
 
 ---
 
@@ -174,9 +194,9 @@ Available steps (for custom mode):
 
 **Expected**:
 - Step 1 (fail_immediately) fails with RuntimeError (emits `step.failed`)
-- Step 2 (never_reached) never executes
+- Step 2 (never_reached) never executes: it is unreached, not blocked
 - Plan execution halts with error
-- `executed_run_token` NOT updated (plan remains eligible for retry)
+- `executed_run_token` NOT updated (plan remains eligible for retry): a `fail_fast` failure does not finish its request
 
 ---
 
@@ -203,6 +223,7 @@ Available steps (for custom mode):
 - Step 4 (never_reached) never executes
 - Plan marked as failed
 - `executed_run_token` NOT updated (eligible for retry)
+- With `"failure_policy": "continue_independent"`, step 4 is blocked instead, and the request is finished: `executed_run_token` is updated and `last_finalized_execution.outcome` is `"failed"`
 
 ---
 
@@ -591,7 +612,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:metadata_har
 
 **Purpose**: Demonstrate plan-time CouchDB fetch where the result is baked into step params as a **structured dict** (`ref_doc`), not a formatted string. The plan record is self-documenting: it contains the exact doc snapshot that drove the run.
 
-**Requires**: A document `data_access_test:reference_doc` in the `yggdrasil` database, and `yggdrasil_db` listed as an allowed connection for `test_realm` in the DataAccess config.
+**Requires**: A document `data_access_test:reference_doc` in the `yggdrasil` database, and `yggdrasil_db` configured with `data_access.realms.test_realm.planning.permissions: ["read"]`.
 
 **Insert as**:
 ```json
@@ -606,7 +627,7 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:metadata_har
 ```
 
 **Expected**:
-- Handler calls `await ctx.data.couchdb("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_draft`
+- Handler calls `await ctx.data.connection("yggdrasil_db").get("data_access_test:reference_doc")` during `generate_plan_drafts`
 - Result is a structured dict: `{"doc_id": "...", "message": "...", "value": 13, "missing": false}`
 - Dict is baked into `echo_fetched.params["ref_doc"]` — visible in the persisted plan record
 - `echo_fetched` step emits `step.ref_doc_echoed` event with the dict fields
@@ -626,6 +647,140 @@ curl http://localhost:5984/yggdrasil_plans/test_realm:test_scenario:data_fetch_p
 #   "missing": false
 # }
 ```
+
+---
+
+## Scenario 17: Execution-Time Write
+
+**Purpose**: Prove that a step with execution write permission can call `client.save()` via
+`ctx.data.connection()` and have the result visible in step metrics and the
+`data_access.write.succeeded` event.
+
+**Requires**: Connection `test_realm_write_db` configured with
+`data_access.realms.test_realm.execution.permissions: ["write"]`.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_write_exec",
+  "type": "ygg_test_scenario",
+  "recipe": "data_write_exec",
+  "name": "Execution-Time Write",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `write_doc` step calls `ctx.data.connection("test_realm_write_db").save(body, doc_id="data_access_test:write_result", mode="upsert")`
+- Body is a clean dict without `_id` or `_rev` — DataAccess manages those internally
+- `step.write_result` event emitted with `write_status`, `doc_id`, `old_rev`, `new_rev`
+- `data_access.write.succeeded` event emitted by the DataAccess layer (visible in event spool)
+- Step metrics include all four fields; `old_rev` is `null` on first create, populated on subsequent runs
+- `echo_confirm` step succeeds after write
+
+---
+
+## Scenario 18: Write-Only Permission (Read Denied)
+
+**Purpose**: Prove that a connection with only `"write"` in its execution permissions correctly
+denies read operations. `save()` must succeed; `get()` must raise `DataAccessDeniedError`.
+
+**Requires**: Connection `test_realm_write_db` (write-only for test_realm — same connection as Scenario 17).
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_write_only_permission",
+  "type": "ygg_test_scenario",
+  "recipe": "data_write_only_permission",
+  "name": "Write-Only Permission Test",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `write_only_put` step calls `save()` → must succeed (write permission is present)
+- `write_only_read_denied` step calls `get()` on the same connection → must raise `DataAccessDeniedError`
+- `step_expect_read_denied` treats the `DataAccessDeniedError` as the expected outcome; emits `step.read_denied_as_expected`
+- Step metrics include `read_correctly_denied: true` and the denial reason
+- Plan completes successfully — both steps pass
+
+---
+
+## Scenario 19: Write Without _id (Auto-Generated ID)
+
+**Purpose**: Prove that a step can write a document to CouchDB without supplying a `_id`. The
+selector identity path of `save()` is used; CouchDB generates the document ID on create. The
+resolved `doc_id`, `identity`, and `operation` are visible in step metrics.
+
+**Requires**: Connection `test_realm_write_db` configured with
+`data_access.realms.test_realm.execution.permissions: ["write"]`.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:data_write_no_id",
+  "type": "ygg_test_scenario",
+  "recipe": "data_write_no_id",
+  "name": "Write Without _id",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `write_doc_no_id` step calls `client.save(body, selector={...}, mode="upsert")` — no `_id` in body or call
+- On first run: CouchDB creates a new document and returns a generated ID
+- `step.write_result` event emitted with `write_status`, `doc_id`, `old_rev`, `new_rev`, `identity="selector"`, `operation="upsert"`
+- `data_access.write.succeeded` event emitted by the DataAccess layer
+- Step metrics include `identity="selector"` confirming the selector path was used
+- `echo_confirm` step succeeds after write
+
+---
+
+## Scenario 20: Independent Branches, One Fails
+
+**Purpose**: Show a failure contained to its branch. After shared validation, a metadata update and two lane branches (prepare → process → upload) run independently. This mirrors the demux realm's plan of one branch per lane.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:branch_failure",
+  "type": "ygg_test_scenario",
+  "recipe": "branch_failure",
+  "auto_run": true
+}
+```
+
+**Expected** (under `continue_independent`, the recipe's default policy):
+- `validate_shared` succeeds; `update_metadata` fails, and nothing depends on it
+- Lane 1 completes: `lane_1__prepare` writes `lane_1_config.txt` (a declared output), then `lane_1__process` and `lane_1__upload` succeed
+- Lane 2 fails partway: `lane_2__prepare` succeeds, `lane_2__process` fails, and `lane_2__upload` is blocked (`step.blocked`, with `lane_2__process` as its direct blocker and failed ancestor)
+- The attempt ends `failed` with 5 succeeded, 2 failed and 1 blocked step
+- The request is finished: `executed_run_token` equals `run_token`, `status` stays `"approved"`, and `last_finalized_execution.outcome` is `"failed"`. The plan does not run again until `run_token` is raised
+- After raising `run_token`, the rerun reuses every step that succeeded (`step.skipped`), unless its declared output was deleted, and runs the two failing steps again
+
+With `"failure_policy": "fail_fast"`, the same plan stops at `update_metadata`. The lane steps are unreached, and the plan stays eligible.
+
+---
+
+## Scenario 21: Independent Branches, Metadata Required
+
+**Purpose**: The same plan, with the author's other choice: the metadata update is a prerequisite of each lane branch. Only the dependencies differ.
+
+**Insert as**:
+```json
+{
+  "_id": "test_scenario:branch_failure_metadata_required",
+  "type": "ygg_test_scenario",
+  "recipe": "branch_failure_metadata_required",
+  "auto_run": true
+}
+```
+
+**Expected**:
+- `validate_shared` succeeds; `update_metadata` fails
+- Every lane step is blocked, with `update_metadata` as the failed ancestor. Lane 2's failing step is never invoked
+- The attempt ends `failed` with 1 succeeded, 1 failed and 6 blocked steps, and the request is finished
 
 ---
 
@@ -799,6 +954,8 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 | Fail Fast | fail_fast | ✓ | <1s | Step 1 fails immediately |
 | Fail Mid-Plan | fail_mid_plan | ✓ | ~0.3s | Steps 1-2 succeed, 3 fails |
 | Artifact Write | artifact_write | ✓ | <1s | Files created, artifacts tracked |
+| Independent Branches | branch_failure | ✓ | <1s | Lane 1 completes; lane 2 fails partway; attempt failed, request finished |
+| Metadata Required | branch_failure_metadata_required | ✓ | <1s | Metadata failure blocks both lanes |
 | Custom Sleep | happy_path | ✓ | ~3s | Tests parameter override |
 | Quick Echo | happy_path | ✓ | <100ms | Baseline overhead |
 | Random Fail (50%) | random_fail | ✓ | ~0.5s | 50% chance of failure |
@@ -811,6 +968,9 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 | Artifact with Chaos | Custom steps | ✓ | <1s | Artifact + 50% failure |
 | Metadata Harvest | metadata_harvest | ✓ | <50ms | Domain fields baked as structured dict in plan params |
 | Plan-Time Fetch (Structured) | data_fetch_plan | ✓ | <1s | CouchDB ref doc baked as structured dict in plan params |
+| Execution-Time Write | data_write_exec | ✓ | <1s | Write succeeds; write_status + revs in step metrics |
+| Write-Only Permission | data_write_only_permission | ✓ | <1s | save() passes, get() correctly denied |
+| Write Without _id | data_write_no_id | ✓ | <1s | CouchDB generates ID; identity="selector" in metrics |
 
 ---
 
@@ -829,14 +989,15 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 - Check PlanWatcher is running: `tail -f yggdrasil.log | grep PlanWatcher`
 
 **Step failures with missing fn_ref:**
-- Ensure recipe exists in `lib/realms/test_realm/recipes.py`
+- For standard recipes, ensure the recipe exists in `lib/realms/test_realm/recipes.py`.
+- For planning-time handler scenarios such as `data_fetch_plan` or `metadata_harvest`, ensure the handler special-case exists in `lib/realms/test_realm/handler.py` — these are intentionally not in the RECIPES registry.
 - Verify step function exists in `lib/realms/test_realm/steps.py`
 - Check error message for typos in override field names or fn_name
 
 **Custom steps not working:**
 - Verify `steps` is an array of dicts
 - Each step must have `step_id` and `fn_name`
-- Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`, `step_fetch_from_db`, `step_expect_denied`, `step_exercise_all_fetch_methods`, `step_verify_limit_clamping`, `step_emit_metadata`
+- Valid `fn_name` values: `step_echo`, `step_sleep`, `step_fail`, `step_random_fail`, `step_write_file`, `step_fetch_from_db`, `step_expect_denied`, `step_write_to_db`, `step_expect_read_denied`, `step_exercise_all_fetch_methods`, `step_verify_limit_clamping`, `step_emit_metadata`
 - Check deps refer to existing step_id values
 
 For broader troubleshooting (CouchDB connectivity, config errors, realm discovery, DataAccess), see [troubleshooting.md](troubleshooting.md).

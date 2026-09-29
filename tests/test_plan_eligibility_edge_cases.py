@@ -450,15 +450,15 @@ class TestPlanEligibilityRealWorldScenarios(unittest.TestCase):
         }
         self.assertFalse(is_plan_eligible(doc))
 
-    def test_plan_after_genstat_approval(self):
-        """Test plan after Genstat approves it."""
+    def test_plan_after_external_approval(self):
+        """Test a plan after an external actor approves it."""
         from lib.core_utils.plan_eligibility import is_plan_eligible
 
         doc = {
             "_id": "pln_tenx_P12345_v1",
             "realm": "tenx",
             "scope": {"kind": "project", "id": "P12345"},
-            "status": "approved",  # Changed by Genstat
+            "status": "approved",  # Changed by an external approval actor
             "auto_run": False,
             "run_token": 1,
             "executed_run_token": 0,
@@ -483,7 +483,7 @@ class TestPlanEligibilityRealWorldScenarios(unittest.TestCase):
         self.assertFalse(is_plan_eligible(doc))
 
     def test_plan_after_rerun_request(self):
-        """Test plan after Genstat requests re-run."""
+        """Test a plan after an external actor requests a re-run."""
         from lib.core_utils.plan_eligibility import is_plan_eligible
 
         doc = {
@@ -492,7 +492,7 @@ class TestPlanEligibilityRealWorldScenarios(unittest.TestCase):
             "scope": {"kind": "project", "id": "P12345"},
             "status": "approved",
             "auto_run": True,
-            "run_token": 2,  # Incremented by Genstat
+            "run_token": 2,  # Incremented by an external approval actor
             "executed_run_token": 1,  # Still at previous value
             "run_requested_at": "2026-01-16T14:00:00Z",
             "run_requested_by": "user@example.com",

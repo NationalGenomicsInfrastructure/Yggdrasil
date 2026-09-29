@@ -12,6 +12,7 @@ from unittest.mock import Mock
 
 from lib.ops.consumer import (
     FileSpoolConsumer,
+    _event_files,
     _find_any_event,
     _read_scope_from_spool,
     _safe_load,
@@ -253,6 +254,22 @@ class TestFindAnyEvent(unittest.TestCase):
             self.assertIsNotNone(result)
             assert result is not None  # for type checker
             self.assertEqual(result["scope"]["id"], "P_NORMAL")
+
+
+class TestEventFiles(unittest.TestCase):
+    """Only files directly in a step's directory are its events."""
+
+    def test_a_nested_steps_directory_is_not_an_event_file(self):
+        with TemporaryDirectory() as tmp:
+            step_dir = Path(tmp)
+            (step_dir / "0001_step_started.json").write_text("{}")
+            (step_dir / "0002_step_started.json.tmp").write_text("{}")
+            # The escaped directory of a step nested below this one.
+            (step_dir / "%0001_step_started.json").mkdir()
+
+            self.assertEqual(
+                _event_files(step_dir), [step_dir / "0001_step_started.json"]
+            )
 
 
 class TestReadScopeFromSpool(unittest.TestCase):

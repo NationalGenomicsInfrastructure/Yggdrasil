@@ -18,10 +18,13 @@ import os
 import threading
 from typing import Any
 
+import requests
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant import CouchDbSessionAuthenticator, cloudant_v1
 
+from lib.core_utils.errors import ExternalSystemUnavailableError
 from lib.core_utils.logging_utils import custom_logger
+from lib.couchdb.couchdb_models import ChangesBatch, ChangesRow
 
 logger = custom_logger(__name__)
 
@@ -50,6 +53,7 @@ class CouchDBClientFactory:
         pass_env: str,
         *,
         verify_connection: bool = True,
+        enable_retries: bool = True,
     ) -> cloudant_v1.CloudantV1:
         """
         Create a new CloudantV1 client.
@@ -59,6 +63,12 @@ class CouchDBClientFactory:
             user_env: Environment variable name containing username
             pass_env: Environment variable name containing password
             verify_connection: If True, ping server to fail fast (default True)
+            enable_retries: If True (default), the SDK retries transient
+                failures inside a single call (up to 3 extra attempts,
+                including for PUT). Pass False where the caller owns a bounded
+                retry policy of its own: an invisible transport retry would
+                multiply that bound and repeat a write the caller meant to
+                attempt exactly once.
 
         Returns:
             CloudantV1 client instance (caller owns this client)
@@ -66,7 +76,7 @@ class CouchDBClientFactory:
         Raises:
             ValueError: If URL is missing scheme (http/https)
             RuntimeError: If required env var is missing
-            ConnectionError: If connection verification fails
+            ExternalSystemUnavailableError: If connection verification fails
         """
         # Validate URL has scheme
         if not url.startswith(("http://", "https://")):
@@ -94,6 +104,8 @@ class CouchDBClientFactory:
                 authenticator=CouchDbSessionAuthenticator(user, password)
             )
             client.set_service_url(url)
+            if enable_retries:
+                client.enable_retries(max_retries=3, retry_interval=5.0)
 
             # Verify connection (fail fast)
             if verify_connection:
@@ -124,8 +136,19 @@ class CouchDBClientFactory:
             return client
 
         except Exception as e:
-            logger.error("Failed to connect to CouchDB at %s: %s", url, e)
-            raise ConnectionError(f"Failed to connect to CouchDB at {url}") from e
+            # The CLI owns the operator-facing ERROR log for expected startup
+            # failures. Keep the boundary detail available in development mode
+            # without reporting the same failure twice in production.
+            logger.debug("Failed to connect to CouchDB at %s: %s", url, e)
+            raise ExternalSystemUnavailableError(
+                "CouchDB",
+                url,
+                hint=(
+                    "Check network/VPN connectivity and the "
+                    "'external_systems.endpoints.couchdb' endpoint in the "
+                    "Yggdrasil config."
+                ),
+            ) from e
 
 
 class CouchDBHandler:
@@ -153,6 +176,7 @@ class CouchDBHandler:
         user_env: str,
         pass_env: str,
         logger: logging.Logger | None = None,
+        enable_retries: bool = True,
     ) -> None:
         """
         Initialize CouchDB handler for a specific database.
@@ -162,11 +186,14 @@ class CouchDBHandler:
             url: CouchDB server URL (must include http:// or https://)
             user_env: Environment variable name containing username
             pass_env: Environment variable name containing password
+            enable_retries: Whether the SDK may retry transient failures
+                inside one call; see CouchDBClientFactory.create_client
 
         Raises:
             ValueError: If URL is missing scheme
             RuntimeError: If required env var is missing
-            ConnectionError: If database doesn't exist or connection fails
+            ExternalSystemUnavailableError: If database doesn't exist or
+                connection fails
         """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         self.db_name = db_name
@@ -176,14 +203,26 @@ class CouchDBHandler:
             url=url,
             user_env=user_env,
             pass_env=pass_env,
+            enable_retries=enable_retries,
+        )
+
+        # Store URL and credentials for raw HTTP requests (validated by factory above)
+        self._url: str = url.rstrip("/")
+        self._auth: tuple[str, str] = (
+            os.environ[user_env],
+            os.environ[pass_env],
         )
 
         # Verify database exists (fail fast)
         try:
             self.server.get_database_information(db=db_name)
         except ApiException as e:
-            if e.code == 404:
-                raise ConnectionError(f"Database {db_name} does not exist") from e
+            if e.status_code == 404:
+                raise ExternalSystemUnavailableError(
+                    "CouchDB",
+                    url,
+                    hint=f"Database '{db_name}' does not exist on the server.",
+                ) from e
             raise
 
     def fetch_document_by_id(self, doc_id: str) -> dict[str, Any] | None:
@@ -207,7 +246,7 @@ class CouchDBHandler:
             )
             return None
         except ApiException as e:
-            if e.code == 404:
+            if e.status_code == 404:
                 self._logger.debug(
                     "Document '%s' not found in database '%s'",
                     doc_id,
@@ -218,13 +257,57 @@ class CouchDBHandler:
                 "Cloudant API error fetching '%s' from %s: %s %s",
                 doc_id,
                 self.db_name,
-                e.code,
+                e.status_code,
                 e.message,
             )
             raise
         except Exception as e:
             self._logger.error("Error while accessing database %s: %s", self.db_name, e)
             raise
+
+    def put_document(
+        self,
+        doc_id: str,
+        doc: dict[str, Any],
+        *,
+        rev: str | None = None,
+    ) -> dict[str, Any]:
+        """Write a document to the database by ID.
+
+        Args:
+            doc_id: Target document ID.
+            doc: Document body. Must NOT contain '_id' or '_rev' — this method
+                injects them. Caller contract: CouchDBExecutionClient.save() already
+                validates this at the realm-facing boundary; this check is a
+                defensive duplicate for any direct handler callers.
+            rev: Current document revision. Required for updates; absent for create.
+
+        Returns:
+            Response dict from CouchDB: {"id": ..., "rev": ..., "ok": True}.
+
+        Raises:
+            ValueError: doc contains '_id' or '_rev'.
+            ApiException: Propagated as-is. Callers distinguish:
+                409 Conflict — document exists (on create) or rev mismatch (on update).
+                404 Not Found — document absent (on update attempt).
+        """
+        reserved = {"_id", "_rev"} & doc.keys()
+        if reserved:
+            raise ValueError(
+                f"doc must not contain {sorted(reserved)!r}. "
+                "put_document() injects _id and _rev internally."
+            )
+        body = dict(doc)
+        body["_id"] = doc_id
+        if rev is not None:
+            body["_rev"] = rev
+
+        response = self.server.put_document(
+            db=self.db_name,
+            doc_id=doc_id,
+            document=cloudant_v1.Document.from_dict(body),
+        )
+        return response.get_result()
 
     def find_documents(
         self,
@@ -260,13 +343,21 @@ class CouchDBHandler:
                     "Unexpected non-dict response from post_find on '%s'", self.db_name
                 )
                 return []
+            warning = result.get("warning")
+            if warning:
+                self._logger.warning(
+                    "CouchDB Mango query on '%s' may be doing a full collection scan "
+                    "(no matching index): %s",
+                    self.db_name,
+                    warning,
+                )
             docs = result.get("docs", [])
             return docs if isinstance(docs, list) else []
         except ApiException as e:
             self._logger.error(
                 "Cloudant API error in find_documents on '%s': %s %s",
                 self.db_name,
-                e.code,
+                e.status_code,
                 e.message,
             )
             raise
@@ -276,92 +367,251 @@ class CouchDBHandler:
             )
             raise
 
-    def post_changes(
+    def post_document(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """Create a document and let CouchDB generate the document ID.
+
+        Unlike put_document(), the caller does not supply a doc_id. CouchDB
+        assigns a UUID. Use this when the logical identity of the document
+        will be determined by a selector or view query rather than a known ID.
+
+        Args:
+            doc: Document body. Must NOT contain '_id' or '_rev'.
+
+        Returns:
+            Response dict from CouchDB: {"id": <generated>, "rev": ..., "ok": True}.
+
+        Raises:
+            ValueError: doc contains '_id' or '_rev'.
+            ApiException: Propagated as-is on backend failure.
+        """
+        reserved = {"_id", "_rev"} & doc.keys()
+        if reserved:
+            raise ValueError(
+                f"doc must not contain {sorted(reserved)!r}. "
+                "post_document() does not accept pre-assigned identity fields."
+            )
+        body = dict(doc)
+        try:
+            response = self.server.post_document(
+                db=self.db_name,
+                document=cloudant_v1.Document.from_dict(body),
+            )
+            return response.get_result()
+        except ApiException as e:
+            self._logger.error(
+                "Cloudant API error in post_document on '%s': %s %s",
+                self.db_name,
+                e.status_code,
+                e.message,
+            )
+            raise
+        except Exception as e:
+            self._logger.error(
+                "Error in post_document on database '%s': %s", self.db_name, e
+            )
+            raise
+
+    def query_view(
+        self,
+        ddoc: str,
+        view: str,
+        *,
+        key: Any = None,
+        limit: int | None = None,
+        include_docs: bool = False,
+        reduce: bool = False,
+        stable: bool = False,
+    ) -> dict[str, Any]:
+        """Query a CouchDB view and return the raw result dict.
+
+        Callers access ``result["rows"]`` for the list of view rows.
+
+        Args:
+            ddoc: Design document name (without the ``_design/`` prefix).
+            view: View name within the design document.
+            key: Optional key to filter rows. When None, all rows are returned.
+                 Omitted from the request entirely when None — do not pass None
+                 to query for documents with a null key; that case is not
+                 supported by this method.
+            limit: Maximum number of rows to return. Omitted when None.
+            include_docs: If True, include full document bodies in each row.
+                          Defaults to False. Set to True when the caller needs
+                          ``_id`` and ``_rev`` without a separate fetch.
+            reduce: If True, run the view's reduce function. Defaults to False.
+                    Save-path callers must use False to get individual map rows
+                    with ``id`` fields — a reduce result has no row ``id``.
+            stable: If True, request a stable (potentially stale) view read.
+                    Defaults to False, which uses CouchDB's default (update
+                    before responding). Combining stable=True with update=True
+                    (the CouchDB default) is generally discouraged per IBM SDK
+                    docs — omit unless you have a specific reason.
+
+        Returns:
+            Raw result dict containing at least ``{"rows": [...]}``.
+
+        Raises:
+            ApiException: Propagated as-is on backend failure.
+        """
+        kwargs: dict[str, Any] = {
+            "db": self.db_name,
+            "ddoc": ddoc,
+            "view": view,
+            "include_docs": include_docs,
+            "reduce": reduce,
+            "stable": stable,
+        }
+        if key is not None:
+            kwargs["key"] = key
+        if limit is not None:
+            kwargs["limit"] = limit
+        try:
+            response = self.server.post_view(**kwargs)
+            result = response.get_result()
+            if not isinstance(result, dict):
+                self._logger.warning(
+                    "Unexpected non-dict response from post_view on '%s' ('%s/%s')",
+                    self.db_name,
+                    ddoc,
+                    view,
+                )
+                return {"rows": []}
+            return result
+        except ApiException as e:
+            self._logger.error(
+                "Cloudant API error in query_view on '%s' ('%s/%s'): %s %s",
+                self.db_name,
+                ddoc,
+                view,
+                e.status_code,
+                e.message,
+            )
+            raise
+        except Exception as e:
+            self._logger.error(
+                "Error in query_view on '%s' ('%s/%s'): %s",
+                self.db_name,
+                ddoc,
+                view,
+                e,
+            )
+            raise
+
+    def fetch_changes_raw(
         self,
         *,
         since: str | int | None = None,
-        include_docs: bool = True,
-        limit: int = 100,
-        feed: str | None = None,
-        timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
-        """
-        Fetch changes from the database's _changes feed.
+        feed: str = "normal",
+        limit: int | None = None,
+        timeout_ms: int = 30_000,
+    ) -> ChangesBatch:
+        """Fetch one ``_changes`` batch via a raw HTTP GET request.
 
-        This is a wrapper around the CloudantV1 post_changes API,
-        providing a simpler interface for watcher backends.
+        Uses ``requests`` directly (not the IBM SDK) so that exception types are
+        predictable and classifiable by :func:`is_transient_poll_error`.
 
         Args:
-            since: Sequence token to start from (default: "0" for all changes)
-                   Accepts int for convenience; normalized to str for SDK.
-            include_docs: Include full documents in response (default: True)
-            limit: Maximum number of changes to return (default: 100)
-            feed: CouchDB feed mode (e.g. "normal", "longpoll", "continuous")
-            timeout_ms: Optional request timeout in milliseconds
+            since:      Resume token.  ``None`` is sent as ``"0"`` (from the start).
+            feed:       CouchDB feed mode — ``"normal"`` or ``"longpoll"``.
+            limit:      Maximum rows to return.  ``None`` omits the parameter.
+            timeout_ms: CouchDB-internal timeout for longpoll.  A socket-level timeout
+                        of ``timeout_ms / 1000 + 5`` is applied to the HTTP request,
+                        giving CouchDB time to respond before the socket closes.
 
         Returns:
-            Dict with 'results' (list of changes) and 'last_seq' (checkpoint)
+            Parsed :class:`ChangesBatch`.
 
         Raises:
-            ApiException: If the CouchDB API call fails
-            TypeError: If response is not a dict (unexpected SDK behavior)
+            requests.exceptions.Timeout:         Socket/read timeout.
+            requests.exceptions.ConnectionError: Network-level failure.
+            requests.exceptions.HTTPError:       Non-2xx HTTP response (after
+                                                 ``raise_for_status()``).
+            ValueError / KeyError:               Malformed JSON response.
         """
-        # Normalize since to str (SDK expects str | None)
-        if since is None:
-            since_str: str | None = None  # Let SDK use default
-        else:
-            since_str = str(since)
-
-        request: dict[str, Any] = {
-            "db": self.db_name,
-            "since": since_str,
-            "include_docs": include_docs,
-            "limit": limit,
+        url = f"{self._url}/{self.db_name}/_changes"
+        params: dict[str, Any] = {
+            "feed": feed,
+            "since": since if since is not None else "0",
+            "include_docs": "false",
         }
-        if feed is not None:
-            request["feed"] = feed
-        if timeout_ms is not None:
-            request["timeout"] = timeout_ms
+        if limit is not None:
+            params["limit"] = limit
+        if feed == "longpoll":
+            # Pass CouchDB's own timeout so it returns before the socket closes
+            params["timeout"] = timeout_ms
 
-        response = self.server.post_changes(**request)
-        result = response.get_result()
-        if isinstance(result, dict):
-            return result
-        # Unexpected SDK response - fail explicitly
-        raise TypeError(
-            f"post_changes returned non-dict result: {type(result).__name__}"
+        socket_timeout = timeout_ms / 1000 + 5  # 5 s margin beyond CouchDB timeout
+        response = requests.get(
+            url,
+            params=params,
+            auth=self._auth,
+            timeout=socket_timeout,
+        )
+        response.raise_for_status()
+
+        data: dict[str, Any] = response.json()
+        rows: list[ChangesRow] = []
+        for r in data.get("results", []):
+            changes_list = r.get("changes")
+            rev = changes_list[0]["rev"] if changes_list else None
+            rows.append(
+                ChangesRow(
+                    id=r["id"],
+                    seq=r["seq"],
+                    deleted=r.get("deleted", False),
+                    rev=rev,
+                )
+            )
+        return ChangesBatch(
+            rows=rows,
+            last_seq=data.get("last_seq"),
+            pending=int(data.get("pending", 0)),
         )
 
-    def fetch_changes_batch(
-        self,
-        *,
-        since: str | None = None,
-        include_docs: bool = True,
-        limit: int = 100,
-        feed: str = "normal",
-        timeout_ms: int | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """Fetch one _changes batch and return ``(results, last_seq)``.
 
-        This is intentionally a single-request helper. It performs no polling,
-        retries, sleeping, or checkpointing.
-        """
-        result = self.post_changes(
-            since=since,
-            include_docs=include_docs,
-            limit=limit,
-            feed=feed,
-            timeout_ms=timeout_ms,
-        )
+def is_transient_poll_error(exc: Exception) -> bool:
+    """Return True for transient ``_changes`` polling failures (requests-based).
 
-        raw_results = result.get("results", []) if isinstance(result, dict) else []
-        if isinstance(raw_results, list):
-            results: list[dict[str, Any]] = [
-                item for item in raw_results if isinstance(item, dict)
-            ]
-        else:
-            results = []
+    Used **only** for errors raised by :meth:`CouchDBHandler.fetch_changes_raw`,
+    which uses the ``requests`` library directly.
 
-        last_seq = result.get("last_seq") if isinstance(result, dict) else None
-        last_seq_str = str(last_seq) if last_seq is not None else None
-        return results, last_seq_str
+    Classification:
+    - ``requests.Timeout`` / ``ConnectionError`` → transient (network)
+    - HTTP 5xx → transient (server-side)
+    - HTTP 4xx (other), parse errors → permanent
+    """
+    if isinstance(
+        exc, requests.exceptions.Timeout | requests.exceptions.ConnectionError
+    ):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        return status is not None and status >= 500
+    return False
+
+
+def is_transient_doc_fetch_error(exc: Exception) -> bool:
+    """Return True for transient document fetch failures (IBM SDK-based).
+
+    Used **only** for errors raised by :meth:`CouchDBHandler.fetch_document_by_id`,
+    which uses the IBM CloudantV1 SDK.
+
+    Note: 404 is *not* raised by ``fetch_document_by_id`` — it returns ``None`` instead.
+    So this function will never be called for a 404.
+
+    Classification:
+    - ``ApiException`` with 5xx or 429 → transient
+    - ``ApiException`` with 4xx other → permanent
+    - ``requests.Timeout`` / ``ConnectionError`` → transient (defensive; SDK may surface these)
+    - Other exceptions → permanent
+    """
+    # Duck-type check: any exception with an integer status_code is treated as
+    # an API-style error (covers real ApiException and test mocks alike).
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status >= 500 or status == 429
+    # Defensive: IBM SDK may surface network failures as requests exceptions in some versions
+    if isinstance(
+        exc, requests.exceptions.Timeout | requests.exceptions.ConnectionError
+    ):
+        return True
+    return False

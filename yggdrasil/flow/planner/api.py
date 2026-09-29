@@ -36,9 +36,9 @@ class PlanDraft:
     plan: Plan
     auto_run: bool = True  # False => hold for human approval
     approvals_required: list[str] = field(default_factory=list)
-    notes: str = ""  # human summary for Genstat
+    notes: str = ""  # human-readable plan summary
     preview: dict[str, Any] = field(default_factory=dict)  # structured UI data
 
 
 class Planner(Protocol):
-    def generate(self, ctx: PlanningContext) -> PlanDraft: ...
+    def generate(self, ctx: PlanningContext) -> list[PlanDraft]: ...

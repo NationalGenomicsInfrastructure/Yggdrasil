@@ -602,7 +602,7 @@ class TestPlannerProtocol(unittest.TestCase):
                     scope=ctx.scope,
                     steps=[],
                 )
-                return PlanDraft(plan=plan)
+                return [PlanDraft(plan=plan)]
 
         planner = CustomPlanner()
         self.assertTrue(hasattr(planner, "generate"))
@@ -614,14 +614,14 @@ class TestPlannerProtocol(unittest.TestCase):
         try:
 
             class SimplePlanner:
-                def generate(self, ctx: PlanningContext) -> PlanDraft:
+                def generate(self, ctx: PlanningContext) -> list[PlanDraft]:
                     plan = Plan(
                         plan_id=f"plan_{ctx.scope.get('id', 'unknown')}",
                         realm=ctx.realm,
                         scope=ctx.scope,
                         steps=[],
                     )
-                    return PlanDraft(plan=plan, auto_run=True)
+                    return [PlanDraft(plan=plan, auto_run=True)]
 
             planner = SimplePlanner()
             ctx = PlanningContext(
@@ -634,8 +634,11 @@ class TestPlannerProtocol(unittest.TestCase):
                 data=Mock(),
             )
 
-            draft = planner.generate(ctx)
+            drafts = planner.generate(ctx)
 
+            self.assertIsInstance(drafts, list)
+            self.assertEqual(len(drafts), 1)
+            draft = drafts[0]
             self.assertIsInstance(draft, PlanDraft)
             self.assertEqual(draft.plan.plan_id, "plan_P123")
             self.assertTrue(draft.auto_run)
@@ -648,7 +651,7 @@ class TestPlannerProtocol(unittest.TestCase):
         try:
 
             class ConditionalPlanner:
-                def generate(self, ctx: PlanningContext) -> PlanDraft:
+                def generate(self, ctx: PlanningContext) -> list[PlanDraft]:
                     plan = Plan(
                         plan_id="conditional_plan",
                         realm=ctx.realm,
@@ -660,9 +663,11 @@ class TestPlannerProtocol(unittest.TestCase):
                     auto_run = ctx.realm != "production"
                     approvals = ["manager"] if ctx.realm == "production" else []
 
-                    return PlanDraft(
-                        plan=plan, auto_run=auto_run, approvals_required=approvals
-                    )
+                    return [
+                        PlanDraft(
+                            plan=plan, auto_run=auto_run, approvals_required=approvals
+                        )
+                    ]
 
             planner = ConditionalPlanner()
 
@@ -676,7 +681,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 reason="test",
                 data=Mock(),
             )
-            draft_prod = planner.generate(ctx_prod)
+            draft_prod = planner.generate(ctx_prod)[0]
 
             self.assertFalse(draft_prod.auto_run)
             self.assertIn("manager", draft_prod.approvals_required)
@@ -691,7 +696,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 reason="test",
                 data=Mock(),
             )
-            draft_test = planner.generate(ctx_test)
+            draft_test = planner.generate(ctx_test)[0]
 
             self.assertTrue(draft_test.auto_run)
             self.assertEqual(draft_test.approvals_required, [])
@@ -704,7 +709,7 @@ class TestPlannerProtocol(unittest.TestCase):
         try:
 
             class DataDrivenPlanner:
-                def generate(self, ctx: PlanningContext) -> PlanDraft:
+                def generate(self, ctx: PlanningContext) -> list[PlanDraft]:
                     sample_count = ctx.source_doc.get("sample_count", 0)
 
                     steps = []
@@ -725,10 +730,12 @@ class TestPlannerProtocol(unittest.TestCase):
                         steps=steps,
                     )
 
-                    return PlanDraft(
-                        plan=plan,
-                        preview={"sample_count": sample_count},
-                    )
+                    return [
+                        PlanDraft(
+                            plan=plan,
+                            preview={"sample_count": sample_count},
+                        )
+                    ]
 
             planner = DataDrivenPlanner()
             ctx = PlanningContext(
@@ -741,7 +748,7 @@ class TestPlannerProtocol(unittest.TestCase):
                 data=Mock(),
             )
 
-            draft = planner.generate(ctx)
+            draft = planner.generate(ctx)[0]
 
             self.assertEqual(len(draft.plan.steps), 1)
             self.assertEqual(draft.plan.steps[0].params["count"], 5)

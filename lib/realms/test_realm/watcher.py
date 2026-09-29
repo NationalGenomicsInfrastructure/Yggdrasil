@@ -3,6 +3,12 @@ Test realm watcher for monitoring test scenario documents.
 
 ScenarioDocWatcher monitors the 'yggdrasil' database for documents with
 type="ygg_test_scenario" and emits TEST_SCENARIO_CHANGE events.
+
+DEAD CODE — not wired anywhere: test_realm registers generic WatchSpecs
+instead (see lib/realms/test_realm/__init__.py). Constructs
+YggdrasilDBManager / CouchDBCheckpointStore directly, bypassing the
+internal-storage bundle. Scheduled for removal with the deprecation
+cleanup. See docs/TECH_DEBT_LEDGER.md #15.
 """
 
 import asyncio

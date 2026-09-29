@@ -1,13 +1,73 @@
+"""Turn the event spool into ``plan_status`` snapshots.
+
+The consumer reads the layout :class:`~yggdrasil.flow.events.emitter.FileSpoolEmitter`
+writes (see :mod:`yggdrasil.flow.events.attempt_records`)::
+
+    <spool>/<realm>/<plan_id>/attempts/<execution_id>/plan_attempt_started.json
+    <spool>/<realm>/<plan_id>/attempts/<execution_id>/plan_attempt_report.json
+    <spool>/<realm>/<plan_id>/attempts/<execution_id>/steps/<step_id>/*.json
+
+and hands what it finds to :mod:`lib.ops.snapshot`, which decides what the
+snapshot shows: the execution status of the latest observed attempt, or a
+labelled legacy projection for a plan with none.
+
+An attempt is *observed* once its directory holds a start or report record
+whose ``execution_id`` names that directory. Attempt directories are tried
+newest first, and an empty one, such as a reservation that a cancellation or a
+crash left unused, is passed over: it still counts for the execution-ID
+allocator, which orders new attempts above every attempt directory, but it
+never looks like a running attempt.
+
+Reading stays proportional to what the shown attempt left behind, not to the
+plan's history: the consumer lists the plan's attempt directories, opens the
+two record files of each newer unobserved one, and reads only the shown
+attempt's records and the directories of the steps it planned. It opens
+nothing in any older attempt's directory.
+
+Events published before attempts were correlated sit in the older layout,
+``<plan_id>/<step_id>/<run_id>/``, and are read only for a legacy projection.
+That traversal skips ``attempts/``, and nothing from it is ever mixed into an
+attempt. A :class:`SpoolIndex` remembers which attempt each such run directory
+belongs to, from cycle to cycle.
+
+Reading is best effort: unreadable or unparsable files and directories are
+skipped rather than stopping the consumer.
+"""
+
 from __future__ import annotations
 
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from lib.core_utils.logging_utils import custom_logger
+from lib.ops.snapshot import (
+    PROJECTION_ATTEMPT,
+    PROJECTION_LEGACY,
+    AttemptEvents,
+    SpooledEvent,
+    StepRun,
+    attempts_newest_first,
+    execution_of,
+    order_events,
+    planned_step_ids,
+    project_attempt,
+    project_legacy,
+    run_id_of,
+)
+from yggdrasil.flow.events.attempt_records import (
+    ATTEMPT_REPORT_EVENT,
+    ATTEMPT_STARTED_EVENT,
+    ATTEMPTS_DIR,
+    STEP_BLOCKED_EVENT,
+    STEPS_DIR,
+    record_filename,
+    step_events_dir,
+    step_id_of_dir,
+)
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
 logger = custom_logger(__name__)
@@ -15,29 +75,92 @@ logger = custom_logger(__name__)
 PlanFilter = Callable[[str, str], bool] | None
 
 
+class SpoolIndex:
+    """Which attempt each legacy step run directory belongs to, across cycles.
+
+    Only the legacy projection searches run directories; an attempt's own
+    events need no search. A run directory's first event names the attempt it
+    belongs to, and that never changes. Remembering it means a run directory
+    is opened once rather than on every cycle, however long a plan's history
+    grows. Entries not consulted during a cycle are dropped when it ends, so
+    the index holds no more than what the consumer still reads.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing known."""
+        self._previous: dict[Path, str | None] = {}
+        self._current: dict[Path, str | None] = {}
+
+    def run_owner(self, run_dir: Path) -> tuple[bool, str | None]:
+        """Return which attempt a run directory belongs to, if that is known yet.
+
+        Args:
+            run_dir: The run directory.
+
+        Returns:
+            tuple[bool, str | None]: Whether its first event could be read,
+            and the execution ID it names (None for an uncorrelated run). A
+            directory whose first event cannot be read yet is not remembered.
+        """
+        if run_dir in self._current:
+            return True, self._current[run_dir]
+        if run_dir in self._previous:
+            owner = self._previous.pop(run_dir)
+        else:
+            first = next(
+                (e for e in map(_load_event, _event_files(run_dir)) if e is not None),
+                None,
+            )
+            if first is None:
+                return False, None
+            owner = execution_of(first)
+        self._current[run_dir] = owner
+        return True, owner
+
+    def end_cycle(self) -> None:
+        """Forget every run directory not consulted since the last call."""
+        self._previous, self._current = self._current, {}
+
+
 @dataclass
 class FileSpoolConsumer:
+    """Writes a ``plan_status`` snapshot of every plan in the spool, per cycle.
+
+    Attributes:
+        spool_root: The spool to read.
+        writer: Where snapshots are written (an ``OpsSnapshotSink``).
+        filt: Selects the (realm, plan ID) pairs to consume; all when None.
+        index: What is known about the spool from earlier cycles.
+    """
+
     spool_root: Path
     writer: Any  # SnapshotWriter, CouchWriter, etc.
     filt: PlanFilter = None
+    index: SpoolIndex = field(default_factory=SpoolIndex)
 
     def consume(self) -> None:
+        """Write the current snapshot of every plan with a known scope."""
         root = self.spool_root
         if not root.exists():
             return
-        for realm_dir in (p for p in root.iterdir() if p.is_dir()):
-            realm = realm_dir.name
-            for plan_dir in (p for p in realm_dir.iterdir() if p.is_dir()):
-                plan_id = plan_dir.name
-                if self.filt and not self.filt(realm, plan_id):
-                    continue
-                snapshot = build_plan_snapshot(plan_dir, realm, plan_id)
-                if not snapshot.get("scope"):
-                    logger.warning(
-                        f"Missing scope in plan.json for {realm}/{plan_id}; skipping..."
+        try:
+            for realm_dir in (p for p in root.iterdir() if p.is_dir()):
+                realm = realm_dir.name
+                for plan_dir in (p for p in realm_dir.iterdir() if p.is_dir()):
+                    plan_id = plan_dir.name
+                    if self.filt and not self.filt(realm, plan_id):
+                        continue
+                    snapshot = build_plan_snapshot(
+                        plan_dir, realm, plan_id, index=self.index
                     )
-                    continue
-                self.writer.write(plan_dir, snapshot)
+                    if not snapshot.get("scope"):
+                        logger.warning(
+                            f"Missing scope in plan.json for {realm}/{plan_id}; skipping..."
+                        )
+                        continue
+                    self.writer.write(plan_dir, snapshot)
+        finally:
+            self.index.end_cycle()
 
     # NOTE: For dev purposes, it keeps on consuming
     def follow(self, interval_sec: float = 2.0) -> None:
@@ -73,10 +196,15 @@ def _safe_load(p: Path) -> dict[str, Any]:
 def _find_any_event(plan_spool_dir: Path) -> dict[str, Any] | None:
     """Locate an early event (prefer 'plan.draft') to extract scope.
 
+    Reads only the older layout, for a legacy projection; ``attempts/`` is
+    never searched.
+
     Expected layout:
         <spool>/<realm>/<plan_id>/<step_id>/<run_id>/*.json
     Fallback layout (pre-engine draft):
         <spool>/<realm>/<plan_id>/<step_id>/*.json
+    Plan-level records, used when no step event carries a scope:
+        <spool>/<realm>/<plan_id>/*.json
     """
 
     def _load_first_json(files: list[Path]) -> dict[str, Any] | None:
@@ -91,7 +219,7 @@ def _find_any_event(plan_spool_dir: Path) -> dict[str, Any] | None:
                 continue
         return None
 
-    for step_dir in (p for p in plan_spool_dir.iterdir() if p.is_dir()):
+    for step_dir in _legacy_step_dirs(plan_spool_dir):
         run_dirs = [r for r in step_dir.iterdir() if r.is_dir()]
 
         # 1) Fallback: files directly under step_dir (e.g., plan.draft)
@@ -113,7 +241,8 @@ def _find_any_event(plan_spool_dir: Path) -> dict[str, Any] | None:
             if ev:
                 return ev
 
-    return None
+    # 3) Plan-level records
+    return _load_first_json(_event_files(plan_spool_dir))
 
 
 def _read_scope_from_spool(plan_spool_dir: Path) -> dict[str, Any]:
@@ -121,34 +250,287 @@ def _read_scope_from_spool(plan_spool_dir: Path) -> dict[str, Any]:
     return (ev.get("scope") if isinstance(ev, dict) else {}) or {}
 
 
-def build_plan_snapshot(plan_dir: Path, realm: str, plan_id: str) -> dict[str, Any]:
-    scope = _read_scope_from_spool(plan_dir)  # <-- use events, not plan.json
-    steps: dict[str, Any] = {}
-    for step_dir in (p for p in plan_dir.iterdir() if p.is_dir()):
-        run_dirs = [d for d in step_dir.iterdir() if d.is_dir()]
-        if not run_dirs:
-            continue
-        run_dir = sorted(run_dirs)[-1]
-        events = sorted(
-            e for e in run_dir.glob("*.json") if not e.name.endswith(".tmp")
+def _legacy_step_dirs(plan_dir: Path) -> list[Path]:
+    """Return a plan's step directories in the older, legacy layout.
+
+    Args:
+        plan_dir: The plan's spool directory.
+
+    Returns:
+        list[Path]: Its subdirectories other than ``attempts``, in name order.
+    """
+    return [path for path in _subdirectories(plan_dir) if path.name != ATTEMPTS_DIR]
+
+
+def _event_files(directory: Path) -> list[Path]:
+    """Return the event files directly in a directory, in name order.
+
+    Only files count: the directory of a step nested below can end in
+    ``.json`` too.
+
+    Args:
+        directory: The directory to list.
+
+    Returns:
+        list[Path]: Its ``*.json`` files; none if it cannot be listed.
+    """
+    try:
+        return sorted(
+            path
+            for path in directory.iterdir()
+            if path.suffix == ".json" and path.is_file()
         )
-        if not events:
-            continue
-        last = _safe_load(events[-1])
-        steps[step_dir.name] = {
-            "step_name": last.get("step_name", ""),
-            "state": last.get("type", "unknown"),
-            "run_id": run_dir.name,
-            "fingerprint": last.get("fingerprint"),
-            "progress": last.get(
-                "progress",
-                100 if str(last.get("type", "")).endswith("succeeded") else 0,
+    except OSError:
+        return []
+
+
+def _subdirectories(directory: Path) -> list[Path]:
+    """Return the directories directly in a directory, in name order.
+
+    Args:
+        directory: The directory to list.
+
+    Returns:
+        list[Path]: Its subdirectories; none if it cannot be listed.
+    """
+    try:
+        return sorted(path for path in directory.iterdir() if path.is_dir())
+    except OSError:
+        return []
+
+
+def _load_event(path: Path) -> dict[str, Any] | None:
+    """Parse one event file.
+
+    Args:
+        path: The event file.
+
+    Returns:
+        dict[str, Any] | None: The event; None if the file is unreadable or
+        does not hold a JSON object.
+    """
+    event = _safe_load(path)
+    return event if isinstance(event, dict) and event else None
+
+
+def _load_events(paths: list[Path]) -> list[SpooledEvent]:
+    """Parse event files, skipping any that do not hold an event.
+
+    Args:
+        paths: The event files.
+
+    Returns:
+        list[SpooledEvent]: The events, with their file names.
+    """
+    loaded: list[SpooledEvent] = []
+    for path in paths:
+        event = _load_event(path)
+        if event is not None:
+            loaded.append(SpooledEvent(path.name, event))
+    return loaded
+
+
+def _latest_run(
+    step_dir: Path, execution_id: str | None, index: SpoolIndex
+) -> StepRun | None:
+    """Return a step's newest legacy run that belongs to one attempt.
+
+    A run's attempt is read from its first event: every event of one run
+    belongs to the same attempt. Run directories are tried newest first; the
+    search does not rely on that, since a clock set back can name a newer run
+    lower.
+
+    Args:
+        step_dir: The step's legacy spool directory.
+        execution_id: The attempt; None for a legacy, uncorrelated run.
+        index: Which attempt each run directory belongs to, as far as known.
+
+    Returns:
+        StepRun | None: The run with all its events; None if the step has no
+        run of that attempt.
+    """
+    for run_dir in reversed(_subdirectories(step_dir)):
+        known, owner = index.run_owner(run_dir)
+        if known and owner == execution_id:
+            return StepRun(run_dir.name, _load_events(_event_files(run_dir)))
+    return None
+
+
+def _attempt_record(attempt_directory: Path, event_type: str) -> dict[str, Any] | None:
+    """Return one of an attempt's plan-level records, if it holds a valid one.
+
+    A record counts only if it is the type its file name says and names the
+    attempt its directory is named after, so a copied or misplaced record
+    never makes an attempt observed.
+
+    Args:
+        attempt_directory: The attempt's directory.
+        event_type: The record type.
+
+    Returns:
+        dict[str, Any] | None: The record; None if it is missing, unreadable
+        or does not belong there.
+    """
+    record = _load_event(attempt_directory / record_filename(event_type))
+    if (
+        record is not None
+        and record.get("type") == event_type
+        and execution_of(record) == attempt_directory.name
+    ):
+        return record
+    return None
+
+
+def _latest_observed_attempt(plan_dir: Path) -> tuple[Path, AttemptEvents] | None:
+    """Find the newest attempt at a plan that has a start or report record.
+
+    Args:
+        plan_dir: The plan's spool directory.
+
+    Returns:
+        tuple[Path, AttemptEvents] | None: The attempt's directory, and its
+        records (without its step events yet); None if no attempt at the plan
+        is observed.
+    """
+    directories = {path.name: path for path in _subdirectories(plan_dir / ATTEMPTS_DIR)}
+    for execution_id in attempts_newest_first(directories):
+        directory = directories[execution_id]
+        started = _attempt_record(directory, ATTEMPT_STARTED_EVENT)
+        report = _attempt_record(directory, ATTEMPT_REPORT_EVENT)
+        if started is not None or report is not None:
+            return directory, AttemptEvents(
+                execution_id=execution_id, started=started, report=report
+            )
+    return None
+
+
+def _attempt_events(attempt_directory: Path, attempt: AttemptEvents) -> AttemptEvents:
+    """Gather the step events of an observed attempt.
+
+    Each step the attempt planned is read from its own directory (see
+    :func:`~yggdrasil.flow.events.attempt_records.step_events_dir`), and only
+    the files directly in it, so steps whose IDs nest (``lane_1`` and
+    ``lane_1/process``) never mix. Only when the attempt's records list no
+    steps at all are the step directories listed instead, which recovers
+    step IDs without ``/`` only.
+
+    Args:
+        attempt_directory: The attempt's directory.
+        attempt: The attempt's records.
+
+    Returns:
+        AttemptEvents: The attempt, with each step's evaluation and its
+        ``step.blocked`` event. Events naming another attempt are dropped.
+    """
+    step_ids = planned_step_ids(attempt)
+    if step_ids is None:
+        step_ids = [
+            step_id_of_dir(path.name)
+            for path in _subdirectories(attempt_directory / STEPS_DIR)
+        ]
+
+    runs: dict[str, StepRun] = {}
+    blocked: dict[str, dict[str, Any]] = {}
+    for step_id in step_ids:
+        events = [
+            item
+            for item in _load_events(
+                _event_files(step_events_dir(attempt_directory, step_id))
+            )
+            if execution_of(item.event) == attempt.execution_id
+        ]
+        evaluation = [
+            item for item in events if item.event.get("type") != STEP_BLOCKED_EVENT
+        ]
+        if evaluation:
+            runs[step_id] = StepRun(run_id_of(evaluation), evaluation)
+        block = next(
+            (
+                event
+                for event in order_events(events)
+                if event.get("type") == STEP_BLOCKED_EVENT
             ),
-            "artifacts": last.get("artifacts", []),
-            "metrics": last.get("metrics", {}),
-            "job": last.get("job"),
-            "ts": last.get("ts"),
+            None,
+        )
+        if block is not None:
+            blocked[step_id] = block
+    return replace(attempt, runs=runs, blocked=blocked)
+
+
+def _attempt_scope(attempt: AttemptEvents) -> dict[str, Any]:
+    """Return the scope an attempt's own events carry, if any.
+
+    Its plan-level records first, then its step events; never anything from
+    outside the attempt.
+
+    Args:
+        attempt: The attempt's events.
+
+    Returns:
+        dict[str, Any]: The scope; empty if none of its events carries one.
+    """
+    candidates: list[Any] = [attempt.started, attempt.report]
+    for run in attempt.runs.values():
+        candidates.extend(order_events(run.events))
+    candidates.extend(attempt.blocked.values())
+    for event in candidates:
+        scope = event.get("scope") if event is not None else None
+        if isinstance(scope, dict) and scope:
+            return scope
+    return {}
+
+
+def build_plan_snapshot(
+    plan_dir: Path, realm: str, plan_id: str, *, index: SpoolIndex | None = None
+) -> dict[str, Any]:
+    """Build the ``plan_status`` snapshot of one plan from its spool directory.
+
+    The snapshot is the execution status of one attempt: the latest observed
+    one, finished or not, with every step it planned (see
+    :mod:`lib.ops.snapshot`). A plan with no observed attempt is shown as a
+    legacy projection instead.
+
+    Snapshot fields, beyond ``type``, ``realm``, ``plan_id`` and ``updated_at``:
+
+    - ``scope``: from the attempt's own events; for a legacy projection, from
+      the first legacy event that carries one.
+    - ``projection``: ``attempt``, or ``legacy`` for uncorrelated histories,
+      whose steps are each step's latest run and need not belong to one
+      attempt.
+    - ``attempt``: the attempt summary (identity, ``state`` running or
+      finished, and, once finished, termination reason, outcome, counts and
+      diagnostic); None for a legacy projection.
+    - ``steps``: an entry per step, by step ID.
+
+    Args:
+        plan_dir: The plan's spool directory.
+        realm: The plan's realm.
+        plan_id: The plan.
+        index: What earlier cycles learned about legacy run directories; a
+            fresh one when omitted.
+
+    Returns:
+        dict[str, Any]: The snapshot.
+    """
+    index = index if index is not None else SpoolIndex()
+    observed = _latest_observed_attempt(plan_dir)
+
+    attempt_summary: dict[str, Any] | None = None
+    if observed is None:
+        projection = PROJECTION_LEGACY
+        legacy_runs = {
+            step_dir.name: run
+            for step_dir in _legacy_step_dirs(plan_dir)
+            if (run := _latest_run(step_dir, None, index)) is not None
         }
+        steps = project_legacy(legacy_runs)
+        scope = _read_scope_from_spool(plan_dir)  # <-- use events, not plan.json
+    else:
+        projection = PROJECTION_ATTEMPT
+        attempt = _attempt_events(*observed)
+        attempt_summary, steps = project_attempt(attempt)
+        scope = _attempt_scope(attempt)
+
     # updated_at via your common util if you have it
     try:
         now = utcnow_iso()
@@ -159,6 +541,8 @@ def build_plan_snapshot(plan_dir: Path, realm: str, plan_id: str) -> dict[str, A
         "realm": realm,
         "plan_id": plan_id,
         "scope": scope,
+        "projection": projection,
+        "attempt": attempt_summary,
         "steps": steps,
         "updated_at": now,
     }

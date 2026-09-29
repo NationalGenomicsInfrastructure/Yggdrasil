@@ -8,11 +8,16 @@ grouping/deduplication, and config resolution.
 import asyncio
 import unittest
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from lib.core_utils.event_types import EventType
 from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
 from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from lib.watchers.config_validation import WatcherConfigurationError
 from lib.watchers.manager import WatcherBackendGroup, WatcherManager
+from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 
 class MockWatcherBackend(WatcherBackend):
@@ -45,6 +50,24 @@ class MockWatcherBackend(WatcherBackend):
     async def stop(self) -> None:
         await super().stop()
         self._stopped = True
+
+
+def _make_bound_spec(
+    *,
+    realm_id: str = "test_realm",
+    backend: str = "couchdb",
+    connection: str = "projects_db",
+) -> BoundWatchSpec:
+    return BoundWatchSpec(
+        spec=WatchSpec(
+            backend=backend,
+            connection=connection,
+            event_type=EventType.COUCHDB_DOC_CHANGED,
+            build_scope=lambda event: {"kind": "doc", "id": event.id},
+            build_payload=lambda event: {"doc": event.doc},
+        ),
+        realm_id=realm_id,
+    )
 
 
 class TestWatcherBackendGroup(unittest.TestCase):
@@ -122,9 +145,9 @@ class TestWatcherManagerGrouping(unittest.TestCase):
             checkpoint_store=self.store,
         )
 
-    def test_add_watcher_group_creates_group(self):
-        """Test add_watcher_group creates a new group."""
-        group = self.manager.add_watcher_group(
+    def test_ensure_watcher_group_creates_group(self):
+        """Test _ensure_watcher_group creates a new group."""
+        group = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
@@ -132,13 +155,13 @@ class TestWatcherManagerGrouping(unittest.TestCase):
         self.assertEqual(group.backend_type, "couchdb")
         self.assertEqual(group.connection, "projects_db")
 
-    def test_add_watcher_group_deduplicates(self):
-        """Test add_watcher_group returns existing group on duplicate."""
-        group1 = self.manager.add_watcher_group(
+    def test_ensure_watcher_group_deduplicates(self):
+        """Test _ensure_watcher_group returns existing group on duplicate."""
+        group1 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
-        group2 = self.manager.add_watcher_group(
+        group2 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
@@ -148,11 +171,11 @@ class TestWatcherManagerGrouping(unittest.TestCase):
 
     def test_different_connections_create_separate_groups(self):
         """Test different connections create separate groups."""
-        group1 = self.manager.add_watcher_group(
+        group1 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="projects_db",
         )
-        group2 = self.manager.add_watcher_group(
+        group2 = self.manager._ensure_watcher_group(
             backend_type="couchdb",
             connection="yggdrasil_db",
         )
@@ -190,9 +213,11 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
                 },
             },
             "defaults": {
-                "start_seq": "0",
-                "poll_interval": 5,
-                "include_docs": False,
+                "couchdb": {
+                    "start_seq": "0",
+                    "poll_interval": 5,
+                    "include_docs": False,
+                }
             },
         }
         self.store = InMemoryCheckpointStore()
@@ -283,6 +308,142 @@ class TestWatcherManagerConfigResolution(unittest.TestCase):
         with self.assertRaises(KeyError):
             manager._resolve_connection_config("projects_db")
 
+    def test_defaults_couchdb_start_seq_reaches_backend_config(self):
+        """defaults.couchdb.start_seq is merged into resolved watcher config."""
+        cfg = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "http://couch.example.org:5984",
+                    "auth": {"user_env": "U", "pass_env": "P"},
+                }
+            },
+            "connections": {
+                "my_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                    # No watch block — defaults should apply
+                }
+            },
+            "defaults": {"couchdb": {"start_seq": "42"}},
+        }
+        manager = WatcherManager(config=cfg, checkpoint_store=self.store)
+        resolved = manager._resolve_connection_config("my_db")
+        self.assertEqual(resolved["start_seq"], "42")
+
+    def test_connection_watch_start_seq_overrides_defaults_couchdb(self):
+        """connection.watch.start_seq takes precedence over defaults.couchdb.start_seq."""
+        cfg = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "http://couch.example.org:5984",
+                    "auth": {"user_env": "U", "pass_env": "P"},
+                }
+            },
+            "connections": {
+                "my_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                    "watch": {"start_seq": "now"},
+                }
+            },
+            "defaults": {"couchdb": {"start_seq": "0"}},
+        }
+        manager = WatcherManager(config=cfg, checkpoint_store=self.store)
+        resolved = manager._resolve_connection_config("my_db")
+        self.assertEqual(resolved["start_seq"], "now")
+
+    def test_defaults_other_backend_type_does_not_bleed(self):
+        """defaults for a different backend type are not applied to a couchdb connection."""
+        cfg = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "http://couch.example.org:5984",
+                    "auth": {"user_env": "U", "pass_env": "P"},
+                }
+            },
+            "connections": {
+                "my_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "mydb"},
+                }
+            },
+            "defaults": {
+                "postgres": {"start_seq": "99", "poll_interval": 30},
+            },
+        }
+        manager = WatcherManager(config=cfg, checkpoint_store=self.store)
+        resolved = manager._resolve_connection_config("my_db")
+        self.assertNotIn("start_seq", resolved)
+        self.assertNotIn("poll_interval", resolved)
+
+
+class TestWatcherManagerConfigValidation(unittest.TestCase):
+    """Tests for WatcherManager watcher/config validation adapter."""
+
+    def setUp(self):
+        WatcherManager._backend_registry.clear()
+        WatcherManager.register_backend("couchdb", MockWatcherBackend)
+        self.config = {
+            "endpoints": {
+                "couchdb": {
+                    "backend": "couchdb",
+                    "url": "https://couch.example.org",
+                    "auth": {},
+                }
+            },
+            "connections": {
+                "projects_db": {
+                    "endpoint": "couchdb",
+                    "resource": {"db": "projects"},
+                },
+            },
+        }
+        self.store = InMemoryCheckpointStore()
+
+    def tearDown(self):
+        WatcherManager._backend_registry.clear()
+
+    def test_validate_configuration_delegates_to_helper(self):
+        """validate_configuration passes registered BoundWatchSpecs to helper."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            config_path=Path("/tmp/main.json"),
+        )
+        bound_spec = _make_bound_spec()
+        manager.add_watchspec(bound_spec)
+
+        with patch(
+            "lib.watchers.manager.validate_watcher_config_wiring"
+        ) as mock_validate:
+            manager.validate_configuration()
+
+        mock_validate.assert_called_once()
+        kwargs = mock_validate.call_args.kwargs
+        self.assertEqual(kwargs["bound_specs"], [bound_spec])
+        self.assertEqual(kwargs["external_systems"], self.config)
+        self.assertEqual(kwargs["backend_registry"], WatcherManager._backend_registry)
+        self.assertEqual(kwargs["config_path"], Path("/tmp/main.json"))
+
+    def test_instantiate_watcher_backends_raises_watcher_config_error(self):
+        """Instantiation defensively validates registered WatchSpecs first."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+        )
+        manager.add_watchspec(_make_bound_spec(connection="missing_db"))
+
+        with self.assertRaises(WatcherConfigurationError) as ctx:
+            manager._instantiate_watcher_backends()
+
+        self.assertIn("missing_db", str(ctx.exception))
+        self.assertIsNone(
+            manager.get_watcher_groups()[("couchdb", "missing_db")].backend_instance
+        )
+
 
 class TestWatcherManagerBackendTypeValidation(unittest.TestCase):
     """Tests for WatcherManager backend type validation."""
@@ -313,7 +474,7 @@ class TestWatcherManagerBackendTypeValidation(unittest.TestCase):
         }
 
         manager = WatcherManager(config=config, checkpoint_store=self.store)
-        manager.add_watcher_group(backend_type="couchdb", connection="test_conn")
+        manager._ensure_watcher_group(backend_type="couchdb", connection="test_conn")
 
         # Should raise on instantiation due to backend type mismatch
         with self.assertRaises(ValueError) as ctx:
@@ -358,8 +519,8 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
-            manager.add_watcher_group("mock", "conn2")
+            manager._ensure_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn2")
 
             await manager.start()
 
@@ -381,7 +542,7 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn1")
 
             await manager.start()
             self.assertTrue(manager.is_running)
@@ -402,8 +563,8 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
-            manager.add_watcher_group("mock", "conn2")
+            manager._ensure_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn2")
 
             await manager.start()
             await manager.stop()
@@ -465,8 +626,8 @@ class TestWatcherManagerLifecycle(unittest.TestCase):
                 config=config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "good_conn")
-            manager.add_watcher_group("failing", "bad_conn")
+            manager._ensure_watcher_group("mock", "good_conn")
+            manager._ensure_watcher_group("failing", "bad_conn")
 
             # Should not raise, but log error
             await manager.start()
@@ -517,7 +678,7 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn1")
 
             await manager.start()
             self.assertTrue(manager.is_running)
@@ -534,7 +695,7 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
                 config=self.config,
                 checkpoint_store=self.store,
             )
-            manager.add_watcher_group("mock", "conn1")
+            manager._ensure_watcher_group("mock", "conn1")
 
             await manager.start()
             await manager.stop()
@@ -543,6 +704,80 @@ class TestWatcherManagerIsRunning(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class TestWatcherManagerPolicyConfig(unittest.TestCase):
+    """Tests for _resolve_watcher_policy and watcher_policy injection."""
+
+    def setUp(self):
+        WatcherManager._backend_registry.clear()
+        WatcherManager.register_backend("mock", MockWatcherBackend)
+        self.config = {
+            "endpoints": {
+                "mock_endpoint": {"backend": "mock", "url": "mock://", "auth": {}}
+            },
+            "connections": {
+                "conn1": {"endpoint": "mock_endpoint", "resource": {"db": "test"}}
+            },
+        }
+        self.store = InMemoryCheckpointStore()
+
+    def test_default_policy_values(self):
+        """Baseline defaults when no watcher_policy is injected."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+        )
+        policy = manager._resolve_watcher_policy()
+        self.assertEqual(policy["max_observation_retries"], 3)
+        self.assertAlmostEqual(policy["observation_retry_delay_s"], 1.0)
+
+    def test_injected_policy_overrides_defaults(self):
+        """watcher_policy kwarg bypasses ConfigLoader and overrides defaults."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            watcher_policy={
+                "max_observation_retries": 7,
+                "observation_retry_delay_s": 0.5,
+            },
+        )
+        policy = manager._resolve_watcher_policy()
+        self.assertEqual(policy["max_observation_retries"], 7)
+        self.assertAlmostEqual(policy["observation_retry_delay_s"], 0.5)
+
+    def test_partial_policy_uses_defaults_for_missing_keys(self):
+        """Partially-specified watcher_policy falls back to defaults for absent keys."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            watcher_policy={"max_observation_retries": 5},
+        )
+        policy = manager._resolve_watcher_policy()
+        self.assertEqual(policy["max_observation_retries"], 5)
+        self.assertAlmostEqual(policy["observation_retry_delay_s"], 1.0)  # default
+
+    def test_policy_merged_into_backend_config(self):
+        """Policy values appear in each backend's config after instantiation."""
+        manager = WatcherManager(
+            config=self.config,
+            checkpoint_store=self.store,
+            watcher_policy={
+                "max_observation_retries": 10,
+                "observation_retry_delay_s": 2.0,
+            },
+        )
+        manager._ensure_watcher_group("mock", "conn1")
+        manager._instantiate_watcher_backends()
+
+        group = manager._watcher_groups[("mock", "conn1")]
+        self.assertIsNotNone(group.backend_instance)
+        assert group.backend_instance is not None
+        self.assertEqual(
+            group.backend_instance.config.get("max_observation_retries"), 10
+        )
+        self.assertAlmostEqual(
+            group.backend_instance.config.get("observation_retry_delay_s"), 2.0
+        )
+
+
 if __name__ == "__main__":
-    unittest.main()
     unittest.main()

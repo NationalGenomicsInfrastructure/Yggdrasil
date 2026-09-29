@@ -2,12 +2,17 @@ import asyncio
 import logging
 import os
 import unittest
-from unittest.mock import AsyncMock, Mock, call, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 from lib.core_utils.event_types import EventType
+from lib.core_utils.plan_execution import DAEMON_CLAIM
 from lib.core_utils.singleton_decorator import SingletonMeta
 from lib.core_utils.yggdrasil_core import YggdrasilCore
 from lib.watchers.abstract_watcher import YggdrasilEvent
+from lib.watchers.config_validation import (
+    WatcherConfigurationError,
+    WatcherConfigValidationIssue,
+)
 
 
 class TestYggdrasilCore(unittest.TestCase):
@@ -50,6 +55,14 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_ops_service_class = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
 
+        # Patch internal-storage bundle construction (no real backends)
+        self.storage_patcher = patch(
+            "lib.core_utils.yggdrasil_core.build_internal_storage"
+        )
+        self.mock_build_storage = self.storage_patcher.start()
+        self.mock_storage = MagicMock()
+        self.mock_build_storage.return_value = self.mock_storage
+
         # Configure the OpsConsumerService mock instance with async methods
         self.mock_ops_service_instance = Mock()
         self.mock_ops_service_instance.start = Mock()
@@ -82,6 +95,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Stop patchers
         self.ops_patcher.stop()
         self.engine_patcher.stop()
+        self.storage_patcher.stop()
         # Clear singleton state after each test
         SingletonMeta._instances.clear()
 
@@ -135,31 +149,24 @@ class TestYggdrasilCore(unittest.TestCase):
             self.assertEqual(core2.config, self.test_config)
             self.assertEqual(core2._logger, self.mock_logger)
 
-    @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDBManager")
     @patch("lib.core_utils.yggdrasil_core.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.PlanDBManager")
-    def test_init_db_managers_success(
-        self, mock_plan_dbm_class, mock_pdm_class, mock_ydm_class
-    ):
-        """Test successful database manager initialization."""
+    def test_init_db_managers_success(self, mock_pdm_class):
+        """Plan store comes from the bundle; ProjectDBManager stays lazy."""
         # Arrange
         mock_pdm_instance = Mock()
-        mock_ydm_instance = Mock()
-        mock_plan_dbm_instance = Mock()
         mock_pdm_class.return_value = mock_pdm_instance
-        mock_ydm_class.return_value = mock_ydm_instance
-        mock_plan_dbm_class.return_value = mock_plan_dbm_instance
 
         # Act
         core = YggdrasilCore(self.test_config, self.mock_logger)
 
-        # Assert
-        self.assertEqual(core.pdm, mock_pdm_instance)
-        self.assertEqual(core.ydm, mock_ydm_instance)
-        self.assertEqual(core.plan_dbm, mock_plan_dbm_instance)
+        # Assert: plan store wired from the internal-storage bundle
+        self.assertIs(core.plan_dbm, self.mock_storage.plans)
+
+        # ProjectDBManager is NOT constructed during initialization...
+        mock_pdm_class.assert_not_called()
+        # ...only on first access (run-doc paths)
+        self.assertIs(core.pdm, mock_pdm_instance)
         mock_pdm_class.assert_called_once()
-        mock_ydm_class.assert_called_once()
-        mock_plan_dbm_class.assert_called_once()
 
         expected_calls = [
             call("Initializing DB managers..."),
@@ -168,15 +175,10 @@ class TestYggdrasilCore(unittest.TestCase):
         ]
         self.mock_logger.info.assert_has_calls(expected_calls)
 
-    @patch("lib.core_utils.yggdrasil_core.PlanDBManager")
-    @patch("lib.couchdb.yggdrasil_db_manager.YggdrasilDBManager")
-    @patch("lib.core_utils.yggdrasil_core.ProjectDBManager")
-    def test_init_db_managers_exception(
-        self, mock_pdm_class, mock_ydm_class, mock_plan_dbm_class
-    ):
-        """Test database manager initialization with exception."""
-        # Arrange - make ProjectDBManager raise exception
-        mock_pdm_class.side_effect = Exception("DB connection failed")
+    def test_init_storage_exception_propagates(self):
+        """Internal-storage construction failure aborts initialization."""
+        # Arrange - make bundle construction raise
+        self.mock_build_storage.side_effect = Exception("DB connection failed")
 
         # Act & Assert
         with self.assertRaises(Exception) as context:
@@ -218,6 +220,31 @@ class TestYggdrasilCore(unittest.TestCase):
         mock_setup_plan.assert_called_once()
         expected_calls = [call("Setting up watchers..."), call("Watchers setup done.")]
         self.mock_logger.info.assert_has_calls(expected_calls, any_order=True)
+
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    def test_setup_watchers_validates_watcher_manager_before_plan_watcher(
+        self, mock_init_db, mock_setup_plan
+    ):
+        """WatcherManager config validation happens before PlanWatcher setup."""
+        core = YggdrasilCore(self.test_config, self.mock_logger)
+        core.watcher_manager = Mock()
+        issue = WatcherConfigValidationIssue(
+            kind="invalid_connection",
+            realms=("dmx_realm",),
+            backend="couchdb",
+            connection="demux_sample_info_db",
+            detail="connection is not configured",
+        )
+        core.watcher_manager.validate_configuration.side_effect = (
+            WatcherConfigurationError([issue])
+        )
+
+        with self.assertRaises(WatcherConfigurationError):
+            core.setup_watchers()
+
+        core.watcher_manager.validate_configuration.assert_called_once()
+        mock_setup_plan.assert_not_called()
 
     # =====================================================
     # HANDLER REGISTRATION AND SETUP TESTS
@@ -742,10 +769,14 @@ class TestYggdrasilCore(unittest.TestCase):
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_handle_plan_execution_event_success(self, mock_init_db):
-        """Test handling PLAN_EXECUTION event from PlanWatcher."""
+        """PLAN_EXECUTION events are handed to the coordinator under daemon authority.
+
+        Only the plan ID is passed on: the coordinator admits the plan from a
+        fresh read, never from the document the event carries.
+        """
         # Arrange
         core = YggdrasilCore(self.test_config, self.mock_logger)
-        core._execute_approved_plan = AsyncMock()
+        core.plan_executions = Mock()
 
         plan_event = YggdrasilEvent(
             event_type=EventType.PLAN_EXECUTION,
@@ -757,11 +788,12 @@ class TestYggdrasilCore(unittest.TestCase):
         )
 
         # Act
-        with patch("asyncio.create_task") as mock_create_task:
-            core._handle_plan_execution_event(plan_event)
+        core._handle_plan_execution_event(plan_event)
 
-            # Assert
-            mock_create_task.assert_called_once()
+        # Assert
+        core.plan_executions.submit.assert_called_once_with(
+            "pln_test_123", DAEMON_CLAIM
+        )
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
     def test_handle_plan_execution_event_wrong_type(self, mock_init_db):
@@ -796,118 +828,6 @@ class TestYggdrasilCore(unittest.TestCase):
 
         # Assert
         self.mock_logger.error.assert_called()
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_execute_approved_plan_success(self, mock_init_db):
-        """Test successfully executing an approved plan."""
-
-        async def test_execute():
-            # Arrange
-            core = YggdrasilCore(self.test_config, self.mock_logger)
-            core.plan_dbm = Mock()
-            core.plan_dbm.fetch_plan.return_value = {
-                "_id": "pln_test_123",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "realm": "test_realm",
-            }
-
-            mock_plan_model = Mock()
-            core.plan_dbm.fetch_plan_as_model.return_value = mock_plan_model
-            core.plan_dbm.update_executed_token.return_value = True
-
-            core.engine = Mock()
-            core.engine.run = Mock()
-
-            with patch(
-                "lib.core_utils.yggdrasil_core.is_plan_eligible", return_value=True
-            ):
-                # Act
-                await core._execute_approved_plan("pln_test_123")
-
-                # Assert
-                core.plan_dbm.fetch_plan.assert_called_once_with("pln_test_123")
-                core.engine.run.assert_called_once_with(mock_plan_model)
-                core.plan_dbm.update_executed_token.assert_called_once_with(
-                    "pln_test_123", 1
-                )
-
-        asyncio.run(test_execute())
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_execute_approved_plan_not_eligible(self, mock_init_db):
-        """Test skipping execution when plan is not eligible."""
-
-        async def test_execute():
-            # Arrange
-            core = YggdrasilCore(self.test_config, self.mock_logger)
-            core.plan_dbm = Mock()
-            core.plan_dbm.fetch_plan.return_value = {
-                "_id": "pln_test_123",
-                "status": "draft",  # Not approved
-            }
-
-            with patch(
-                "lib.core_utils.yggdrasil_core.is_plan_eligible", return_value=False
-            ):
-                # Act
-                await core._execute_approved_plan("pln_test_123")
-
-                # Assert
-                core.plan_dbm.fetch_plan_as_model.assert_not_called()
-
-        asyncio.run(test_execute())
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_execute_approved_plan_not_found(self, mock_init_db):
-        """Test executing plan that doesn't exist in database."""
-
-        async def test_execute():
-            # Arrange
-            core = YggdrasilCore(self.test_config, self.mock_logger)
-            core.plan_dbm = Mock()
-            core.plan_dbm.fetch_plan.return_value = None
-
-            # Act
-            await core._execute_approved_plan("pln_nonexistent")
-
-            # Assert
-            self.mock_logger.error.assert_called()
-            core.plan_dbm.fetch_plan_as_model.assert_not_called()
-
-        asyncio.run(test_execute())
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_execute_approved_plan_engine_failure(self, mock_init_db):
-        """Test handling engine execution failure."""
-
-        async def test_execute():
-            # Arrange
-            core = YggdrasilCore(self.test_config, self.mock_logger)
-            core.plan_dbm = Mock()
-            core.plan_dbm.fetch_plan.return_value = {
-                "_id": "pln_test_123",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-            }
-            core.plan_dbm.fetch_plan_as_model.return_value = Mock()
-            core.engine = Mock()
-            core.engine.run = Mock(side_effect=Exception("Engine failed"))
-
-            with patch(
-                "lib.core_utils.yggdrasil_core.is_plan_eligible", return_value=True
-            ):
-                # Act
-                await core._execute_approved_plan("pln_test_123")
-
-                # Assert - should log exception but not crash
-                self.mock_logger.exception.assert_called()
-                # Token should NOT be updated on failure
-                core.plan_dbm.update_executed_token.assert_not_called()
-
-        asyncio.run(test_execute())
 
     # =====================================================
     # CREATE_PLAN_FROM_DOC TESTS (--plan-only mode)
@@ -945,7 +865,7 @@ class TestYggdrasilCore(unittest.TestCase):
         mock_draft.preview = "Test plan"
         mock_draft.notes = "Test notes"
 
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         core.subscriptions[EventType.PROJECT_CHANGE] = [mock_handler]
 
@@ -953,7 +873,7 @@ class TestYggdrasilCore(unittest.TestCase):
         result = core.create_plan_from_doc("P12345", force_overwrite=False)
 
         # Assert
-        self.assertEqual(result, "pln_test_123")
+        self.assertEqual(result, ["pln_test_123"])
         # Verify plan was created with execution_authority='daemon'
         call_kwargs = core.plan_dbm.save_plan.call_args.kwargs
         self.assertEqual(call_kwargs["execution_authority"], "daemon")
@@ -972,7 +892,7 @@ class TestYggdrasilCore(unittest.TestCase):
         result = core.create_plan_from_doc("P12345")
 
         # Assert
-        self.assertIsNone(result)
+        self.assertEqual(result, [])
         self.mock_logger.error.assert_called()
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
@@ -988,7 +908,7 @@ class TestYggdrasilCore(unittest.TestCase):
         result = core.create_plan_from_doc("P12345")
 
         # Assert
-        self.assertIsNone(result)
+        self.assertEqual(result, [])
         self.mock_logger.error.assert_called()
 
     @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
@@ -1017,7 +937,7 @@ class TestYggdrasilCore(unittest.TestCase):
         mock_plan.plan_id = "pln_test_123"
         mock_draft = Mock()
         mock_draft.plan = mock_plan
-        mock_handler.run_now.return_value = mock_draft
+        mock_handler.run_now.return_value = [mock_draft]
 
         core.subscriptions[EventType.PROJECT_CHANGE] = [mock_handler]
 
@@ -1025,7 +945,7 @@ class TestYggdrasilCore(unittest.TestCase):
         result = core.create_plan_from_doc("P12345", force_overwrite=False)
 
         # Assert
-        self.assertIsNone(result)  # Should abort
+        self.assertEqual(result, [])  # All drafts skipped due to conflict
         self.mock_logger.error.assert_called()
         # Plan should NOT be saved
         core.plan_dbm.save_plan.assert_not_called()
@@ -1061,7 +981,7 @@ class TestYggdrasilCore(unittest.TestCase):
             mock_draft.preview = None
             mock_draft.notes = None
 
-            mock_handler.generate_plan_draft = AsyncMock(return_value=mock_draft)
+            mock_handler.generate_plan_drafts = AsyncMock(return_value=[mock_draft])
 
             payload = {"planning_ctx": Mock()}
 
@@ -1100,7 +1020,7 @@ class TestYggdrasilCore(unittest.TestCase):
             mock_draft.preview = None
             mock_draft.notes = None
 
-            mock_handler.generate_plan_draft = AsyncMock(return_value=mock_draft)
+            mock_handler.generate_plan_drafts = AsyncMock(return_value=[mock_draft])
 
             payload = {"planning_ctx": Mock()}
 
@@ -1123,7 +1043,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
             mock_handler = Mock()
             mock_handler.class_qualified_name.return_value = "test.TestHandler"
-            mock_handler.generate_plan_draft = AsyncMock(
+            mock_handler.generate_plan_drafts = AsyncMock(
                 side_effect=Exception("Handler failed")
             )
 
@@ -1136,6 +1056,84 @@ class TestYggdrasilCore(unittest.TestCase):
             self.mock_logger.exception.assert_called()
 
         asyncio.run(test_generate())
+
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    def test_generate_and_persist_plan_multi_draft(self, mock_init_db):
+        """Test that multiple drafts returned by a fan-out handler are all persisted."""
+
+        async def test_generate():
+            # Arrange
+            core = YggdrasilCore(self.test_config, self.mock_logger)
+            core.plan_dbm = Mock()
+            core.plan_dbm.save_plan.side_effect = ["pln_lane1", "pln_lane2"]
+            core.engine = Mock()
+
+            mock_handler = Mock()
+            mock_handler.realm_id = "demux_realm"
+            mock_handler.class_qualified_name.return_value = "test.DemuxHandler"
+
+            def make_draft(plan_id: str, auto_run: bool) -> Mock:
+                mock_plan = Mock()
+                mock_plan.plan_id = plan_id
+                mock_plan.scope = {"kind": "flowcell", "id": plan_id}
+                draft = Mock()
+                draft.plan = mock_plan
+                draft.auto_run = auto_run
+                draft.approvals_required = []
+                draft.preview = {}
+                draft.notes = ""
+                return draft
+
+            drafts = [make_draft("pln_lane1", True), make_draft("pln_lane2", True)]
+            mock_handler.generate_plan_drafts = AsyncMock(return_value=drafts)
+
+            payload = {"planning_ctx": Mock()}
+
+            # Act
+            await core._generate_and_persist_plan(mock_handler, payload)
+
+            # Assert — both drafts persisted
+            self.assertEqual(core.plan_dbm.save_plan.call_count, 2)
+            core.engine.run.assert_not_called()
+
+        asyncio.run(test_generate())
+
+    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    def test_create_plan_from_doc_multi_draft(self, mock_init_db):
+        """Test that multiple drafts from a fan-out handler are all persisted."""
+        core = YggdrasilCore(self.test_config, self.mock_logger)
+        core.pdm = Mock()
+        core.pdm.fetch_document_by_id.return_value = {"_id": "FC001"}
+
+        core.plan_dbm = Mock()
+        core.plan_dbm.get_plan_summary.return_value = None  # No existing plans
+        core.plan_dbm.save_plan.side_effect = ["pln_lane1", "pln_lane2"]
+
+        mock_handler = Mock()
+        mock_handler.realm_id = "demux_realm"
+        mock_handler.derive_scope.return_value = {"kind": "flowcell", "id": "FC001"}
+        mock_handler.class_qualified_name.return_value = "test.DemuxHandler"
+
+        def make_draft(plan_id: str) -> Mock:
+            mock_plan = Mock()
+            mock_plan.plan_id = plan_id
+            draft = Mock()
+            draft.plan = mock_plan
+            draft.auto_run = True
+            draft.preview = {}
+            draft.notes = ""
+            return draft
+
+        mock_handler.run_now.return_value = [
+            make_draft("pln_lane1"),
+            make_draft("pln_lane2"),
+        ]
+        core.subscriptions[EventType.PROJECT_CHANGE] = [mock_handler]
+
+        result = core.create_plan_from_doc("FC001", force_overwrite=False)
+
+        self.assertEqual(result, ["pln_lane1", "pln_lane2"])
+        self.assertEqual(core.plan_dbm.save_plan.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,18 @@
+import os
 import unittest
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Annotated, Any
+from unittest.mock import Mock, patch
 
-from yggdrasil.flow.model import Plan
+from yggdrasil.core.engine import Engine
+from yggdrasil.flow.artifacts import SimpleArtifactRef
+from yggdrasil.flow.events.emitter import EventEmitter
+from yggdrasil.flow.model import Plan, StepResult, StepSpec
 from yggdrasil.flow.planner.builder import PlanBuilder, _artifact_key, _validate_step_id
+from yggdrasil.flow.step import Out, StepContext, step
 
 
 class TestUtilityFunctions(unittest.TestCase):
@@ -409,6 +417,10 @@ class TestPlanBuilder(unittest.TestCase):
         # Artifact should be registered by _add_step after processing outputs
         self.assertIn("output_data", self.builder._artifact_provider)
         self.assertEqual(self.builder._artifact_provider["output_data"], "gen_step")
+        # ...and declared on the spec, keyed by artifact key
+        self.assertEqual(
+            spec.outputs, {"output_data": str(self.base / "output" / "result.txt")}
+        )
 
     def test_add_step_fn_with_requires_artifacts(self):
         """Test adding step with explicit artifact requirements."""
@@ -1090,6 +1102,335 @@ class TestPlanBuilderEdgeCases(unittest.TestCase):
         self.assertEqual(spec.params["number"], 42)
         self.assertEqual(len(spec.params["list"]), 3)
         self.assertIn("nested", spec.params["dict"])
+
+
+RESULT_REF = SimpleArtifactRef(key_name="result", folder="results", filename="out.json")
+
+
+def make_writer(
+    received: list[Path], default: Any = None, with_default: bool = False
+) -> Callable[..., StepResult]:
+    """A @step writing its annotated output parameter, recording where it wrote.
+
+    Args:
+        received: Collects the output path each invocation was called with.
+        default: The output parameter's concrete default, if with_default.
+        with_default: Whether the output parameter has a concrete default.
+    """
+
+    def body(ctx: StepContext, result: Path) -> StepResult:
+        path = Path(result)
+        received.append(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("done", encoding="utf-8")
+        return StepResult()
+
+    if with_default:
+
+        def write_result(
+            ctx: StepContext, result: Annotated[Path, Out(RESULT_REF)] = default
+        ) -> StepResult:
+            return body(ctx, result)
+
+    else:
+
+        def write_result(  # type: ignore[misc]
+            ctx: StepContext, result: Annotated[Path, Out(RESULT_REF)]
+        ) -> StepResult:
+            return body(ctx, result)
+
+    return step(write_result)
+
+
+class TestBuilderPreservesDeclaredOutputs(unittest.TestCase):
+    """The output map reaches the StepSpec, and only as absolute paths.
+
+    The builder used to compute this map and use it to wire dependencies, but
+    dropped it before constructing the StepSpec.
+    """
+
+    def setUp(self):
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.base = Path(temp_dir.name)
+        self.builder = PlanBuilder(
+            plan_id="p1", realm="test", scope={"kind": "project"}, base=self.base
+        )
+
+    def test_add_step_preserves_the_computed_output_map(self):
+        spec = self.builder._add_step(
+            step_id="producer",
+            name="producer",
+            fn_ref="m:produce",
+            params={},
+            outputs={"report": str(self.base / "report.csv")},
+        )
+
+        self.assertEqual(self.builder._artifact_provider["report"], "producer")
+        self.assertEqual(spec.outputs, {"report": str(self.base / "report.csv")})
+        self.assertEqual(
+            Plan.from_dict(self.builder.to_plan().to_dict()).steps[0].outputs,
+            spec.outputs,
+        )
+
+    def test_preserved_outputs_still_wire_dependencies(self):
+        self.builder._add_step(
+            step_id="producer",
+            name="producer",
+            fn_ref="m:produce",
+            params={},
+            outputs={"report": str(self.base / "report.csv")},
+        )
+
+        consumer = self.builder._add_step(
+            step_id="consumer",
+            name="consumer",
+            fn_ref="m:consume",
+            params={},
+            inputs={"report": str(self.base / "report.csv")},
+        )
+
+        self.assertEqual(consumer.deps, ["producer"])
+
+    def test_add_step_rejects_a_relative_output_path(self):
+        """The engine would resolve it against the step workdir a second time."""
+        with self.assertRaises(ValueError) as cm:
+            self.builder._add_step(
+                step_id="producer",
+                name="producer",
+                fn_ref="m:produce",
+                params={},
+                outputs={"report": "report.csv"},
+            )
+
+        self.assertIn("report", str(cm.exception))
+        self.assertEqual(self.builder.steps, [])
+        self.assertNotIn("report", self.builder._artifact_provider)
+
+    def test_relative_base_is_made_absolute_on_construction(self):
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.base)
+
+        builder = PlanBuilder(plan_id="p1", realm="test", scope={}, base=Path("rel"))
+
+        self.assertTrue(builder.base.is_absolute())
+        self.assertEqual(builder.base, Path.cwd() / "rel")
+
+
+class TestBuilderOutputAgreement(unittest.TestCase):
+    """Call param, declaration, registry and the produced file name one path.
+
+    Each case builds a plan with PlanBuilder and runs it through a real Engine,
+    so "the file the step actually produces" is observed, not assumed.
+    """
+
+    def setUp(self):
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.root = Path(temp_dir.name)
+        self.base = self.root / "base"
+        self.base.mkdir()
+        self.received: list[Path] = []
+        self.fn = make_writer(self.received)
+        self.engine = Engine(
+            work_root=self.root / "work", emitter=Mock(spec=EventEmitter)
+        )
+
+    def build(
+        self, base: Path, params: dict[str, Any], **kwargs: Any
+    ) -> tuple[PlanBuilder, StepSpec]:
+        builder = PlanBuilder(
+            plan_id="agree", realm="test", scope={"kind": "project"}, base=base
+        )
+        spec = builder.add_step_fn(self.fn, step_id="producer", params=params, **kwargs)
+        return builder, spec
+
+    def run_plan(self, builder: PlanBuilder) -> None:
+        with patch("yggdrasil.core.engine.resolve_callable", return_value=self.fn):
+            self.engine.run(builder.to_plan())
+
+    def assert_agreement(
+        self, builder: PlanBuilder, spec: StepSpec, expected: Path
+    ) -> None:
+        self.assertTrue(expected.is_absolute())
+        self.assertEqual(Path(spec.params["result"]), expected)
+        self.assertEqual(spec.outputs, {"result": str(expected)})
+        self.assertEqual(builder.path_for("result"), str(expected))
+        self.run_plan(builder)
+        self.assertEqual(self.received, [expected])
+        self.assertEqual(expected.read_text(encoding="utf-8"), "done")
+
+    def test_no_override_declares_the_annotated_path(self):
+        builder, spec = self.build(self.base, {})
+
+        self.assert_agreement(builder, spec, self.base / "results" / "out.json")
+
+    def test_absolute_override_is_declared_instead_of_the_annotated_path(self):
+        custom = self.root / "elsewhere" / "custom.json"
+        params = {"result": str(custom)}
+
+        builder, spec = self.build(self.base, params)
+
+        self.assert_agreement(builder, spec, custom)
+        self.assertFalse((self.base / "results" / "out.json").exists())
+        self.assertEqual(params, {"result": str(custom)}, "caller params mutated")
+
+    def test_relative_override_resolves_against_the_builder_base(self):
+        builder, spec = self.build(self.base, {"result": "custom/out.json"})
+
+        self.assertIsInstance(spec.params["result"], str)
+        self.assert_agreement(builder, spec, self.base / "custom" / "out.json")
+
+    def test_relative_builder_base_never_leaks_a_relative_path(self):
+        """Built in one working directory and executed from another."""
+        self.addCleanup(os.chdir, os.getcwd())
+        for name, params, tail in (
+            ("no override", {}, ("results", "out.json")),
+            (
+                "relative override",
+                {"result": "custom/out.json"},
+                ("custom", "out.json"),
+            ),
+        ):
+            with self.subTest(name):
+                self.received.clear()
+                os.chdir(self.root)
+                # The base resolves against the working directory as the OS
+                # reports it, which spells self.root without the symlinks a
+                # temp dir path may contain (macOS /var, a symlinked TMPDIR).
+                planning_root = Path.cwd()
+                builder, spec = self.build(Path("rel_base"), params)
+                os.chdir(self.base)
+
+                self.assert_agreement(
+                    builder, spec, planning_root.joinpath("rel_base", *tail)
+                )
+                self.assertFalse(self.base.joinpath("rel_base").exists())
+
+    def test_declared_builder_output_gates_reuse(self):
+        builder, spec = self.build(self.base, {})
+        produced = self.base / "results" / "out.json"
+        self.run_plan(builder)
+
+        self.run_plan(builder)
+        self.assertEqual(len(self.received), 1, "a present output is reused")
+
+        produced.unlink()
+        self.run_plan(builder)
+        self.assertEqual(len(self.received), 2, "a missing output is produced again")
+        self.assertTrue(produced.exists())
+
+
+class TestBuilderOutputsWithInjectionDisabled(unittest.TestCase):
+    """Nothing is declared from an annotation the step never receives."""
+
+    def setUp(self):
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.root = Path(temp_dir.name)
+        self.base = self.root / "base"
+        self.received: list[Path] = []
+        self.builder = PlanBuilder(
+            plan_id="noinject", realm="test", scope={"kind": "project"}, base=self.base
+        )
+
+    def test_absolute_concrete_default_is_declared_not_the_annotation(self):
+        default = self.root / "concrete" / "default.json"
+        fn = make_writer(self.received, default=default, with_default=True)
+        for mode in ("none", "inputs"):
+            with self.subTest(inject_io=mode):
+                self.received.clear()
+                builder = PlanBuilder(
+                    plan_id=f"noinject_{mode}", realm="test", scope={}, base=self.base
+                )
+
+                spec = builder.add_step_fn(
+                    fn, step_id="producer", params={}, inject_io=mode
+                )
+
+                self.assertNotIn("result", spec.params)
+                self.assertEqual(spec.outputs, {"result": str(default)})
+                self.assertEqual(builder.path_for("result"), str(default))
+                engine = Engine(
+                    work_root=self.root / "work", emitter=Mock(spec=EventEmitter)
+                )
+                with patch("yggdrasil.core.engine.resolve_callable", return_value=fn):
+                    engine.run(builder.to_plan())
+                self.assertEqual(self.received, [default])
+                self.assertFalse((self.base / "results" / "out.json").exists())
+
+    def test_output_injection_mode_alone_still_injects_the_annotation(self):
+        fn = make_writer(self.received)
+
+        spec = self.builder.add_step_fn(
+            fn, step_id="producer", params={}, inject_io="outputs"
+        )
+
+        expected = self.base / "results" / "out.json"
+        self.assertEqual(spec.params["result"], expected)
+        self.assertEqual(spec.outputs, {"result": str(expected)})
+
+    def test_no_default_requires_an_explicit_path(self):
+        fn = make_writer(self.received)
+
+        with self.assertRaises(ValueError) as cm:
+            self.builder.add_step_fn(fn, step_id="producer", inject_io="none")
+
+        self.assertIn("no default", str(cm.exception))
+        self.assertEqual(self.builder.steps, [])
+
+    def test_relative_default_requires_an_explicit_path(self):
+        fn = make_writer(self.received, default="out.json", with_default=True)
+
+        with self.assertRaises(ValueError) as cm:
+            self.builder.add_step_fn(fn, step_id="producer", inject_io="none")
+
+        self.assertIn("relative", str(cm.exception))
+
+    def test_non_path_default_requires_an_explicit_path(self):
+        fn = make_writer(self.received, default=None, with_default=True)
+
+        with self.assertRaises(ValueError) as cm:
+            self.builder.add_step_fn(fn, step_id="producer", inject_io="none")
+
+        self.assertIn("not a path", str(cm.exception))
+
+    def test_explicit_path_is_normalized_and_declared(self):
+        fn = make_writer(self.received)
+
+        spec = self.builder.add_step_fn(
+            fn, step_id="producer", params={"result": "mine.json"}, inject_io="none"
+        )
+
+        expected = str(self.base / "mine.json")
+        self.assertEqual(spec.params["result"], expected)
+        self.assertEqual(spec.outputs, {"result": expected})
+
+
+class TestBuilderRejectsNonPathOutputOverrides(unittest.TestCase):
+    """An output override must name a path that can be declared."""
+
+    def setUp(self):
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.builder = PlanBuilder(
+            plan_id="p1", realm="test", scope={}, base=Path(temp_dir.name)
+        )
+        self.fn = make_writer([])
+
+    def test_non_path_override_is_rejected(self):
+        for value in (None, 42):
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    self.builder.add_step_fn(
+                        self.fn, step_id="producer", params={"result": value}
+                    )
+
+    def test_empty_override_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.builder.add_step_fn(self.fn, step_id="producer", params={"result": ""})
+
+        self.assertEqual(self.builder.steps, [])
 
 
 if __name__ == "__main__":

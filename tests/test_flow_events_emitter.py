@@ -330,6 +330,113 @@ class TestFileSpoolEmitter(unittest.TestCase):
         unknown_step_dir = expected_dir / "unknown_step"
         self.assertFalse(unknown_step_dir.exists())
 
+    def test_attempt_events_are_filed_under_their_attempt(self):
+        """An execution_id hint files records in the attempt's own directory
+        and step events in that step's stream within it."""
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+        attempt = "20260924T120000000001Z_c68e"
+
+        emitter.emit(
+            {
+                "type": "plan.attempt_started",
+                "_spool_path": {
+                    "realm": "test_realm",
+                    "plan_id": "plan_123",
+                    "execution_id": attempt,
+                    "filename": "plan_attempt_started.json",
+                },
+            }
+        )
+        emitter.emit(
+            {
+                "type": "step.started",
+                "_spool_path": {
+                    "realm": "test_realm",
+                    "plan_id": "plan_123",
+                    "execution_id": attempt,
+                    "step_id": "lane_1/process",
+                    # A run hint has no say inside an attempt.
+                    "run_id": "run_1",
+                    "filename": "0001_step_started.json",
+                },
+            }
+        )
+
+        attempt_dir = self.spool_dir / "test_realm" / "plan_123" / "attempts" / attempt
+        self.assertEqual(
+            sorted(
+                str(p.relative_to(attempt_dir)) for p in attempt_dir.rglob("*.json")
+            ),
+            [
+                "plan_attempt_started.json",
+                "steps/lane_1/process/0001_step_started.json",
+            ],
+        )
+
+    def test_step_ids_that_would_collide_as_paths_keep_separate_streams(self):
+        """Distinct step IDs never share a directory, and a step's directory
+        is never another step's event file or its temporary file, in either
+        publication order."""
+        attempt = "20260924T120000000001Z_c68e"
+        pairs = [
+            ("lane", "lane/0001_step_started.json"),
+            ("lane", "lane/0001_step_started.json.tmp"),
+            # Where case is ignored, as on macOS, these name the same files.
+            ("lane", "lane/0001_step_started.JSON"),
+            ("lane", "lane/0001_step_started.Json.Tmp"),
+            ("lane/process", "lane/./process"),
+            ("lane/process", "lane//process"),
+            ("lane", "lane/"),
+            ("other", "lane/../other"),
+        ]
+        for index, pair in enumerate(pairs):
+            for order in (pair, pair[::-1]):
+                with self.subTest(order=order):
+                    spool = self.spool_dir / f"case_{index}_{order == pair}"
+                    emitter = FileSpoolEmitter(spool_dir=str(spool))
+                    for step_id in order:
+                        emitter.emit(
+                            {
+                                "type": "step.started",
+                                "step_id": step_id,
+                                "_spool_path": {
+                                    "realm": "r",
+                                    "plan_id": "p",
+                                    "execution_id": attempt,
+                                    "step_id": step_id,
+                                    "filename": "0001_step_started.json",
+                                },
+                            }
+                        )
+
+                    steps = spool / "r" / "p" / "attempts" / attempt / "steps"
+                    # Escaped step directories can end in .json or .tmp too.
+                    files = [f for f in steps.rglob("*") if f.is_file()]
+                    self.assertEqual(
+                        sorted(json.loads(f.read_text())["step_id"] for f in files),
+                        sorted(order),
+                    )
+                    self.assertEqual([f.suffix for f in files], [".json", ".json"])
+
+    def test_attempt_that_cannot_name_a_directory_is_refused(self):
+        emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
+
+        for execution_id in ("", "..", "../escape"):
+            with self.subTest(execution_id=execution_id):
+                with self.assertRaises(ValueError):
+                    emitter.emit(
+                        {
+                            "type": "plan.attempt_started",
+                            "_spool_path": {
+                                "realm": "r",
+                                "plan_id": "p",
+                                "execution_id": execution_id,
+                                "filename": "plan_attempt_started.json",
+                            },
+                        }
+                    )
+        self.assertEqual(list(self.spool_dir.rglob("*.json")), [])
+
     def test_emit_plan_level_event_with_run_id(self):
         """Test that plan-level events can include run_id for versioning."""
         emitter = FileSpoolEmitter(spool_dir=str(self.spool_dir))
