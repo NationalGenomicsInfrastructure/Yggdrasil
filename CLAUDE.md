@@ -51,7 +51,7 @@ Namespacing: `yggdrasil/*` is the public API, `lib/*` is internal implementation
 
 ### CLI
 
-Entry point is `yggdrasil.cli:main` (`yggdrasil` console script). `yggdrasil daemon` runs watchers indefinitely (guarded by a `DaemonLock`); `yggdrasil run-doc <DOC_ID>` processes one document (`-m` forces manual HPC submission); `--dev` enables dev mode and debug logging. Root-level `ygg_trunk.py` / `ygg-mule.py` are legacy entry scripts.
+Entry point is `yggdrasil.cli:main` (`yggdrasil` console script). `yggdrasil daemon` runs watchers indefinitely (guarded by a `DaemonLock`); `yggdrasil run-doc <DOC_ID>` processes one document (`-m` forces manual HPC submission); `--dev` enables dev mode and debug logging.
 
 ## Conventions
 

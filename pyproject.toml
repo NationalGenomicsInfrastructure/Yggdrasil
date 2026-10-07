@@ -9,20 +9,11 @@ requires-python = ">=3.11"
 
 dependencies = [
     "appdirs==1.4.4",
+    "cattrs==26.2.1",
     "ibmcloudant>=0.10.6",
-    "loompy==3.0.8",
-    "matplotlib>=3.9.0,<3.11.0",
-    "networkx==3.5",
-    "numba>=0.61.0",
-    "numpy>=2.0,<3.0",
-    "pandas==2.3.1",
     "panzi_json_logic==1.0.1",
     "requests>=2.31.0",
-    "pdf2image==1.17.0",
-    "Pillow==11.3.0",
-    "reportlab==4.0.9",
     "rich==14.0.0",
-    "ruamel.yaml==0.17.32",
     "watchdog==6.0.0"
 ]
 

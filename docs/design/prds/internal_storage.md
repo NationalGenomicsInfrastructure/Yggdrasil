@@ -33,9 +33,9 @@ capabilities regardless of database backend.
 4. **`YggdrasilStateStore` dropped from the bundle**: the coordination
    database's only live internal consumer in the modern daemon path is
    checkpoint persistence, which `CheckpointStore` covers.
-   `YggdrasilDocument` operations are used only by dead code
-   (`ScenarioDocWatcher`, `BestPracticeAnalysisHandler` — flagged in
-   `docs/TECH_DEBT_LEDGER.md` #15 for the deprecation cleanup). A state
+   `YggdrasilDocument` operations have no live consumer; the two unwired
+   classes that used them (`ScenarioDocWatcher`,
+   `BestPracticeAnalysisHandler`) have been removed. A state
    store protocol is added only when a live consumer exists.
 
 ## Configuration

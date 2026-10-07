@@ -18,7 +18,6 @@ from lib.core_utils.plan_execution import (
 from lib.core_utils.runtime_paths import resolve_event_spool, resolve_work_root
 from lib.core_utils.singleton_decorator import singleton
 from lib.couchdb.project_db_manager import ProjectDBManager
-from lib.handlers.base_handler import BaseHandler
 from lib.ops.consumer_service import OpsConsumerService
 from lib.storage import InternalStorageBundle, build_internal_storage
 from lib.watchers.abstract_watcher import YggdrasilEvent
@@ -27,6 +26,7 @@ from lib.watchers.plan_watcher import PlanWatcher
 from lib.watchers.watchspec import BoundWatchSpec
 from yggdrasil.core.engine import Engine
 from yggdrasil.core.realm import RealmDescriptor, discover_realms
+from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 
@@ -852,54 +852,6 @@ class YggdrasilCore:
             # Task was cancelled during shutdown (expected)
             self._logger.debug("Ops consumer task cancelled (expected during shutdown)")
 
-    # def run_once(self, doc_id: str):
-    #     """
-    #     Fetch the project doc, build the payload, and synchronously
-    #     drive the BestPracticeAnalysisHandler without starting watchers.
-    #     """
-    #     from lib.core_utils.module_resolver import get_module_location
-    #     from lib.couchdb.project_db_manager import ProjectDBManager
-
-    #     pdm = ProjectDBManager()
-    #     doc = pdm.fetch_document_by_id(doc_id)
-    #     if not doc:
-    #         self._logger.error(f"No project with ID {doc_id}")
-    #         return
-
-    #     module_loc = get_module_location(doc)
-    #     if not module_loc:
-    #         self._logger.error(f"No module for project {doc_id}")
-    #         return
-
-    #     payload = {"document": doc, "module_location": module_loc}
-
-    #     # Use the appropriate registered earlier
-    #     handler = self.handlers.get(EventType.PROJECT_CHANGE)
-    #     if not handler:
-    #         self._logger.error(
-    #             "No handler for '%s' event type", EventType.PROJECT_CHANGE
-    #         )
-    #         return
-
-    #     if not hasattr(handler, "run_now"):
-    #         raise RuntimeError(
-    #             f"Handler {handler!r} must implement `.run_now(payload)` for one-off mode"
-    #         )
-    #     handler.run_now(payload)
-
-    #     # 2) After the step(s) emitted events, do a single consume pass
-    #     # TODO: Put the imports at the top when this is stable
-    #     import os
-    #     from pathlib import Path
-
-    #     from lib.ops.consumer import FileSpoolConsumer
-    #     from lib.ops.sinks.couch import OpsWriter
-
-    #     spool = Path(os.environ.get("YGG_EVENT_SPOOL", "/tmp/ygg_events"))
-    #     FileSpoolConsumer(
-    #         spool, OpsWriter(db_name=os.environ.get("OPS_DB", "yggdrasil_ops"))
-    #     ).consume()
-
     # --------------------------------------------------------------------------
     # CLI Mode Methods (--plan-only, --run-once)
     # --------------------------------------------------------------------------
@@ -1661,7 +1613,7 @@ class YggdrasilCore:
     def process_cli_command(self, command_name: str, **kwargs) -> None:
         """
         Example method for manual (CLI-based) triggers that bypass watchers.
-        E.g. 'ygg-mule reprocess-flowcell <id>' -> calls this method.
+        E.g. a 'yggdrasil reprocess-flowcell <id>' subcommand would call this method.
         """
         self._logger.info(f"Processing CLI command '{command_name}' with args={kwargs}")
         # Potentially route or handle an event, or do domain logic directly.

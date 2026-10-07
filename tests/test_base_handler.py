@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
 from lib.core_utils.event_types import EventType
-from lib.handlers.base_handler import BaseHandler
+from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner.api import PlanDraft
 
