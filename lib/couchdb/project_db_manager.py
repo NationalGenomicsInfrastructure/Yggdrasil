@@ -6,7 +6,6 @@ from typing import Any, cast
 from requests import Response
 
 from lib.core_utils.common import YggdrasilUtilities as Ygg
-from lib.core_utils.config_loader import ConfigLoader
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
@@ -18,10 +17,9 @@ class ProjectDBManager(CouchDBHandler):
     """
     Manages interactions with the 'projects' database, such as:
 
-      - Asynchronously fetching document changes (`fetch_changes` / `get_changes`).
+      - Asynchronously streaming document changes (`get_changes`).
 
     Inherits from `CouchDBHandler` to reuse the CouchDB connection.
-    It is specialized for Yggdrasil needs (e.g., module registry lookups).
     """
 
     def __init__(
@@ -48,42 +46,6 @@ class ProjectDBManager(CouchDBHandler):
             pass_env=params.pass_env,
             logger=self._logger,
         )
-        self.module_registry = ConfigLoader().load_config("module_registry.json")
-
-    async def fetch_changes(self) -> AsyncGenerator[tuple[dict[str, Any], str], None]:
-        """Fetches document changes from the database asynchronously.
-
-        Yields:
-            Tuple[Dict[str, Any], str]: A tuple containing the document and module location.
-        """
-        last_processed_seq: str | None = None
-
-        while True:
-            async for change in self.get_changes(last_processed_seq=last_processed_seq):
-                try:
-                    method = change["details"]["library_construction_method"]
-                    module_config = self.module_registry.get(method)
-
-                    if module_config:
-                        module_loc = module_config["module"]
-                        yield (change, module_loc)
-                    else:
-                        # Check for prefix matches
-                        for registered_method, config in self.module_registry.items():
-                            if config.get("prefix") and method.startswith(
-                                registered_method
-                            ):
-                                module_loc = config["module"]
-                                yield (change, module_loc)
-                                break
-                        else:
-                            # The majority of the tasks will not have a module configured.
-                            # If you log this, expect to see many messages!
-                            # self._logger.warning(f"No module configured for task type '{method}'.")
-                            pass
-                except Exception as e:  # noqa: F841
-                    # self._logger.error(f"Error processing change: {e}")
-                    pass
 
     async def get_changes(
         self, last_processed_seq: str | None = None

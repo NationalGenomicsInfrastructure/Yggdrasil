@@ -6,7 +6,7 @@ This document describes test scenario documents that exercise different aspects 
 
 ## Overview
 
-Test scenarios are inserted into the yggdrasil database as documents with `type="ygg_test_scenario"`. The `ScenarioDocWatcher` detects them and generates plans via predefined recipes **or custom step definitions**.
+Test scenarios are inserted into the yggdrasil database as documents with `type="ygg_test_scenario"`. The test realm's WatchSpec detects them and `TestRealmHandler` generates plans via predefined recipes **or custom step definitions**.
 
 **Two modes supported:**
 
@@ -977,7 +977,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 ## Troubleshooting
 
 **Plan not created after inserting scenario:**
-- Check ScenarioDocWatcher is running: `tail -f yggdrasil.log | grep ScenarioDocWatcher`
+- Check the test realm's watcher backend started: `tail -f yggdrasil.log | grep yggdrasil_testdocs`
 - Verify `_id` field is set (must be unique)
 - Verify `type="ygg_test_scenario"` 
 - Verify EITHER `recipe` field OR `steps` array exists

@@ -1,6 +1,0 @@
-{
-    "couchdb_url": "ngi-statusdb-dev.scilifelab.se:5984",
-    "couchdb_database": "projects",
-    "couchdb_poll_interval": 3,
-    "job_monitor_poll_interval": 60
-}

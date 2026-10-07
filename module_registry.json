@@ -1,8 +1,0 @@
-{
-    "SmartSeq 3": {
-        "module": "lib.realms.smartseq3.smartseq3.SmartSeq3"
-    },
-    "10X Chromium": {
-        "module": "lib.realms.tenx.tenx.TenX"
-    }
-}

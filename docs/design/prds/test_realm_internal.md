@@ -154,7 +154,6 @@ A minimal override schema:
 Preferred:
 - `lib/realms/test_realm/`
   - `__init__.py`
-  - `watcher.py`
   - `handler.py`
   - `steps.py`
   - `recipes.py`
@@ -167,7 +166,6 @@ Preferred:
 
 ### 5.1 Registration
 - Register the test realm only in dev mode via the **current realm loading mechanism**.
-- No requirement to use legacy `module_registry.json` unless your dev boot path still relies on it.
 
 ### 5.2 Handler contract
 - Handler consumes scenario doc, builds a `Plan`, returns a plan draft in the same shape as other realms.

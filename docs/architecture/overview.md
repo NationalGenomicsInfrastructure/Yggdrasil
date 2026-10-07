@@ -203,7 +203,7 @@ Trigger events control *which handler runs*. Step events record *what happened d
 | `lib/core_utils/` | `YggdrasilCore`, `YggSession`, config loader, logging |
 | `lib/watchers/` | `WatcherManager`, `WatchSpec`, backends (CouchDB, filesystem) |
 | `lib/couchdb/` | CouchDB connection handler, document managers, `ChangesFetcher` (continuous poller), typed models (`couchdb_models.py`) |
-| `lib/realms/` | Internal realm implementations and `test_realm` (dev-only) |
+| `lib/realms/` | `test_realm`, the dev-only reference realm; production realms are external packages |
 | `tests/` | Full test suite (1700+ tests) |
 
 ---
