@@ -50,7 +50,7 @@ See [docs/getting_started/quickstart.md](docs/getting_started/quickstart.md) for
 |------|---------|
 | `yggdrasil/` | Public API: `flow/` (execution framework), `cli.py`, `core/` |
 | `lib/` | Internal implementation: core, watchers, CouchDB, realm handlers |
-| `lib/realms/` | Internal realm implementations and `test_realm` (dev-only) |
+| `lib/realms/` | `test_realm`, the dev-only reference realm; production realms are external packages |
 | `tests/` | Test suite (1700+ tests) |
 | `docs/` | Documentation |
 
