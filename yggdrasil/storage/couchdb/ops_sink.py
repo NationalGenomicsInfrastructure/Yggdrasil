@@ -28,8 +28,11 @@ def _get_couchdb_endpoint_config() -> dict[str, Any]:
 
 @dataclass
 class OpsWriter(CouchDBHandler):
-    """
-    - write(plan_dir, snapshot): used by the FileSpoolConsumer to upsert plan_status.
+    """CouchDB sink that upserts ``plan_status`` snapshots for the FileSpoolConsumer.
+
+    Resolves its endpoint with its own lookup rather than
+    ``resolve_couchdb_params``; the two accept different configurations
+    (``docs/TECH_DEBT_LEDGER.md`` entry 21).
     """
 
     def __init__(
