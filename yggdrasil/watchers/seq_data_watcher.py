@@ -8,8 +8,8 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from yggdrasil.logging_utils import custom_logger
-from yggdrasil.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.abstract_watcher import AbstractWatcher
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 class SeqDataDetector(FileSystemEventHandler):

@@ -11,9 +11,8 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
 from yggdrasil.watchers.backends.base import RawWatchEvent, WatcherBackend
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 from yggdrasil.watchers.manager import WatcherBackendGroup, WatcherManager
 from yggdrasil.watchers.watchspec import BoundWatchSpec, WatchSpec
 

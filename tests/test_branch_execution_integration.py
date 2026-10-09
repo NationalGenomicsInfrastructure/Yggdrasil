@@ -61,10 +61,9 @@ from yggdrasil.storage.partitions import partition_key
 from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.protocols import InternalStorageBundle
 from yggdrasil.storage.sqlite import SQLiteInternalStore
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
 from yggdrasil.watchers.backends.base import RawWatchEvent
 from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 from yggdrasil.watchers.manager import WatcherManager
 from yggdrasil.watchers.watchspec import BoundWatchSpec
 

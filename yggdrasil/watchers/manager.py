@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 
 from yggdrasil.config.external_systems import resolve_connection
 from yggdrasil.logging_utils import custom_logger
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
 from yggdrasil.watchers.backends.base import (
     CheckpointStore,
     RawWatchEvent,
@@ -28,6 +27,7 @@ from yggdrasil.watchers.backends.base import (
 )
 from yggdrasil.watchers.backends.checkpoint_store import CouchDBCheckpointStore
 from yggdrasil.watchers.config_validation import validate_watcher_config_wiring
+from yggdrasil.watchers.events import YggdrasilEvent
 from yggdrasil.watchers.filter_eval import (
     FilterResult,
     evaluate_filter,

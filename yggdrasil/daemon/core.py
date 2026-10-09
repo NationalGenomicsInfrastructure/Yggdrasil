@@ -23,8 +23,7 @@ from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 from yggdrasil.logging_utils import custom_logger
 from yggdrasil.storage import InternalStorageBundle, build_internal_storage
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 from yggdrasil.watchers.manager import WatcherManager
 from yggdrasil.watchers.plan_watcher import PlanWatcher
 from yggdrasil.watchers.watchspec import BoundWatchSpec

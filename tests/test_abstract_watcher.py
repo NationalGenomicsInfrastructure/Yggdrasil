@@ -2,8 +2,8 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock
 
-from yggdrasil.watchers.abstract_watcher import AbstractWatcher, YggdrasilEvent
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.abstract_watcher import AbstractWatcher
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 class MockWatcher(AbstractWatcher):

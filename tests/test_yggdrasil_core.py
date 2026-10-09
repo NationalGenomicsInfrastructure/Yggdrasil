@@ -7,12 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from yggdrasil.daemon.core import YggdrasilCore
 from yggdrasil.daemon.plan_execution import DAEMON_CLAIM
 from yggdrasil.daemon.singleton import SingletonMeta
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
 from yggdrasil.watchers.config_validation import (
     WatcherConfigurationError,
     WatcherConfigValidationIssue,
 )
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 class TestYggdrasilCore(unittest.TestCase):

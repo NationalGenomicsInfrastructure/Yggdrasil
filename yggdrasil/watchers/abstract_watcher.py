@@ -1,55 +1,10 @@
-import datetime
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
 from yggdrasil.logging_utils import custom_logger
-from yggdrasil.watchers.events import EventType
-
-
-class YggdrasilEvent:
-    """
-    A lightweight container for events that watchers produce and YggdrasilCore consumes.
-
-    Attributes:
-        event_type (EventType): The event type (e.g. EventType.PROJECT_CHANGE).
-        payload (Any): Arbitrary data relevant to the event (e.g. info about a changed file).
-        source (str): Identifier of the event source (e.g. "filesystem", "couchdb").
-        timestamp (datetime.datetime): When the event was created.
-    """
-
-    __slots__ = ("event_type", "payload", "source", "timestamp")
-
-    def __init__(self, event_type: EventType | str, payload: Any, source: str):
-        if isinstance(event_type, EventType):
-            normalized = event_type
-        elif isinstance(event_type, str):
-            try:
-                normalized = EventType(event_type)
-            except ValueError:
-                try:
-                    normalized = EventType[event_type]
-                except KeyError as exc:
-                    raise ValueError(f"Unknown event_type: {event_type!r}") from exc
-        else:
-            raise TypeError(
-                "event_type must be an EventType or str convertible to EventType"
-            )
-
-        self.event_type: EventType = normalized
-        self.payload = payload
-        self.source = source
-        self.timestamp = datetime.datetime.now()
-
-    def __repr__(self) -> str:
-        return (
-            f"YggdrasilEvent("
-            f"event_type={self.event_type!r}, "
-            f"payload={self.payload!r}, "
-            f"source={self.source!r}, "
-            f"timestamp={self.timestamp.isoformat()})"
-        )
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 class AbstractWatcher(ABC):

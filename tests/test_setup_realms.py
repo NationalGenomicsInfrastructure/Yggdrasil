@@ -15,8 +15,7 @@ from yggdrasil.daemon.core import YggdrasilCore
 from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.planner.api import PlanDraft
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 from yggdrasil.watchers.watchspec import WatchSpec
 
 # ---------------------------------------------------------------------------

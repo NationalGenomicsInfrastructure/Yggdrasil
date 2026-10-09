@@ -64,8 +64,7 @@ from yggdrasil.storage.sqlite import (
     SQLitePlanChangeSource,
     SQLitePlanStore,
 )
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
 CORE_LOGGER = "yggdrasil.daemon.core.YggdrasilCore"

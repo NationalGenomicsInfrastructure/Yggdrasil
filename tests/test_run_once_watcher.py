@@ -22,8 +22,7 @@ from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.outcomes import AttemptReport, StepOutcome, TerminationReason
 from yggdrasil.storage.plan_updates import FinalizationResult, FinalizationStatus
-from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
-from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 def _run_once_plan_doc(plan_id: str, execution_owner: str) -> dict:
