@@ -25,31 +25,31 @@ from tempfile import TemporaryDirectory
 from typing import Any, TypeVar
 from unittest.mock import patch
 
-from lib.core_utils.plan_execution import (
-    DAEMON_CLAIM,
-    ExecutionClaim,
-    ExecutionResult,
-    PlanExecutionCoordinator,
-)
-from lib.storage.errors import PlanStoreError
-from lib.storage.plan_updates import (
-    ExecutionFinalization,
-    FinalizationResult,
-    FinalizationStatus,
-)
-from lib.storage.protocols import PlanStore
-from lib.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 from tests.plan_store_support import (
     FakeCouchServer,
     patch_api_exception,
     plan_db_manager_on,
 )
 from yggdrasil.core.engine import Engine
+from yggdrasil.daemon.plan_execution import (
+    DAEMON_CLAIM,
+    ExecutionClaim,
+    ExecutionResult,
+    PlanExecutionCoordinator,
+)
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.events.emitter import EventEmitter
 from yggdrasil.flow.model import FAIL_FAST_POLICY, Plan, StepResult, StepSpec
 from yggdrasil.flow.outcomes import AttemptReport
 from yggdrasil.flow.step import StepContext, step
+from yggdrasil.storage.errors import PlanStoreError
+from yggdrasil.storage.plan_updates import (
+    ExecutionFinalization,
+    FinalizationResult,
+    FinalizationStatus,
+)
+from yggdrasil.storage.protocols import PlanStore
+from yggdrasil.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 
 # Upper bound for cross-thread handshakes. Never slept on.
 WAIT = 5.0

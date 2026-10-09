@@ -13,17 +13,17 @@ import signal
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from lib.core_utils.event_types import EventType
-from lib.core_utils.singleton_decorator import SingletonMeta
-from lib.core_utils.yggdrasil_core import (  # type: ignore[attr-defined]
+from yggdrasil.daemon.core import (  # type: ignore[attr-defined]
     YggdrasilCore,
     _generate_run_once_owner,
 )
-from lib.storage.plan_updates import FinalizationResult, FinalizationStatus
-from lib.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.outcomes import AttemptReport, StepOutcome, TerminationReason
+from yggdrasil.storage.plan_updates import FinalizationResult, FinalizationStatus
+from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.watchers.events import EventType
 
 
 def _run_once_plan_doc(plan_id: str, execution_owner: str) -> dict:
@@ -93,9 +93,7 @@ class TestCheckPlanOverwrite(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
         self.mock_plan_dbm = MagicMock()
@@ -105,10 +103,10 @@ class TestCheckPlanOverwrite(unittest.TestCase):
         self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_true_when_no_existing_plan(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
@@ -126,10 +124,10 @@ class TestCheckPlanOverwrite(unittest.TestCase):
         self.assertEqual(plan_doc_id, "pln_test_123")
         self.assertTrue(should_continue)
 
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_false_when_existing_plan_without_force(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
@@ -153,10 +151,10 @@ class TestCheckPlanOverwrite(unittest.TestCase):
         self.assertEqual(plan_doc_id, "pln_test_123")
         self.assertFalse(should_continue)
 
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_true_when_existing_plan_with_force(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
@@ -187,9 +185,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
 
@@ -198,14 +194,14 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
-    @patch("lib.couchdb.project_db_manager.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.storage.couchdb.ops_sink.OpsWriter")
+    @patch("yggdrasil.ops.consumer.FileSpoolConsumer")
+    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
+    @patch("yggdrasil.couchdb.project_db_manager.ProjectDBManager")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_error_when_doc_not_found(
         self,
         mock_init_db,
@@ -232,14 +228,14 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         # Assert
         self.assertEqual(result, 1)
 
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
-    @patch("lib.couchdb.project_db_manager.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.storage.couchdb.ops_sink.OpsWriter")
+    @patch("yggdrasil.ops.consumer.FileSpoolConsumer")
+    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
+    @patch("yggdrasil.couchdb.project_db_manager.ProjectDBManager")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_error_when_no_handlers_registered(
         self,
         mock_init_db,
@@ -260,7 +256,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         core = YggdrasilCore(self.mock_config)
         core.pdm = mock_pdm  # Assign mock since _init_db_managers is patched
         # Clear any registered handlers
-        from lib.core_utils.event_types import EventType
+        from yggdrasil.watchers.events import EventType
 
         core.subscriptions[EventType.PROJECT_CHANGE] = []
 
@@ -270,14 +266,14 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         # Assert
         self.assertEqual(result, 1)
 
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
-    @patch("lib.couchdb.project_db_manager.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.storage.couchdb.ops_sink.OpsWriter")
+    @patch("yggdrasil.ops.consumer.FileSpoolConsumer")
+    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
+    @patch("yggdrasil.couchdb.project_db_manager.ProjectDBManager")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_creates_plan_with_run_once_origin(
         self,
         mock_init_db,
@@ -316,7 +312,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         mock_draft.auto_run = True
         mock_handler.run_now.return_value = [mock_draft]
 
-        from lib.core_utils.event_types import EventType
+        from yggdrasil.watchers.events import EventType
 
         core.subscriptions[EventType.PROJECT_CHANGE] = [mock_handler]
 
@@ -330,14 +326,14 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         call_args = mock_plan_dbm.save_plan.call_args
         self.assertEqual(call_args.kwargs.get("execution_authority"), "run_once")
 
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
-    @patch("lib.couchdb.project_db_manager.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.storage.couchdb.ops_sink.OpsWriter")
+    @patch("yggdrasil.ops.consumer.FileSpoolConsumer")
+    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
+    @patch("yggdrasil.couchdb.project_db_manager.ProjectDBManager")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_creates_plan_with_execution_owner(
         self,
         mock_init_db,
@@ -376,7 +372,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         mock_draft.auto_run = True
         mock_handler.run_now.return_value = [mock_draft]
 
-        from lib.core_utils.event_types import EventType
+        from yggdrasil.watchers.events import EventType
 
         core.subscriptions[EventType.PROJECT_CHANGE] = [mock_handler]
 
@@ -392,14 +388,14 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         self.assertIsNotNone(owner)
         self.assertTrue(owner.startswith("run_once:"))
 
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
-    @patch("lib.couchdb.project_db_manager.ProjectDBManager")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.storage.couchdb.ops_sink.OpsWriter")
+    @patch("yggdrasil.ops.consumer.FileSpoolConsumer")
+    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
+    @patch("yggdrasil.couchdb.project_db_manager.ProjectDBManager")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_force_overwrites_existing_plan(
         self,
         mock_init_db,
@@ -444,7 +440,7 @@ class TestRunOnceWithWatcher(unittest.TestCase):
         mock_draft.auto_run = True
         mock_handler.run_now.return_value = [mock_draft]
 
-        from lib.core_utils.event_types import EventType
+        from yggdrasil.watchers.events import EventType
 
         core.subscriptions[EventType.PROJECT_CHANGE] = [mock_handler]
 
@@ -467,9 +463,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
         # YggdrasilCore is a singleton held by its metaclass; each test needs
         # its own, with its own engine, storage and execution coordinator.
         SingletonMeta._instances.clear()
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
         self.mock_plan_dbm = MagicMock()
@@ -479,11 +473,11 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
         self.storage_patcher.stop()
         SingletonMeta._instances.clear()
 
-    @patch("lib.core_utils.yggdrasil_core.PlanWatcher")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.PlanWatcher")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_one_on_timeout(
         self,
         mock_init_db,
@@ -523,11 +517,11 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
             plan_ids=pending_plan_ids
         )
 
-    @patch("lib.core_utils.yggdrasil_core.PlanWatcher")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.PlanWatcher")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_interrupt_during_recovery_skips_remaining_plans(
         self,
         mock_init_db,
@@ -601,11 +595,11 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
         self.assertEqual(core.engine._run_attempt.call_count, 1)
         self.assertEqual(result, 130)
 
-    @patch("lib.core_utils.yggdrasil_core.PlanWatcher")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.PlanWatcher")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_interrupt_while_loading_plan_prevents_execution(
         self,
         mock_init_db,
@@ -669,9 +663,7 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         YggdrasilCore._instance = None
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_storage = self.storage_patcher.start().return_value
         self.mock_config = {"work_root": "/tmp/ygg_test"}
         self.mock_plan_dbm = MagicMock()
@@ -681,10 +673,10 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
         self.storage_patcher.stop()
         YggdrasilCore._instance = None
 
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_none_when_handler_lacks_derive_scope(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
@@ -709,10 +701,10 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
 
         self.assertEqual(result, [])
 
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_returns_plan_doc_id_on_success(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):
@@ -750,10 +742,10 @@ class TestCreateRunOncePlanForHandler(unittest.TestCase):
 
         self.assertEqual(result, ["pln_test_12345"])
 
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-    @patch("lib.core_utils.yggdrasil_core.FileSpoolEmitter")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_uses_plan_id_from_draft_for_overwrite_check(
         self, mock_init_db, mock_engine, mock_emitter, mock_ops
     ):

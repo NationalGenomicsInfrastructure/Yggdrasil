@@ -15,9 +15,6 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import Mock, patch
 
-from lib.couchdb.plan_db_manager import PlanDBManager
-from lib.ops.sinks.couch import OpsWriter
-from lib.storage.plan_updates import ExecutionFinalization
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import (
     CONTINUE_INDEPENDENT_POLICY,
@@ -31,6 +28,9 @@ from yggdrasil.flow.outcomes import (
     StepOutcome,
     TerminationReason,
 )
+from yggdrasil.storage.couchdb.ops_sink import OpsWriter
+from yggdrasil.storage.couchdb.plan_store import PlanDBManager
+from yggdrasil.storage.plan_updates import ExecutionFinalization
 
 SCOPE = {"kind": "project", "id": "P1"}
 
@@ -187,7 +187,7 @@ class FakeApiException(Exception):
     """Stands in for the SDK's ApiException in the CouchDB layer under test.
 
     Some test modules replace ``ibm_cloud_sdk_core`` in ``sys.modules`` when
-    they are imported, so which class ``lib.couchdb`` bound as
+    they are imported, so which class ``yggdrasil.couchdb`` bound as
     ``ApiException`` depends on import order. :func:`patch_api_exception`
     binds this class instead, and :class:`FakeCouchServer` raises it.
 
@@ -207,9 +207,9 @@ class FakeApiException(Exception):
 
 # Modules whose ``except ApiException`` clauses the fake server must satisfy.
 _API_EXCEPTION_BINDINGS = (
-    "lib.couchdb.couchdb_connection.ApiException",
-    "lib.couchdb.plan_db_manager.ApiException",
-    "lib.ops.sinks.couch.ApiException",
+    "yggdrasil.couchdb.connection.ApiException",
+    "yggdrasil.storage.couchdb.plan_store.ApiException",
+    "yggdrasil.storage.couchdb.ops_sink.ApiException",
 )
 
 
@@ -319,10 +319,11 @@ def plan_db_manager_on(server: FakeCouchServer) -> PlanDBManager:
     params = Mock(url="http://couch.invalid:5984", user_env="FAKE_U", pass_env="FAKE_P")
     with (
         patch(
-            "lib.couchdb.plan_db_manager.resolve_couchdb_params", return_value=params
+            "yggdrasil.storage.couchdb.plan_store.resolve_couchdb_params",
+            return_value=params,
         ),
         patch(
-            "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client",
+            "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client",
             return_value=server,
         ),
         patch.dict(os.environ, {"FAKE_U": "user", "FAKE_P": "pass"}),
@@ -343,7 +344,7 @@ def ops_writer_on(server: FakeCouchServer) -> OpsWriter:
     """
     with (
         patch(
-            "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client",
+            "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client",
             return_value=server,
         ),
         patch.dict(os.environ, {"FAKE_U": "user", "FAKE_P": "pass"}),

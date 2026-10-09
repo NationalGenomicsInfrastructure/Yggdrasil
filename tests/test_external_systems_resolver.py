@@ -1,4 +1,4 @@
-"""Unit tests for lib.core_utils.external_systems_resolver.
+"""Unit tests for yggdrasil.config.external_systems.
 
 Tests cover endpoint resolution, connection resolution, DataAccessPolicy
 merging, error conditions, and config injection for filesystem-free testing.
@@ -6,7 +6,7 @@ merging, error conditions, and config injection for filesystem-free testing.
 
 import unittest
 
-from lib.core_utils.external_systems_resolver import (
+from yggdrasil.config.external_systems import (
     DataAccessPolicy,
     ResolvedConnection,
     ResolvedEndpoint,

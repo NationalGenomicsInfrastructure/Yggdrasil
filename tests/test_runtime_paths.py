@@ -5,13 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lib.core_utils.runtime_paths import (
+from yggdrasil.config.runtime_paths import (
     default_event_spool,
     default_work_root,
     resolve_event_spool,
     resolve_work_root,
 )
-from lib.core_utils.ygg_session import YggSession
+from yggdrasil.config.session import YggSession
 
 
 class RuntimePathsTestBase(unittest.TestCase):

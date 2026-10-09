@@ -10,7 +10,7 @@ Comprehensive coverage of all eligibility scenarios including:
 
 import unittest
 
-from lib.core_utils.plan_eligibility import get_eligibility_reason, is_plan_eligible
+from yggdrasil.storage.plan_eligibility import get_eligibility_reason, is_plan_eligible
 
 
 class TestIsPlanEligible(unittest.TestCase):

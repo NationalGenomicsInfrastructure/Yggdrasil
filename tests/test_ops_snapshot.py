@@ -8,7 +8,12 @@ wins when an attempt's events and its report disagree.
 import unittest
 from typing import Any
 
-from lib.ops.snapshot import (
+from yggdrasil.flow.events.attempt_records import (
+    ATTEMPT_REPORT_EVENT,
+    ATTEMPT_STARTED_EVENT,
+    STEP_BLOCKED_EVENT,
+)
+from yggdrasil.ops.snapshot import (
     ATTEMPT_FINISHED,
     ATTEMPT_RUNNING,
     STATE_INTERRUPTED,
@@ -24,11 +29,6 @@ from lib.ops.snapshot import (
     project_attempt,
     project_legacy,
     run_id_of,
-)
-from yggdrasil.flow.events.attempt_records import (
-    ATTEMPT_REPORT_EVENT,
-    ATTEMPT_STARTED_EVENT,
-    STEP_BLOCKED_EVENT,
 )
 
 OLDER = "20260921T120500000000Z_ffff"

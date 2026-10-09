@@ -10,14 +10,14 @@ import unittest
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
-from lib.core_utils.event_types import EventType
-from lib.core_utils.singleton_decorator import SingletonMeta
-from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.watchers.abstract_watcher import YggdrasilEvent
-from lib.watchers.watchspec import WatchSpec
 from yggdrasil.core.realm import RealmDescriptor
+from yggdrasil.daemon.core import YggdrasilCore
+from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.planner.api import PlanDraft
+from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.watchspec import WatchSpec
 
 # ---------------------------------------------------------------------------
 # Test handler classes
@@ -100,14 +100,10 @@ class TestSetupRealms(unittest.TestCase):
         SingletonMeta._instances.clear()
 
         # Patch heavy infrastructure
-        self.ops_patcher = patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-        self.engine_patcher = patch("lib.core_utils.yggdrasil_core.Engine")
-        self.db_patcher = patch(
-            "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
-        )
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.ops_patcher = patch("yggdrasil.daemon.core.OpsConsumerService")
+        self.engine_patcher = patch("yggdrasil.daemon.core.Engine")
+        self.db_patcher = patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
@@ -133,8 +129,8 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- setup_realms basic flow ---
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_setup_realms_single_realm(self, _test_enabled, mock_discover):
         """setup_realms registers handlers from a single discovered realm."""
         desc = RealmDescriptor(
@@ -159,8 +155,8 @@ class TestSetupRealms(unittest.TestCase):
         # Handler identity registry populated
         self.assertIn(("tenx", "handler_a"), core._handler_identity_registry)
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_setup_realms_multiple_realms(self, _test_enabled, mock_discover):
         """setup_realms registers handlers from multiple realms."""
         desc1 = RealmDescriptor(
@@ -182,8 +178,8 @@ class TestSetupRealms(unittest.TestCase):
         realm_ids = {h.realm_id for h in handlers}
         self.assertEqual(realm_ids, {"tenx", "smartseq3"})
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_setup_realms_no_realms(self, _test_enabled, mock_discover):
         """setup_realms handles no realms discovered gracefully."""
         mock_discover.return_value = []
@@ -196,8 +192,8 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- Realm ID uniqueness ---
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_duplicate_realm_id_raises(self, _test_enabled, mock_discover):
         """Duplicate realm_id raises RuntimeError."""
         desc1 = RealmDescriptor(
@@ -217,8 +213,8 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- Handler identity ---
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_handler_id_set_on_instance(self, _test_enabled, mock_discover):
         """Handler instances have realm_id set by core."""
         desc = RealmDescriptor(
@@ -233,8 +229,8 @@ class TestSetupRealms(unittest.TestCase):
         handler = core._handler_identity_registry[("my_realm", "handler_a")]
         self.assertEqual(handler.realm_id, "my_realm")
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_missing_handler_id_raises(self, _test_enabled, mock_discover):
         """Handler class missing handler_id raises RuntimeError."""
 
@@ -262,8 +258,8 @@ class TestSetupRealms(unittest.TestCase):
             core.setup_realms()
         self.assertIn("missing required 'handler_id'", str(ctx.exception))
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_missing_event_type_raises(self, _test_enabled, mock_discover):
         """Handler class with invalid event_type raises RuntimeError."""
 
@@ -293,8 +289,8 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- WatchSpec validation ---
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_watchspec_target_handler_unknown_raises(
         self, _test_enabled, mock_discover
     ):
@@ -319,8 +315,8 @@ class TestSetupRealms(unittest.TestCase):
             core.setup_realms()
         self.assertIn("unknown handler_id", str(ctx.exception))
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_watchspec_no_receiver_raises(self, _test_enabled, mock_discover):
         """WatchSpec with event_type that no handler subscribes to raises RuntimeError."""
         # Handler subscribes to PROJECT_CHANGE, but spec emits COUCHDB_DOC_CHANGED
@@ -343,8 +339,8 @@ class TestSetupRealms(unittest.TestCase):
             core.setup_realms()
         self.assertIn("no handler in this realm subscribes", str(ctx.exception))
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_watchspec_valid_target_handler_passes(self, _test_enabled, mock_discover):
         """WatchSpec with valid target_handlers passes validation."""
         spec = WatchSpec(
@@ -364,7 +360,7 @@ class TestSetupRealms(unittest.TestCase):
 
         core = self._make_core()
         # _setup_watcher_manager does a local import; patch that path
-        with patch("lib.watchers.manager.WatcherManager") as mock_wm_cls:
+        with patch("yggdrasil.watchers.manager.WatcherManager") as mock_wm_cls:
             mock_wm = Mock()
             mock_wm_cls.return_value = mock_wm
             core.setup_realms()
@@ -373,8 +369,8 @@ class TestSetupRealms(unittest.TestCase):
             ("valid_target", "couchdb_handler"), core._handler_identity_registry
         )
 
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
+    @patch("yggdrasil.daemon.core.discover_realms")
+    @patch("yggdrasil.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_setup_realms_does_not_validate_watcher_connections(
         self, _test_enabled, mock_discover
     ):
@@ -417,14 +413,10 @@ class TestHandleEventRouting(unittest.TestCase):
     def setUp(self):
         SingletonMeta._instances.clear()
 
-        self.ops_patcher = patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-        self.engine_patcher = patch("lib.core_utils.yggdrasil_core.Engine")
-        self.db_patcher = patch(
-            "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
-        )
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.ops_patcher = patch("yggdrasil.daemon.core.OpsConsumerService")
+        self.engine_patcher = patch("yggdrasil.daemon.core.Engine")
+        self.db_patcher = patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()
@@ -460,7 +452,7 @@ class TestHandleEventRouting(unittest.TestCase):
 
         return core, handler_a, handler_b
 
-    @patch("lib.core_utils.yggdrasil_core.asyncio.create_task")
+    @patch("yggdrasil.daemon.core.asyncio.create_task")
     def test_broadcast_to_all_handlers(self, mock_create_task):
         """Without routing hints, event is broadcast to ALL handlers."""
         core, handler_a, handler_b = self._make_core_with_handlers()
@@ -479,7 +471,7 @@ class TestHandleEventRouting(unittest.TestCase):
         # Both handlers should have tasks created
         self.assertEqual(mock_create_task.call_count, 2)
 
-    @patch("lib.core_utils.yggdrasil_core.asyncio.create_task")
+    @patch("yggdrasil.daemon.core.asyncio.create_task")
     def test_filter_by_realm_id(self, mock_create_task):
         """With realm_id in payload, only that realm's handlers are invoked."""
         core, handler_a, handler_b = self._make_core_with_handlers()
@@ -499,7 +491,7 @@ class TestHandleEventRouting(unittest.TestCase):
         # Only handler_a (tenx) should be invoked
         self.assertEqual(mock_create_task.call_count, 1)
 
-    @patch("lib.core_utils.yggdrasil_core.asyncio.create_task")
+    @patch("yggdrasil.daemon.core.asyncio.create_task")
     def test_filter_by_target_handlers(self, mock_create_task):
         """With target_handlers in payload, only matching handler_ids are invoked."""
         core, handler_a, handler_b = self._make_core_with_handlers()
@@ -519,7 +511,7 @@ class TestHandleEventRouting(unittest.TestCase):
         # Only handler_b (smartseq3) should be invoked
         self.assertEqual(mock_create_task.call_count, 1)
 
-    @patch("lib.core_utils.yggdrasil_core.asyncio.create_task")
+    @patch("yggdrasil.daemon.core.asyncio.create_task")
     def test_filter_by_realm_and_target(self, mock_create_task):
         """Both realm_id and target_handlers narrow to specific handler."""
         core, handler_a, handler_b = self._make_core_with_handlers()
@@ -538,7 +530,7 @@ class TestHandleEventRouting(unittest.TestCase):
         core.handle_event(event)
         self.assertEqual(mock_create_task.call_count, 1)
 
-    @patch("lib.core_utils.yggdrasil_core.asyncio.create_task")
+    @patch("yggdrasil.daemon.core.asyncio.create_task")
     def test_unknown_realm_id_no_dispatch(self, mock_create_task):
         """Unknown realm_id means no handlers are invoked."""
         core, _, _ = self._make_core_with_handlers()
@@ -556,7 +548,7 @@ class TestHandleEventRouting(unittest.TestCase):
         core.handle_event(event)
         mock_create_task.assert_not_called()
 
-    @patch("lib.core_utils.yggdrasil_core.asyncio.create_task")
+    @patch("yggdrasil.daemon.core.asyncio.create_task")
     def test_routing_hints_popped_from_payload(self, mock_create_task):
         """realm_id and target_handlers are popped and don't leak into handler payload."""
         core, handler_a, _ = self._make_core_with_handlers()
@@ -611,14 +603,10 @@ class TestGetRealmHelpers(unittest.TestCase):
 
     def setUp(self):
         SingletonMeta._instances.clear()
-        self.ops_patcher = patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-        self.engine_patcher = patch("lib.core_utils.yggdrasil_core.Engine")
-        self.db_patcher = patch(
-            "lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"
-        )
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.ops_patcher = patch("yggdrasil.daemon.core.OpsConsumerService")
+        self.engine_patcher = patch("yggdrasil.daemon.core.Engine")
+        self.db_patcher = patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_ops = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
         self.mock_db = self.db_patcher.start()

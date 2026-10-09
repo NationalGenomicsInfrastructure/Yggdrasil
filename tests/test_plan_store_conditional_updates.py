@@ -18,11 +18,6 @@ from typing import Any
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
-from lib.core_utils.plan_eligibility import is_plan_eligible
-from lib.storage.errors import PlanStoreError, RevisionConflictError
-from lib.storage.plan_documents import build_plan_document
-from lib.storage.plan_updates import FinalizationStatus, SupersessionReason
-from lib.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 from tests.plan_store_support import (
     DRAINED_FAILURE,
     PREFLIGHT_REJECTED,
@@ -35,6 +30,11 @@ from tests.plan_store_support import (
     patch_api_exception,
     plan_db_manager_on,
 )
+from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
+from yggdrasil.storage.plan_documents import build_plan_document
+from yggdrasil.storage.plan_eligibility import is_plan_eligible
+from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
+from yggdrasil.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 
 PLAN_ID = "pln_test_P1_v1"
 

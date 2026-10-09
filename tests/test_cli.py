@@ -8,17 +8,17 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
-from lib.core_utils.daemon_lock import DaemonLockError
-from lib.core_utils.errors import (
+from yggdrasil.cli import main
+from yggdrasil.couchdb.connection import CouchDBClientFactory
+from yggdrasil.daemon.lock import DaemonLockError
+from yggdrasil.errors import (
     ExternalSystemUnavailableError,
     InternalStorageConfigurationError,
 )
-from lib.couchdb.couchdb_connection import CouchDBClientFactory
-from lib.watchers.config_validation import (
+from yggdrasil.watchers.config_validation import (
     WatcherConfigurationError,
     WatcherConfigValidationIssue,
 )
-from yggdrasil.cli import main
 
 
 class TestYggdrasilCLI(unittest.TestCase):
@@ -32,7 +32,7 @@ class TestYggdrasilCLI(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures and reset global state."""
         # Reset YggSession state before each test
-        from lib.core_utils.ygg_session import YggSession
+        from yggdrasil.config.session import YggSession
 
         YggSession._YggSession__dev_mode = False  # type: ignore
         YggSession._YggSession__dev_already_set = False  # type: ignore
@@ -51,7 +51,7 @@ class TestYggdrasilCLI(unittest.TestCase):
         sys.argv = self.original_argv
 
         # Reset YggSession state
-        from lib.core_utils.ygg_session import YggSession
+        from yggdrasil.config.session import YggSession
 
         YggSession._YggSession__dev_mode = False  # type: ignore
         YggSession._YggSession__dev_already_set = False  # type: ignore
@@ -311,9 +311,9 @@ class TestYggdrasilCLI(unittest.TestCase):
                 side_effect=fail_during_core_construction,
             ),
             patch("yggdrasil.cli.DaemonLock.acquire") as mock_acquire,
-            patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator"),
+            patch("yggdrasil.couchdb.connection.CouchDbSessionAuthenticator"),
             patch(
-                "lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1",
+                "yggdrasil.couchdb.connection.cloudant_v1.CloudantV1",
                 side_effect=RequestsConnectionError("Connection refused"),
             ),
             patch.dict(
@@ -341,7 +341,7 @@ class TestYggdrasilCLI(unittest.TestCase):
         factory_records = [
             record
             for record in captured.records
-            if record.name == "lib.couchdb.couchdb_connection"
+            if record.name == "yggdrasil.couchdb.connection"
             and "Failed to connect to CouchDB" in record.getMessage()
         ]
         self.assertEqual(len(factory_records), 1)
@@ -1086,7 +1086,7 @@ class TestRunDocModeFlags(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures and reset global state."""
-        from lib.core_utils.ygg_session import YggSession
+        from yggdrasil.config.session import YggSession
 
         YggSession._YggSession__dev_mode = False  # type: ignore
         YggSession._YggSession__dev_already_set = False  # type: ignore
@@ -1099,7 +1099,7 @@ class TestRunDocModeFlags(unittest.TestCase):
     def tearDown(self):
         """Clean up after each test."""
         sys.argv = self.original_argv
-        from lib.core_utils.ygg_session import YggSession
+        from yggdrasil.config.session import YggSession
 
         YggSession._YggSession__dev_mode = False  # type: ignore
         YggSession._YggSession__dev_already_set = False  # type: ignore

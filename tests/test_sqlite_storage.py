@@ -10,8 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.storage.config import SQLiteInternalStorageConfig
-from lib.storage.sqlite import (
+from yggdrasil.flow.model import Plan, StepSpec
+from yggdrasil.storage.config import SQLiteInternalStorageConfig
+from yggdrasil.storage.sqlite import (
     SQLiteCheckpointStore,
     SQLiteInternalStore,
     SQLiteOpsSnapshotSink,
@@ -19,8 +20,7 @@ from lib.storage.sqlite import (
     SQLiteStorageError,
     build_sqlite_bundle,
 )
-from lib.watchers.backends.base import Checkpoint
-from yggdrasil.flow.model import Plan, StepSpec
+from yggdrasil.watchers.backends.base import Checkpoint
 
 
 def _make_plan(plan_id: str = "pln_test_P1_v1") -> Plan:

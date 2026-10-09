@@ -26,17 +26,17 @@ from requests.exceptions import (
     TooManyRedirects,
 )
 
-from lib.couchdb.plan_db_manager import PlanDBManager
-from lib.storage.errors import PlanStoreError, RevisionConflictError
-from lib.storage.plan_documents import build_plan_document
-from lib.storage.plan_updates import (
+from yggdrasil.flow.attempt import AttemptContext
+from yggdrasil.flow.model import Plan, StepSpec
+from yggdrasil.flow.outcomes import StepOutcome, TerminationReason
+from yggdrasil.storage.couchdb.plan_store import PlanDBManager
+from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
+from yggdrasil.storage.plan_documents import build_plan_document
+from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     FinalizationStatus,
     SupersessionReason,
 )
-from yggdrasil.flow.attempt import AttemptContext
-from yggdrasil.flow.model import Plan, StepSpec
-from yggdrasil.flow.outcomes import StepOutcome, TerminationReason
 
 
 class MockApiException(Exception):
@@ -68,7 +68,7 @@ class TestPlanDBManager(unittest.TestCase):
             pass_env=self.mock_config["auth"]["pass_env"],
         )
         self.config_patcher = patch(
-            "lib.couchdb.plan_db_manager.resolve_couchdb_params",
+            "yggdrasil.storage.couchdb.plan_store.resolve_couchdb_params",
             return_value=self.mock_couchdb_params,
         )
         self.config_patcher.start()
@@ -76,7 +76,7 @@ class TestPlanDBManager(unittest.TestCase):
         # Mock CouchDBClientFactory.create_client to return mock client
         self.mock_server = MagicMock()
         self.client_factory_patcher = patch(
-            "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client",
+            "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client",
             return_value=self.mock_server,
         )
         self.client_factory_patcher.start()
@@ -212,7 +212,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(doc["source_doc_rev"], "3-abc123")
         self.assertEqual(doc["notes"], "Test notes")
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_save_plan_api_error(self):
         """Test save_plan raises on API error."""
         self.manager.fetch_document_by_id = Mock(return_value=None)
@@ -335,7 +335,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertFalse(result)
         self.manager.server.put_document.assert_not_called()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_update_executed_token_conflict_retry(self):
         """Test token update retries on 409 conflict."""
         existing_doc = {
@@ -363,7 +363,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(self.manager.server.put_document.call_count, 2)
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_update_executed_token_max_retries_exceeded(self):
         """Test token update fails after max retries."""
         existing_doc = {
@@ -383,7 +383,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(self.manager.server.put_document.call_count, 2)
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_update_executed_token_other_error(self):
         """Test token update fails on non-409 error."""
         existing_doc = {
@@ -481,7 +481,7 @@ class TestPlanDBManager(unittest.TestCase):
 
         self.assertEqual(eligible, [])
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_query_approved_pending_api_error(self):
         """Test query_approved_pending returns empty on API error."""
         mock_result = Mock()
@@ -532,7 +532,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertFalse(result)
         self.manager.server.delete_document.assert_not_called()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_delete_plan_api_error(self):
         """Test delete_plan handles API errors gracefully."""
         existing_doc = {"_id": "pln_tenx_P12345_v1", "_rev": "1-abc"}
@@ -775,7 +775,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertTrue(all(generations))
         self.assertNotEqual(generations[0], generations[1])
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_save_plan_conflict_raises_revision_conflict_without_retry(self):
         """A 409 on regeneration surfaces as the backend-neutral conflict."""
         self.manager.fetch_document_by_id = Mock(return_value=self._stored_doc())
@@ -790,7 +790,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertIsInstance(ctx.exception.__cause__, MockApiException)
         self.manager.server.put_document.assert_called_once()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_save_plan_conflict_on_create_raises_revision_conflict(self):
         """A 409 on a first save means another writer created the plan."""
         self.manager.fetch_document_by_id = Mock(return_value=None)
@@ -830,7 +830,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(written["last_finalized_execution"]["execution_id"], "exec-1")
         self.assertEqual(written["plan_generation"], "gen-1")
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_finalize_409_is_reported_as_conflict_not_retried(self):
         """One call makes one write attempt; the caller owns retries."""
         doc = self._stored_doc()
@@ -844,7 +844,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.manager.server.put_document.assert_called_once()
         self.assertEqual(self.manager.server.get_document.call_count, 2)
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_finalize_409_revealing_a_regeneration_is_superseded(self):
         """After a conflict the reread decides; a new generation is final."""
         doc = self._stored_doc()
@@ -881,7 +881,7 @@ class TestPlanDBManager(unittest.TestCase):
             "unclassified transport failure": (RequestException("something"), False),
         }
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_write_failures_are_classified_plan_store_errors(self):
         """A failed write says whether another attempt could get past it."""
         for label, (error, retryable) in self._failure_cases().items():
@@ -898,7 +898,7 @@ class TestPlanDBManager(unittest.TestCase):
                 self.assertEqual(ctx.exception.retryable, retryable)
                 self.manager.server.put_document.assert_called_once()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_read_failures_are_classified_plan_store_errors(self):
         """The same classification applies before anything is written."""
         request = self._finalization(self._stored_doc())
@@ -914,7 +914,7 @@ class TestPlanDBManager(unittest.TestCase):
                 self.assertEqual(ctx.exception.retryable, retryable)
                 self.manager.server.put_document.assert_not_called()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_finalize_reports_a_genuinely_deleted_plan_as_missing(self):
         """Only CouchDB's own 404 means the plan is gone."""
         request = self._finalization(self._stored_doc())
@@ -925,7 +925,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(result.reason, SupersessionReason.PLAN_MISSING)
         self.manager.server.put_document.assert_not_called()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_finalize_refuses_to_read_a_malformed_response_as_a_missing_plan(self):
         """A non-document answer says nothing about whether the plan exists.
 
@@ -944,7 +944,7 @@ class TestPlanDBManager(unittest.TestCase):
                 self.assertFalse(ctx.exception.retryable)
                 self.manager.server.put_document.assert_not_called()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_finalize_refuses_a_malformed_response_after_a_conflict(self):
         """The reread that interprets a conflict must be trustworthy too."""
         doc = self._stored_doc()
@@ -955,7 +955,7 @@ class TestPlanDBManager(unittest.TestCase):
         with self.assertRaises(PlanStoreError):
             self.manager.finalize_execution(request)
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_ensure_plan_generation_refuses_a_malformed_response(self):
         """A generation is never assigned on top of an unreadable answer."""
         self._get_returns(["not", "a", "document"])
@@ -991,7 +991,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(doc["plan_generation"], written["plan_generation"])
         self.assertEqual(doc["_rev"], "2-def")
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_ensure_plan_generation_adopts_the_winner_after_409(self):
         """Losing the race to another initializer adopts its generation."""
         legacy = self._stored_doc()
@@ -1005,7 +1005,7 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(doc, winner)
         self.manager.server.put_document.assert_called_once()
 
-    @patch("lib.couchdb.plan_db_manager.ApiException", MockApiException)
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_ensure_plan_generation_read_failure_is_a_plan_store_error(self):
         """A failed read is a backend failure, not a missing plan."""
         self._get_returns(MockApiException(500, "Server error"))

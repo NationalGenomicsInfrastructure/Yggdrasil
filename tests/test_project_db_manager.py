@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import ANY, MagicMock, patch
 
-from lib.couchdb.project_db_manager import ProjectDBManager
+from yggdrasil.couchdb.project_db_manager import ProjectDBManager
 
 
 class TestProjectDBManager(unittest.TestCase):
@@ -29,8 +29,8 @@ class TestProjectDBManager(unittest.TestCase):
             "details": {"library_construction_method": "10X"},
         }
 
-    @patch("lib.couchdb.project_db_manager.resolve_couchdb_params")
-    @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
+    @patch("yggdrasil.couchdb.project_db_manager.resolve_couchdb_params")
+    @patch("yggdrasil.couchdb.project_db_manager.CouchDBHandler.__init__")
     def test_init_success(self, mock_handler_init, mock_resolve_params):
         """Test successful initialization of ProjectDBManager."""
         # Arrange
@@ -49,8 +49,8 @@ class TestProjectDBManager(unittest.TestCase):
             logger=ANY,
         )
 
-    @patch("lib.couchdb.project_db_manager.resolve_couchdb_params")
-    @patch("lib.couchdb.project_db_manager.CouchDBHandler.__init__")
+    @patch("yggdrasil.couchdb.project_db_manager.resolve_couchdb_params")
+    @patch("yggdrasil.couchdb.project_db_manager.CouchDBHandler.__init__")
     def test_fetch_document_by_id_success(self, mock_handler_init, mock_get_endpoint):
         """Test successful document retrieval by ID (inherited from CouchDBHandler).
 

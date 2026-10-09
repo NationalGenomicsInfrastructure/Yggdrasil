@@ -19,17 +19,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
-import lib.ops.consumer as consumer_module
-from lib.ops.consumer import FileSpoolConsumer, build_plan_snapshot
-from lib.ops.snapshot import (
-    ATTEMPT_FINISHED,
-    ATTEMPT_RUNNING,
-    PROJECTION_ATTEMPT,
-    PROJECTION_LEGACY,
-    STATE_INTERRUPTED,
-    STATE_PENDING,
-    STATE_UNREACHED,
-)
+import yggdrasil.ops.consumer as consumer_module
 from tests.execution_support import (
     REALM,
     SCOPE,
@@ -58,6 +48,16 @@ from yggdrasil.flow.events.attempt_records import (
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY, Plan
 from yggdrasil.flow.outcomes import AttemptReport, TerminationReason
+from yggdrasil.ops.consumer import FileSpoolConsumer, build_plan_snapshot
+from yggdrasil.ops.snapshot import (
+    ATTEMPT_FINISHED,
+    ATTEMPT_RUNNING,
+    PROJECTION_ATTEMPT,
+    PROJECTION_LEGACY,
+    STATE_INTERRUPTED,
+    STATE_PENDING,
+    STATE_UNREACHED,
+)
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
 FAIL_FAST = FAIL_FAST_POLICY

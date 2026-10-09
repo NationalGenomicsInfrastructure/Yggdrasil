@@ -11,8 +11,8 @@ from unittest.mock import Mock, patch
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
-from lib.couchdb.changes_fetcher import ChangesFetcher
-from lib.couchdb.couchdb_models import ChangesBatch, ChangesRow
+from yggdrasil.couchdb.changes_fetcher import ChangesFetcher
+from yggdrasil.couchdb.models import ChangesBatch, ChangesRow
 
 
 class MockApiException(Exception):
@@ -510,7 +510,7 @@ class TestChangesFetcher(unittest.TestCase):
     # --- ApiException handling ---
 
     @patch("asyncio.sleep")
-    @patch("lib.couchdb.changes_fetcher.ApiException", MockApiException)
+    @patch("yggdrasil.couchdb.changes_fetcher.ApiException", MockApiException)
     def test_stream_api_exception_transient_retries(self, mock_sleep):
         """ApiException with status 500 is retried with exponential backoff."""
         call_count = [0]
@@ -548,7 +548,7 @@ class TestChangesFetcher(unittest.TestCase):
         self.assertGreater(mock_sleep.call_count, 0)
 
     @patch("asyncio.sleep")
-    @patch("lib.couchdb.changes_fetcher.ApiException", MockApiException)
+    @patch("yggdrasil.couchdb.changes_fetcher.ApiException", MockApiException)
     def test_stream_api_exception_max_retries_exceeded_no_abort(self, mock_sleep):
         """ApiException max retries exceeded → 60s sleep + reset, stream continues."""
         call_count = [0]
@@ -588,7 +588,7 @@ class TestChangesFetcher(unittest.TestCase):
         self.assertIn(60.0, sleep_calls)
 
     @patch("asyncio.sleep")
-    @patch("lib.couchdb.changes_fetcher.ApiException", MockApiException)
+    @patch("yggdrasil.couchdb.changes_fetcher.ApiException", MockApiException)
     def test_stream_api_exception_non_transient_raises(self, mock_sleep):
         """ApiException with non-transient status (e.g. 400) is immediately re-raised."""
         self.mock_db_handler.fetch_changes_raw.return_value = make_batch(

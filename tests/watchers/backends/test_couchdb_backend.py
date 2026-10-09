@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from ibm_cloud_sdk_core.api_exception import ApiException
 
-from lib.couchdb.couchdb_models import ChangesBatch, ChangesRow, FeedMode
-from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
-from lib.watchers.backends.couchdb import CouchDBBackend, _is_internal_doc
+from yggdrasil.couchdb.models import ChangesBatch, ChangesRow, FeedMode
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from yggdrasil.watchers.backends.couchdb import CouchDBBackend, _is_internal_doc
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 

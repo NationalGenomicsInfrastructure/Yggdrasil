@@ -33,17 +33,17 @@ sys.modules["ibmcloudant"] = MagicMock()
 sys.modules["ibmcloudant.cloudant_v1"] = MagicMock()
 
 # Import after mocks
-import lib.couchdb.couchdb_connection
+import yggdrasil.couchdb.connection
 
-lib.couchdb.couchdb_connection.ApiException = MockApiException
+yggdrasil.couchdb.connection.ApiException = MockApiException
 
-from lib.core_utils.errors import ExternalSystemUnavailableError
-from lib.couchdb.couchdb_connection import (
+from yggdrasil.couchdb.connection import (
     CouchDBClientFactory,
     CouchDBHandler,
     is_transient_doc_fetch_error,
     is_transient_poll_error,
 )
+from yggdrasil.errors import ExternalSystemUnavailableError
 
 
 class TestCouchDBClientFactory(unittest.TestCase):
@@ -58,8 +58,8 @@ class TestCouchDBClientFactory(unittest.TestCase):
         CouchDBClientFactory._logged_connections.clear()
         CouchDBClientFactory._logged_connections.update(self._saved_connections)
 
-    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
-    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("yggdrasil.couchdb.connection.cloudant_v1.CloudantV1")
+    @patch("yggdrasil.couchdb.connection.CouchDbSessionAuthenticator")
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     def test_create_client_success(self, mock_auth, mock_cloudant):
         """Test successful client creation."""
@@ -82,8 +82,8 @@ class TestCouchDBClientFactory(unittest.TestCase):
         mock_client.get_server_information.assert_called_once()
         self.assertEqual(client, mock_client)
 
-    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
-    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("yggdrasil.couchdb.connection.cloudant_v1.CloudantV1")
+    @patch("yggdrasil.couchdb.connection.CouchDbSessionAuthenticator")
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     def test_create_client_skip_verification(self, mock_auth, mock_cloudant):
         """Test client creation without connection verification."""
@@ -139,8 +139,8 @@ class TestCouchDBClientFactory(unittest.TestCase):
             )
         self.assertIn("TEST_PASS", str(ctx.exception))
 
-    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
-    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("yggdrasil.couchdb.connection.cloudant_v1.CloudantV1")
+    @patch("yggdrasil.couchdb.connection.CouchDbSessionAuthenticator")
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     def test_create_client_connection_failure_raises(self, mock_auth, mock_cloudant):
         """Test that connection failure raises ExternalSystemUnavailableError."""
@@ -157,8 +157,8 @@ class TestCouchDBClientFactory(unittest.TestCase):
         self.assertEqual(ctx.exception.endpoint, "http://localhost:5984")
         self.assertIn("VPN", ctx.exception.hint or "")
 
-    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
-    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("yggdrasil.couchdb.connection.cloudant_v1.CloudantV1")
+    @patch("yggdrasil.couchdb.connection.CouchDbSessionAuthenticator")
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     def test_create_client_non_dict_server_info_uses_unknown_version(
         self, mock_auth, mock_cloudant
@@ -179,8 +179,8 @@ class TestCouchDBClientFactory(unittest.TestCase):
         )
         self.assertEqual(client, mock_client)
 
-    @patch("lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1")
-    @patch("lib.couchdb.couchdb_connection.CouchDbSessionAuthenticator")
+    @patch("yggdrasil.couchdb.connection.cloudant_v1.CloudantV1")
+    @patch("yggdrasil.couchdb.connection.CouchDbSessionAuthenticator")
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
     def test_create_client_dedup_logs_debug_on_reconnect(
         self, mock_auth, mock_cloudant
@@ -192,7 +192,7 @@ class TestCouchDBClientFactory(unittest.TestCase):
         }
         mock_cloudant.return_value = mock_client
 
-        with self.assertLogs("lib.couchdb.couchdb_connection", level="DEBUG") as cm:
+        with self.assertLogs("yggdrasil.couchdb.connection", level="DEBUG") as cm:
             CouchDBClientFactory.create_client(
                 url="http://unique-dedup.example:5984",
                 user_env="TEST_USER",
@@ -215,7 +215,7 @@ class TestCouchDBHandler(unittest.TestCase):
     """Tests for CouchDBHandler."""
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_init_creates_client_and_verifies_db(self, mock_create_client):
         """Test handler initialization creates client and verifies db exists."""
         mock_client = MagicMock()
@@ -243,7 +243,7 @@ class TestCouchDBHandler(unittest.TestCase):
         self.assertEqual(handler.server, mock_client)
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_init_raises_on_missing_db(self, mock_create_client):
         """Test handler raises ExternalSystemUnavailableError if database doesn't exist."""
         mock_client = MagicMock()
@@ -263,7 +263,7 @@ class TestCouchDBHandler(unittest.TestCase):
         self.assertIn("nonexistent_db", ctx.exception.hint or "")
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_fetch_document_by_id_success(self, mock_create_client):
         """Test fetching a document by ID."""
         mock_client = MagicMock()
@@ -286,7 +286,7 @@ class TestCouchDBHandler(unittest.TestCase):
         self.assertEqual(doc["_id"], "doc123")
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_fetch_document_by_id_not_found(self, mock_create_client):
         """Test fetching a non-existent document returns None."""
         mock_client = MagicMock()
@@ -304,7 +304,7 @@ class TestCouchDBHandler(unittest.TestCase):
         self.assertIsNone(doc)
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_fetch_document_by_id_non_dict_response_returns_none(
         self, mock_create_client
     ):
@@ -325,7 +325,7 @@ class TestCouchDBHandler(unittest.TestCase):
         self.assertIsNone(doc)
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_fetch_document_by_id_non_404_api_exception_re_raises(
         self, mock_create_client
     ):
@@ -347,7 +347,7 @@ class TestCouchDBHandler(unittest.TestCase):
             handler.fetch_document_by_id("some_doc")
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_fetch_document_by_id_generic_exception_re_raises(self, mock_create_client):
         """Test that a generic exception from get_document is re-raised."""
         mock_client = MagicMock()
@@ -365,7 +365,7 @@ class TestCouchDBHandler(unittest.TestCase):
             handler.fetch_document_by_id("some_doc")
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_init_non_404_api_exception_re_raises(self, mock_create_client):
         """Test that a non-404 ApiException during db verification is re-raised."""
         mock_client = MagicMock()
@@ -383,7 +383,7 @@ class TestCouchDBHandler(unittest.TestCase):
             )
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_find_documents_success(self, mock_create_client):
         """Test a successful Mango query returns the docs list."""
         mock_client = MagicMock()
@@ -407,7 +407,7 @@ class TestCouchDBHandler(unittest.TestCase):
         )
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_find_documents_non_dict_result_returns_empty(self, mock_create_client):
         """Test that a non-dict post_find result returns an empty list."""
         mock_client = MagicMock()
@@ -425,7 +425,7 @@ class TestCouchDBHandler(unittest.TestCase):
         self.assertEqual(docs, [])
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_find_documents_api_exception_re_raises(self, mock_create_client):
         """Test that an ApiException from post_find is re-raised."""
         mock_client = MagicMock()
@@ -443,7 +443,7 @@ class TestCouchDBHandler(unittest.TestCase):
             handler.find_documents({"status": "ready"})
 
     @patch.dict(os.environ, {"TEST_USER": "admin", "TEST_PASS": "secret"})
-    @patch("lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client")
+    @patch("yggdrasil.couchdb.connection.CouchDBClientFactory.create_client")
     def test_find_documents_generic_exception_re_raises(self, mock_create_client):
         """Test that a generic exception from post_find is re-raised."""
         mock_client = MagicMock()
@@ -468,7 +468,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         """Create a handler with mocked factory and env vars."""
         with (
             patch(
-                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+                "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client"
             ) as mock_factory,
             patch.dict(os.environ, {"FC_USER": "admin", "FC_PASS": "secret"}),
         ):
@@ -492,7 +492,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         mock_resp.raise_for_status = Mock()
         return mock_resp
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_basic(self, mock_get):
         """Test basic success: correct URL, params, and returned ChangesBatch."""
         mock_get.return_value = self._make_response(
@@ -519,7 +519,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         self.assertEqual(batch.last_seq, "1-abc")
         self.assertEqual(batch.pending, 0)
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_since_none_defaults_to_zero(self, mock_get):
         """Test that since=None sends '0' to CouchDB."""
         mock_get.return_value = self._make_response()
@@ -529,7 +529,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         params = mock_get.call_args[1]["params"]
         self.assertEqual(params["since"], "0")
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_limit_param(self, mock_get):
         """Test that limit is included in params when specified."""
         mock_get.return_value = self._make_response()
@@ -539,7 +539,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         params = mock_get.call_args[1]["params"]
         self.assertEqual(params["limit"], 50)
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_no_limit_omits_param(self, mock_get):
         """Test that limit is omitted from params when not specified."""
         mock_get.return_value = self._make_response()
@@ -549,7 +549,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         params = mock_get.call_args[1]["params"]
         self.assertNotIn("limit", params)
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_longpoll_mode(self, mock_get):
         """Test that longpoll feed adds timeout param and uses correct socket timeout."""
         mock_get.return_value = self._make_response()
@@ -563,7 +563,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         # Socket timeout = 30_000 / 1000 + 5 = 35.0
         self.assertAlmostEqual(call_kwargs["timeout"], 35.0)
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_normal_mode_no_timeout_param(self, mock_get):
         """Test that normal feed does not add the CouchDB timeout param."""
         mock_get.return_value = self._make_response()
@@ -573,7 +573,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         params = mock_get.call_args[1]["params"]
         self.assertNotIn("timeout", params)
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_deleted_row(self, mock_get):
         """Test that deleted=True in a result row is captured correctly."""
         mock_get.return_value = self._make_response(
@@ -594,7 +594,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         self.assertTrue(batch.rows[0].deleted)
         self.assertEqual(batch.rows[0].id, "doc-deleted")
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_pending_extracted(self, mock_get):
         """Test that the pending count is extracted from the response."""
         mock_get.return_value = self._make_response(pending=42, last_seq="10-z")
@@ -604,7 +604,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
         self.assertEqual(batch.pending, 42)
         self.assertEqual(batch.last_seq, "10-z")
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_row_without_changes_has_none_rev(self, mock_get):
         """Test that a row with no changes list produces rev=None."""
         mock_get.return_value = self._make_response(
@@ -616,7 +616,7 @@ class TestCouchDBHandlerFetchChangesRaw(unittest.TestCase):
 
         self.assertIsNone(batch.rows[0].rev)
 
-    @patch("lib.couchdb.couchdb_connection.requests.get")
+    @patch("yggdrasil.couchdb.connection.requests.get")
     def test_fetch_changes_raw_http_error_propagates(self, mock_get):
         """Test that an HTTP error from raise_for_status propagates."""
         mock_resp = Mock()
@@ -699,7 +699,7 @@ class TestCouchDBHandlerPutDocument(unittest.TestCase):
     def setUp(self):
         with (
             patch(
-                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+                "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client"
             ) as mock_factory,
             patch.dict(os.environ, {"PD_USER": "admin", "PD_PASS": "secret"}),
         ):
@@ -740,7 +740,7 @@ class TestCouchDBHandlerPutDocument(unittest.TestCase):
         """Without rev arg, Document.from_dict receives _id but not _rev."""
         self._set_put_result({"id": "doc1", "rev": "1-x", "ok": True})
 
-        with patch("lib.couchdb.couchdb_connection.cloudant_v1") as mock_cv1:
+        with patch("yggdrasil.couchdb.connection.cloudant_v1") as mock_cv1:
             self.handler.put_document("doc1", {"status": "ready"})
             body = mock_cv1.Document.from_dict.call_args[0][0]
 
@@ -752,7 +752,7 @@ class TestCouchDBHandlerPutDocument(unittest.TestCase):
         """With rev arg, Document.from_dict receives both _id and _rev."""
         self._set_put_result({"id": "doc1", "rev": "2-y", "ok": True})
 
-        with patch("lib.couchdb.couchdb_connection.cloudant_v1") as mock_cv1:
+        with patch("yggdrasil.couchdb.connection.cloudant_v1") as mock_cv1:
             self.handler.put_document("doc1", {"status": "done"}, rev="1-abc")
             body = mock_cv1.Document.from_dict.call_args[0][0]
 
@@ -827,7 +827,7 @@ class TestCouchDBHandlerPostDocument(unittest.TestCase):
     def setUp(self):
         with (
             patch(
-                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+                "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client"
             ) as mock_factory,
             patch.dict(os.environ, {"PD_USER": "admin", "PD_PASS": "secret"}),
         ):
@@ -866,7 +866,7 @@ class TestCouchDBHandlerPostDocument(unittest.TestCase):
         """post_document must NOT inject _id — CouchDB generates it."""
         self._set_post_result({"id": "gen-x", "rev": "1-r", "ok": True})
 
-        with patch("lib.couchdb.couchdb_connection.cloudant_v1") as mock_cv1:
+        with patch("yggdrasil.couchdb.connection.cloudant_v1") as mock_cv1:
             self.handler.post_document({"type": "run", "status": "new"})
             body = mock_cv1.Document.from_dict.call_args[0][0]
 
@@ -928,7 +928,7 @@ class TestCouchDBHandlerQueryView(unittest.TestCase):
     def setUp(self):
         with (
             patch(
-                "lib.couchdb.couchdb_connection.CouchDBClientFactory.create_client"
+                "yggdrasil.couchdb.connection.CouchDBClientFactory.create_client"
             ) as mock_factory,
             patch.dict(os.environ, {"QV_USER": "admin", "QV_PASS": "secret"}),
         ):

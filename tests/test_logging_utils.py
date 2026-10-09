@@ -4,12 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib.core_utils.logging_utils import (
+from yggdrasil.config.session import YggSession
+from yggdrasil.logging_utils import (
     DeduplicatingHandler,
     configure_logging,
     custom_logger,
 )
-from lib.core_utils.ygg_session import YggSession
 
 
 class TestLoggingUtils(unittest.TestCase):
@@ -39,14 +39,14 @@ class TestLoggingUtils(unittest.TestCase):
 
         # Patch ConfigLoader to return mock configs
         self.mock_configs = {"yggdrasil": {"log_dir": "/tmp/yggdrasil_logs"}}
-        self.patcher_config_loader = patch("lib.core_utils.logging_utils.ConfigLoader")
+        self.patcher_config_loader = patch("yggdrasil.logging_utils.ConfigLoader")
         self.mock_config_loader_class = self.patcher_config_loader.start()
         self.mock_config_loader_class.return_value.load_config.return_value = (
             self.mock_configs
         )
 
         # Mock datetime.datetime to control the timestamp
-        self.patcher_datetime = patch("lib.core_utils.logging_utils.datetime")
+        self.patcher_datetime = patch("yggdrasil.logging_utils.datetime")
         self.mock_datetime = self.patcher_datetime.start()
 
         # Create a mock datetime instance
@@ -87,8 +87,8 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_configure_logging_default(self):
         # Test configure_logging with default parameters (debug=False, console=True)
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
-            with patch("lib.core_utils.logging_utils.AbbrevRichHandler") as mock_rich:
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
+            with patch("yggdrasil.logging_utils.AbbrevRichHandler") as mock_rich:
                 configure_logging()
 
                 expected_log_dir = Path(self.mock_configs["yggdrasil"]["log_dir"])
@@ -114,7 +114,7 @@ class TestLoggingUtils(unittest.TestCase):
                 self.assertEqual(len(call_args["handlers"]), 2)
                 mock_rich.assert_called_once()
 
-    @patch("lib.core_utils.logging_utils.AbbrevRichHandler")
+    @patch("yggdrasil.logging_utils.AbbrevRichHandler")
     @patch("logging.StreamHandler")
     @patch("logging.FileHandler")
     def test_configure_logging_debug_true(
@@ -132,7 +132,7 @@ class TestLoggingUtils(unittest.TestCase):
         mock_rich_handler_class.return_value = mock_rich_handler
 
         # Patch _RICH_AVAILABLE to True and test with Rich handler
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
             configure_logging(debug=True)
             expected_log_level = logging.DEBUG
             possible_formats = [
@@ -152,7 +152,7 @@ class TestLoggingUtils(unittest.TestCase):
         # Patch _RICH_AVAILABLE to False and test with StreamHandler
         self.mock_mkdir.reset_mock()
         self.mock_basicConfig.reset_mock()
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", False):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", False):
             configure_logging(debug=True)
             self.mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
             self.mock_basicConfig.assert_called_once()
@@ -232,16 +232,16 @@ class TestLoggingUtils(unittest.TestCase):
         # Test handling when StreamHandler or AbbrevRichHandler cannot be initialized
 
         # Case 1: Rich is NOT available, StreamHandler fails
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", False):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", False):
             with patch("logging.StreamHandler", side_effect=Exception("Stream error")):
                 with self.assertRaises(Exception) as ctx:
                     configure_logging(debug=True)
                 self.assertIn("Stream error", str(ctx.exception))
 
         # Case 2: Rich IS available, AbbrevRichHandler fails
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
             with patch(
-                "lib.core_utils.logging_utils.AbbrevRichHandler",
+                "yggdrasil.logging_utils.AbbrevRichHandler",
                 side_effect=Exception("Rich handler error"),
             ):
                 with self.assertRaises(Exception) as ctx:
@@ -255,14 +255,14 @@ class TestLoggingUtils(unittest.TestCase):
         self.assertEqual(len(logging.getLogger().handlers), 1)
         self.mock_basicConfig.assert_called_once()
 
-    @patch("lib.core_utils.logging_utils.AbbrevRichHandler")
+    @patch("yggdrasil.logging_utils.AbbrevRichHandler")
     @patch("logging.StreamHandler")
     @patch("logging.FileHandler")
     def test_configure_logging_handler_types(
         self, mock_file_handler, mock_stream_handler, mock_rich_handler
     ):
         # Patch _RICH_AVAILABLE to True to use AbbrevRichHandler
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
             configure_logging(debug=True)
             call_args = self.mock_basicConfig.call_args[1]
             handlers = call_args["handlers"]
@@ -290,7 +290,7 @@ class TestLoggingUtils(unittest.TestCase):
         self.mock_basicConfig.assert_called_once()
         self.assertEqual(self.mock_basicConfig.call_args[1]["level"], logging.DEBUG)
 
-    @patch("lib.core_utils.logging_utils.AbbrevRichHandler")
+    @patch("yggdrasil.logging_utils.AbbrevRichHandler")
     @patch("logging.StreamHandler")
     @patch("logging.FileHandler")
     def test_configure_logging_handlers_order(
@@ -313,7 +313,7 @@ class TestLoggingUtils(unittest.TestCase):
         )
         self.mock_filehandler.assert_called_with(expected_log_file)
 
-    @patch("lib.core_utils.logging_utils.datetime")
+    @patch("yggdrasil.logging_utils.datetime")
     def test_configure_logging_custom_timestamp(self, mock_datetime):
         mock_now = MagicMock()
         mock_now.strftime.return_value = "2022-02-02_14.30.00"
@@ -381,12 +381,12 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_configure_logging_with_debug_stream_handler(self):
         # Test that StreamHandler is added when debug=True and rich is not available
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", False):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", False):
             with patch("logging.StreamHandler") as mock_stream_handler:
                 configure_logging(debug=True)
                 mock_stream_handler.assert_called_once()
 
-    @patch("lib.core_utils.logging_utils.AbbrevRichHandler")
+    @patch("yggdrasil.logging_utils.AbbrevRichHandler")
     @patch("logging.StreamHandler")
     @patch("logging.FileHandler")
     def test_configure_logging_handlers_are_set_correctly(
@@ -394,7 +394,7 @@ class TestLoggingUtils(unittest.TestCase):
     ):
         # Test that handlers are set correctly in the root logger for both Rich and non-Rich cases
         # Case 1: Rich is available
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
             configure_logging(debug=True)
             call_args = self.mock_basicConfig.call_args[1]
             handlers = call_args["handlers"]
@@ -405,7 +405,7 @@ class TestLoggingUtils(unittest.TestCase):
 
         # Case 2: Rich is not available
         self.mock_basicConfig.reset_mock()
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", False):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", False):
             configure_logging(debug=True)
             call_args = self.mock_basicConfig.call_args[1]
             handlers = call_args["handlers"]
@@ -502,8 +502,8 @@ class TestLoggingUtils(unittest.TestCase):
         mock_file_handler_instance = MagicMock()
         mock_file_handler.return_value = mock_file_handler_instance
 
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
-            with patch("lib.core_utils.logging_utils.AbbrevRichHandler") as mock_rich:
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
+            with patch("yggdrasil.logging_utils.AbbrevRichHandler") as mock_rich:
                 configure_logging()
                 # Check that FileHandler was used in the handlers passed to basicConfig
                 handlers = self.mock_basicConfig.call_args[1]["handlers"]
@@ -536,8 +536,8 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_configure_logging_console_true_debug_false(self):
         """Test configure_logging with console=True, debug=False (normal mode)."""
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
-            with patch("lib.core_utils.logging_utils.AbbrevRichHandler") as mock_rich:
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
+            with patch("yggdrasil.logging_utils.AbbrevRichHandler") as mock_rich:
                 configure_logging(debug=False, console=True)
 
                 call_args = self.mock_basicConfig.call_args[1]
@@ -549,8 +549,8 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_configure_logging_console_true_debug_true(self):
         """Test configure_logging with console=True, debug=True (dev mode)."""
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", True):
-            with patch("lib.core_utils.logging_utils.AbbrevRichHandler") as mock_rich:
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", True):
+            with patch("yggdrasil.logging_utils.AbbrevRichHandler") as mock_rich:
                 configure_logging(debug=True, console=True)
 
                 call_args = self.mock_basicConfig.call_args[1]
@@ -562,7 +562,7 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_configure_logging_console_fallback_no_rich(self):
         """Test console logging falls back to StreamHandler when Rich unavailable."""
-        with patch("lib.core_utils.logging_utils._RICH_AVAILABLE", False):
+        with patch("yggdrasil.logging_utils._RICH_AVAILABLE", False):
             with patch("logging.StreamHandler") as mock_stream:
                 configure_logging(debug=False, console=True)
 

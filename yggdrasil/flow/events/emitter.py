@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
-from lib.core_utils.runtime_paths import resolve_event_spool
+from yggdrasil.config.runtime_paths import resolve_event_spool
 from yggdrasil.flow.events.attempt_records import attempt_dir, step_events_dir
 from yggdrasil.flow.utils.jsonify import to_jsonable
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
@@ -18,7 +18,7 @@ class EventEmitter(Protocol):
 class FileSpoolEmitter:
     def __init__(self, spool_dir: str | Path | None = None):
         # Default resolution ($YGG_EVENT_SPOOL → mode default) is centralized
-        # in lib.core_utils.runtime_paths.
+        # in yggdrasil.config.runtime_paths.
         self.root = Path(spool_dir) if spool_dir else resolve_event_spool()
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -83,7 +83,7 @@ class TeeEmitter:
 
 
 class CouchEmitter:
-    """Inline write per-event to Couch using lib/couchdb helpers."""
+    """Inline write per-event to Couch using the yggdrasil/couchdb helpers."""
 
     def __init__(self, couch_client):  # inject your existing client/helper
         self.couch = couch_client
@@ -91,4 +91,6 @@ class CouchEmitter:
     def emit(self, event: dict[str, Any]) -> None:
         # TODO: Normalize as needed; then upsert a per-plan/step doc (or append to a log doc).
         # NOTE: Keep this minimal: avoid heavy transforms; projections belong to the Consumer.
-        self.couch.upsert_event(event)  # call into lib/couchdb code we already have
+        self.couch.upsert_event(
+            event
+        )  # call into yggdrasil/couchdb code we already have

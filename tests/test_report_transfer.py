@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib.module_utils.report_transfer import transfer_report
+from yggdrasil.toolkit.report_transfer import transfer_report
 
 
 class TestTransferReport(unittest.TestCase):
@@ -17,8 +17,8 @@ class TestTransferReport(unittest.TestCase):
         self.user = "user"
         self.ssh_key = "/path/to/ssh_key"
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_success(self, mock_subprocess_run, mock_configs):
         # Set up configs
         mock_configs.__getitem__.return_value = {
@@ -61,8 +61,8 @@ class TestTransferReport(unittest.TestCase):
             capture_output=True,
         )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logger")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.logger")
     def test_transfer_report_missing_config_key(self, mock_logging, mock_configs):
         # Set up configs to raise KeyError for missing 'server' key
         mock_configs.__getitem__.side_effect = KeyError("server")
@@ -78,8 +78,8 @@ class TestTransferReport(unittest.TestCase):
             "Missing configuration for report transfer: 'server'"
         )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_subprocess_calledprocesserror(
         self, mock_subprocess_run, mock_configs
     ):
@@ -105,8 +105,8 @@ class TestTransferReport(unittest.TestCase):
         # Assert that subprocess.run was called
         mock_subprocess_run.assert_called_once()
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_general_exception(self, mock_subprocess_run, mock_configs):
         # Set up configs
         mock_configs.__getitem__.return_value = {
@@ -120,7 +120,7 @@ class TestTransferReport(unittest.TestCase):
         mock_subprocess_run.side_effect = Exception("Unexpected error")
 
         # Mock logging
-        with patch("lib.module_utils.report_transfer.logger") as mock_logging:
+        with patch("yggdrasil.toolkit.report_transfer.logger") as mock_logging:
             # Call the function
             result = transfer_report(self.report_path, self.project_id, self.sample_id)
 
@@ -135,9 +135,9 @@ class TestTransferReport(unittest.TestCase):
                 "RSYNC output: No output available due to early error."
             )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
-    @patch("lib.module_utils.report_transfer.logger")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.logger")
     def test_transfer_report_general_exception_with_result(
         self, mock_logging, mock_subprocess_run, mock_configs
     ):
@@ -176,8 +176,8 @@ class TestTransferReport(unittest.TestCase):
         # Check that the RSYNC output was logged
         mock_logging.error.assert_any_call("RSYNC output: Mocked RSYNC output")
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_no_ssh_key(self, mock_subprocess_run, mock_configs):
         # Set up configs without ssh_key
         mock_configs.__getitem__.return_value = {
@@ -218,8 +218,8 @@ class TestTransferReport(unittest.TestCase):
             capture_output=True,
         )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_without_sample_id(self, mock_subprocess_run, mock_configs):
         # Set up configs
         mock_configs.__getitem__.return_value = {
@@ -260,8 +260,8 @@ class TestTransferReport(unittest.TestCase):
             capture_output=True,
         )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logger")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.logger")
     def test_transfer_report_missing_destination(self, mock_logging, mock_configs):
         # Set up configs missing 'destination'
         mock_configs.__getitem__.return_value = {
@@ -282,8 +282,8 @@ class TestTransferReport(unittest.TestCase):
             "Missing configuration for report transfer: 'destination'"
         )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logger")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.logger")
     def test_transfer_report_nonexistent_report_path(self, mock_logging, mock_configs):
         # Set up configs
         mock_configs.__getitem__.return_value = {
@@ -296,7 +296,7 @@ class TestTransferReport(unittest.TestCase):
         # Assume report_path does not exist; since the function does not check this, it proceeds
         # Mock subprocess.run to simulate rsync failure due to nonexistent report_path
         with patch(
-            "lib.module_utils.report_transfer.subprocess.run"
+            "yggdrasil.toolkit.report_transfer.subprocess.run"
         ) as mock_subprocess_run:
             mock_subprocess_run.side_effect = subprocess.CalledProcessError(
                 returncode=1, cmd="rsync", stderr="No such file or directory"
@@ -313,8 +313,8 @@ class TestTransferReport(unittest.TestCase):
                 "Failed to transfer report:\nNo such file or directory"
             )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_unicode_characters(
         self, mock_subprocess_run, mock_configs
     ):
@@ -363,8 +363,8 @@ class TestTransferReport(unittest.TestCase):
             capture_output=True,
         )
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.logger")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.logger")
     def test_transfer_report_invalid_config_type(self, mock_logging, mock_configs):
         # Set up configs['report_transfer'] to be None
         mock_configs.__getitem__.return_value = None
@@ -378,8 +378,8 @@ class TestTransferReport(unittest.TestCase):
         # Assert that logging.error was called
         mock_logging.error.assert_called()
 
-    @patch("lib.module_utils.report_transfer.configs")
-    @patch("lib.module_utils.report_transfer.subprocess.run")
+    @patch("yggdrasil.toolkit.report_transfer.configs")
+    @patch("yggdrasil.toolkit.report_transfer.subprocess.run")
     def test_transfer_report_non_string_config_values(
         self, mock_subprocess_run, mock_configs
     ):

@@ -33,21 +33,6 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
-from lib.core_utils.event_types import EventType
-from lib.core_utils.plan_eligibility import is_plan_eligible
-from lib.core_utils.plan_execution import ExecutionStatus, PlanExecutionCoordinator
-from lib.core_utils.singleton_decorator import SingletonMeta
-from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.storage.errors import PlanStoreError
-from lib.storage.protocols import InternalStorageBundle
-from lib.storage.sqlite import (
-    SQLiteCheckpointStore,
-    SQLiteInternalStore,
-    SQLiteOpsSnapshotSink,
-    SQLitePlanChangeSource,
-    SQLitePlanStore,
-)
-from lib.watchers.abstract_watcher import YggdrasilEvent
 from tests.execution_support import (
     PLAN_ID,
     REALM,
@@ -64,11 +49,26 @@ from tests.execution_support import (
     run_bounded,
     spec,
 )
+from yggdrasil.daemon.core import YggdrasilCore
+from yggdrasil.daemon.plan_execution import ExecutionStatus, PlanExecutionCoordinator
+from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, Plan
 from yggdrasil.flow.planner.api import PlanDraft
+from yggdrasil.storage.errors import PlanStoreError
+from yggdrasil.storage.plan_eligibility import is_plan_eligible
+from yggdrasil.storage.protocols import InternalStorageBundle
+from yggdrasil.storage.sqlite import (
+    SQLiteCheckpointStore,
+    SQLiteInternalStore,
+    SQLiteOpsSnapshotSink,
+    SQLitePlanChangeSource,
+    SQLitePlanStore,
+)
+from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.watchers.events import EventType
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
-CORE_LOGGER = "lib.core_utils.yggdrasil_core.YggdrasilCore"
+CORE_LOGGER = "yggdrasil.daemon.core.YggdrasilCore"
 
 
 def plan_event(doc: dict[str, Any]) -> YggdrasilEvent:
@@ -127,10 +127,10 @@ class CallerTestCase(unittest.TestCase):
             work_root=directory / "work", emitter=self.emitter, journal=self.journal
         )
         self.start_patch(
-            patch("lib.core_utils.yggdrasil_core.Engine", return_value=self.engine)
+            patch("yggdrasil.daemon.core.Engine", return_value=self.engine)
         )
         ops_service = self.start_patch(
-            patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
+            patch("yggdrasil.daemon.core.OpsConsumerService")
         )
         ops_service.return_value.stop = AsyncMock()
 

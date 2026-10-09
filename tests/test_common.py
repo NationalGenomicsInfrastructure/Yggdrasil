@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lib.core_utils.common import YggdrasilUtilities
+from yggdrasil.config.workspace import YggdrasilUtilities
 
 
 class TestYggdrasilUtilities(unittest.TestCase):
@@ -108,7 +108,8 @@ class TestYggdrasilUtilities(unittest.TestCase):
         # Mock the config_file.resolve() call to raise an Exception
         # to trigger the exception block in get_path
         with patch(
-            "lib.core_utils.common.Path.resolve", side_effect=Exception("Resolve error")
+            "yggdrasil.config.workspace.Path.resolve",
+            side_effect=Exception("Resolve error"),
         ):
             result = YggdrasilUtilities.get_path("somefile")
             self.assertIsNone(result)

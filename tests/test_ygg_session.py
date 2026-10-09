@@ -1,6 +1,6 @@
 import unittest
 
-from lib.core_utils.ygg_session import YggSession
+from yggdrasil.config.session import YggSession
 
 
 class TestYggSession(unittest.TestCase):

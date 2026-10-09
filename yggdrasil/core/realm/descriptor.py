@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lib.watchers.watchspec import WatchSpec
     from yggdrasil.flow.base_handler import BaseHandler
+    from yggdrasil.watchers.watchspec import WatchSpec
 
 
 @dataclass(frozen=True)

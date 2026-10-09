@@ -19,8 +19,8 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from lib.core_utils.singleton_decorator import SingletonMeta
-from lib.watchers.backends.base import RawWatchEvent
+from yggdrasil.daemon.singleton import SingletonMeta
+from yggdrasil.watchers.backends.base import RawWatchEvent
 
 
 class TestAutoRunPlanE2E(unittest.TestCase):
@@ -53,10 +53,10 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         shutil.rmtree(self.work_root, ignore_errors=True)
         shutil.rmtree(self.spool_dir, ignore_errors=True)
 
-    @patch("lib.core_utils.yggdrasil_core.build_internal_storage")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    @patch("lib.core_utils.yggdrasil_core.Engine")
-    @patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.build_internal_storage")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
     def test_auto_run_plan_executes_immediately(
         self, mock_ops, mock_engine_cls, mock_init_db, mock_build_storage
     ):
@@ -95,7 +95,7 @@ class TestAutoRunPlanE2E(unittest.TestCase):
         mock_handler.generate_plan_drafts = AsyncMock(return_value=[draft])
 
         # Import after patching
-        from lib.core_utils.yggdrasil_core import YggdrasilCore
+        from yggdrasil.daemon.core import YggdrasilCore
 
         # Reset singleton properly (must use metaclass dict, not instance attribute)
         SingletonMeta._instances.clear()
@@ -151,7 +151,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
     def test_draft_plan_not_executed_until_approved(self):
         """Test that draft plans are not executed."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         # Plan in draft status
         draft_plan_doc = {
@@ -167,7 +167,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
     def test_approved_plan_becomes_eligible(self):
         """Test that approving a plan makes it eligible."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         # Plan approved by an external actor
         approved_plan_doc = {
@@ -183,15 +183,15 @@ class TestApprovalRequiredE2E(unittest.TestCase):
         # Should be eligible
         self.assertTrue(is_plan_eligible(approved_plan_doc))
 
-    @patch("lib.watchers.plan_watcher.YggdrasilDBManager")
-    @patch("lib.watchers.plan_watcher.ChangesFetcher")
-    @patch("lib.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
-    @patch("lib.watchers.plan_watcher.PlanDBManager")
+    @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
+    @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
+    @patch("yggdrasil.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
+    @patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
     def test_watcher_filters_draft_plans(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
     ):
         """Test that _evaluate_change filters out non-approved plans."""
-        from lib.watchers.plan_watcher import PlanWatcher
+        from yggdrasil.watchers.plan_watcher import PlanWatcher
 
         events_emitted = []
 
@@ -230,16 +230,16 @@ class TestApprovalRequiredE2E(unittest.TestCase):
         # No events should be emitted for draft plans
         self.assertEqual(len(events_emitted), 0)
 
-    @patch("lib.watchers.plan_watcher.YggdrasilDBManager")
-    @patch("lib.watchers.plan_watcher.ChangesFetcher")
-    @patch("lib.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
-    @patch("lib.watchers.plan_watcher.PlanDBManager")
+    @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
+    @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
+    @patch("yggdrasil.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
+    @patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
     def test_watcher_emits_event_for_approved_plan(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
     ):
         """Test that _evaluate_change emits event for approved plans."""
-        from lib.core_utils.event_types import EventType
-        from lib.watchers.plan_watcher import PlanWatcher
+        from yggdrasil.watchers.events import EventType
+        from yggdrasil.watchers.plan_watcher import PlanWatcher
 
         events_emitted = []
 
@@ -297,7 +297,7 @@ class TestManualReRunE2E(unittest.TestCase):
 
     def test_executed_plan_not_eligible(self):
         """Test that already-executed plans are not eligible."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         executed_plan = {
             "_id": "pln_rerun_001",
@@ -310,7 +310,7 @@ class TestManualReRunE2E(unittest.TestCase):
 
     def test_rerun_request_makes_plan_eligible(self):
         """Test that incrementing run_token makes plan eligible again."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         # After an external actor increments run_token
         rerun_plan = {
@@ -324,7 +324,7 @@ class TestManualReRunE2E(unittest.TestCase):
 
         self.assertTrue(is_plan_eligible(rerun_plan))
 
-    @patch("lib.couchdb.plan_db_manager.PlanDBManager")
+    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
     def test_token_updated_after_rerun_execution(self, mock_plan_db_cls):
         """Test that executed_run_token is updated after re-run execution."""
         mock_plan_db = mock_plan_db_cls.return_value
@@ -373,15 +373,15 @@ class TestStartupRecoveryE2E(unittest.TestCase):
         shutil.rmtree(self.work_root, ignore_errors=True)
         shutil.rmtree(self.spool_dir, ignore_errors=True)
 
-    @patch("lib.watchers.plan_watcher.YggdrasilDBManager")
-    @patch("lib.watchers.plan_watcher.ChangesFetcher")
-    @patch("lib.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
-    @patch("lib.watchers.plan_watcher.PlanDBManager")
+    @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
+    @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
+    @patch("yggdrasil.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
+    @patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
     def test_recovery_queries_pending_plans(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
     ):
         """Test that recovery queries all approved pending plans."""
-        from lib.watchers.plan_watcher import PlanWatcher
+        from yggdrasil.watchers.plan_watcher import PlanWatcher
 
         # Mock no checkpoint (simulates fresh start or lost checkpoint)
         mock_checkpoint = mock_checkpoint_cls.return_value
@@ -421,7 +421,7 @@ class TestStartupRecoveryE2E(unittest.TestCase):
 
     def test_recovery_skips_already_executed_plans(self):
         """Test that recovery doesn't re-execute plans with matching tokens."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         # Plan that was already executed before crash
         already_executed = {
@@ -436,7 +436,7 @@ class TestStartupRecoveryE2E(unittest.TestCase):
 
     def test_recovery_executes_pending_approved_plans(self):
         """Test that recovery executes pending approved plans."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         # Plan that was approved but not yet executed
         pending_approved = {
@@ -459,7 +459,7 @@ class TestFailurePathsE2E(unittest.TestCase):
 
     def test_engine_failure_leaves_plan_eligible(self):
         """Test that engine failure doesn't update executed_run_token."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         # Plan that failed during execution
         # (executed_run_token NOT updated because engine raised)
@@ -475,7 +475,7 @@ class TestFailurePathsE2E(unittest.TestCase):
 
     def test_rejected_plan_never_eligible(self):
         """Test that rejected plans are never eligible."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         rejected_plan = {
             "_id": "pln_rejected_001",
@@ -534,7 +534,7 @@ class TestComponentInteractionE2E(unittest.TestCase):
 
     def test_eligibility_function_matches_watcher_behavior(self):
         """Verify is_plan_eligible matches PlanWatcher filtering."""
-        from lib.core_utils.plan_eligibility import is_plan_eligible
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         test_cases = [
             # (doc, expected_eligible, description)

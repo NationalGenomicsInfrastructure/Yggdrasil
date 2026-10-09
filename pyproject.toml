@@ -67,14 +67,14 @@ yggdrasil = "yggdrasil.cli:main"
 
 [project.entry-points."ygg.realm"]
 # Unified realm discovery - provides handlers + watchspecs
-test_realm = "lib.realms.test_realm:get_realm_descriptor"
+test_realm = "yggdrasil.realms.test_realm:get_realm_descriptor"
 
 [build-system]
 requires = ["setuptools>=68", "wheel", "setuptools-scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["yggdrasil", "lib"]
+packages = ["yggdrasil"]
 
 [tool.setuptools.package-data]
 yggdrasil = ["assets/*", "py.typed"]

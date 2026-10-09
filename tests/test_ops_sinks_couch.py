@@ -1,5 +1,5 @@
 """
-Comprehensive tests for lib/ops/sinks/couch.py
+Comprehensive tests for yggdrasil/storage/couchdb/ops_sink.py
 
 Tests the OpsWriter class for CouchDB operations.
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from lib.ops.sinks.couch import OpsWriter
+from yggdrasil.storage.couchdb.ops_sink import OpsWriter
 
 
 class MockApiException(Exception):
@@ -24,15 +24,15 @@ class MockApiException(Exception):
 ApiException = MockApiException
 
 
-@patch("lib.ops.sinks.couch.ApiException", MockApiException)
+@patch("yggdrasil.storage.couchdb.ops_sink.ApiException", MockApiException)
 class TestOpsWriterInitialization(unittest.TestCase):
     """Tests for OpsWriter initialization."""
 
-    @patch("lib.ops.sinks.couch._get_couchdb_endpoint_config")
-    @patch("lib.ops.sinks.couch.CouchDBHandler.__init__")
+    @patch("yggdrasil.storage.couchdb.ops_sink._get_couchdb_endpoint_config")
+    @patch("yggdrasil.storage.couchdb.ops_sink.CouchDBHandler.__init__")
     def test_init_default_db_name(self, mock_parent_init, mock_get_config):
         """Test initialization with default database name."""
-        from lib.ops.sinks.couch import OpsWriter
+        from yggdrasil.storage.couchdb.ops_sink import OpsWriter
 
         mock_get_config.return_value = {
             "url": "http://localhost:5984",
@@ -49,11 +49,11 @@ class TestOpsWriterInitialization(unittest.TestCase):
             pass_env="TEST_PASS",
         )
 
-    @patch("lib.ops.sinks.couch._get_couchdb_endpoint_config")
-    @patch("lib.ops.sinks.couch.CouchDBHandler.__init__")
+    @patch("yggdrasil.storage.couchdb.ops_sink._get_couchdb_endpoint_config")
+    @patch("yggdrasil.storage.couchdb.ops_sink.CouchDBHandler.__init__")
     def test_init_custom_db_name(self, mock_parent_init, mock_get_config):
         """Test initialization with custom database name."""
-        from lib.ops.sinks.couch import OpsWriter
+        from yggdrasil.storage.couchdb.ops_sink import OpsWriter
 
         mock_get_config.return_value = {
             "url": "http://localhost:5984",
@@ -71,12 +71,15 @@ class TestOpsWriterInitialization(unittest.TestCase):
         )
 
 
-@patch("lib.ops.sinks.couch.ApiException", MockApiException)
+@patch("yggdrasil.storage.couchdb.ops_sink.ApiException", MockApiException)
 class TestOpsWriterDocIdStatus(unittest.TestCase):
     """Tests for _doc_id_status method."""
 
     def setUp(self):
-        with patch("lib.ops.sinks.couch.CouchDBHandler.__init__", return_value=None):
+        with patch(
+            "yggdrasil.storage.couchdb.ops_sink.CouchDBHandler.__init__",
+            return_value=None,
+        ):
             self.writer = OpsWriter()
 
     def test_doc_id_status_project(self):
@@ -116,12 +119,15 @@ class TestOpsWriterDocIdStatus(unittest.TestCase):
         self.assertEqual(doc_id, "experiment-EXP999:plan_status:custom:plan_003")
 
 
-@patch("lib.ops.sinks.couch.ApiException", MockApiException)
+@patch("yggdrasil.storage.couchdb.ops_sink.ApiException", MockApiException)
 class TestOpsWriterWrite(unittest.TestCase):
     """Tests for write method (plan_status)."""
 
     def setUp(self):
-        with patch("lib.ops.sinks.couch.CouchDBHandler.__init__", return_value=None):
+        with patch(
+            "yggdrasil.storage.couchdb.ops_sink.CouchDBHandler.__init__",
+            return_value=None,
+        ):
             self.writer = OpsWriter()
             self.writer.server = Mock()
             self.writer.db_name = "test_db"
@@ -201,12 +207,15 @@ class TestOpsWriterWrite(unittest.TestCase):
             self.writer.server.put_document.assert_called_once()  # type: ignore
 
 
-@patch("lib.ops.sinks.couch.ApiException", MockApiException)
+@patch("yggdrasil.storage.couchdb.ops_sink.ApiException", MockApiException)
 class TestOpsWriterUpsert(unittest.TestCase):
     """Tests for _upsert helper method."""
 
     def setUp(self):
-        with patch("lib.ops.sinks.couch.CouchDBHandler.__init__", return_value=None):
+        with patch(
+            "yggdrasil.storage.couchdb.ops_sink.CouchDBHandler.__init__",
+            return_value=None,
+        ):
             self.writer = OpsWriter()
             self.writer.server = Mock()
             self.writer.db_name = "test_db"
@@ -327,12 +336,15 @@ class TestOpsWriterUpsert(unittest.TestCase):
         self.writer.server.put_document.assert_called_once()  # type: ignore
 
 
-@patch("lib.ops.sinks.couch.ApiException", MockApiException)
+@patch("yggdrasil.storage.couchdb.ops_sink.ApiException", MockApiException)
 class TestOpsWriterIntegration(unittest.TestCase):
     """Integration tests for OpsWriter."""
 
     def setUp(self):
-        with patch("lib.ops.sinks.couch.CouchDBHandler.__init__", return_value=None):
+        with patch(
+            "yggdrasil.storage.couchdb.ops_sink.CouchDBHandler.__init__",
+            return_value=None,
+        ):
             self.writer = OpsWriter(db_name="integration_test_db")
             self.writer.server = Mock()
             self.writer.db_name = "integration_test_db"

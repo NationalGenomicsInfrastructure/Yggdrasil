@@ -1,6 +1,6 @@
 """
-Regression and functional tests for lib/realms/test_realm/steps.py
-and lib/realms/test_realm/handler.py.
+Regression and functional tests for yggdrasil/realms/test_realm/steps.py
+and yggdrasil/realms/test_realm/handler.py.
 
 - Decorator tests: every step is a proper @step-decorated callable.
 - Functional tests: new write/denial steps behave correctly with mocked DataAccess.
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from yggdrasil.flow.utils.callable_ref import resolve_callable
 
-_FN_REF_PREFIX = "lib.realms.test_realm.steps"
+_FN_REF_PREFIX = "yggdrasil.realms.test_realm.steps"
 
 # All fn_ref names referenced from test_realm recipes / custom step parsing.
 _ALL_STEP_NAMES = [
@@ -91,8 +91,8 @@ class TestStepWriteToDb(unittest.TestCase):
     """Functional tests for step_write_to_db."""
 
     def setUp(self):
-        from lib.realms.test_realm.steps import step_write_to_db
         from yggdrasil.flow.data_access.models import DataAccessWriteResult
+        from yggdrasil.realms.test_realm.steps import step_write_to_db
 
         self.step_fn = step_write_to_db
         self.WriteResult = DataAccessWriteResult
@@ -178,8 +178,8 @@ class TestStepWriteToDbNoId(unittest.TestCase):
     """Functional tests for step_write_to_db_no_id."""
 
     def setUp(self):
-        from lib.realms.test_realm.steps import step_write_to_db_no_id
         from yggdrasil.flow.data_access.models import DataAccessWriteResult
+        from yggdrasil.realms.test_realm.steps import step_write_to_db_no_id
 
         self.step_fn = step_write_to_db_no_id
         self.WriteResult = DataAccessWriteResult
@@ -269,8 +269,8 @@ class TestStepExpectReadDenied(unittest.TestCase):
     """Functional tests for step_expect_read_denied."""
 
     def setUp(self):
-        from lib.realms.test_realm.steps import step_expect_read_denied
         from yggdrasil.flow.data_access import DataAccessDeniedError
+        from yggdrasil.realms.test_realm.steps import step_expect_read_denied
 
         self.step_fn = step_expect_read_denied
         self.DeniedError = DataAccessDeniedError
@@ -330,7 +330,7 @@ class TestHandlerPlanTimeFetch(unittest.IsolatedAsyncioTestCase):
     """Tests for TestRealmHandler._do_plan_time_fetch."""
 
     def setUp(self):
-        from lib.realms.test_realm.handler import TestRealmHandler
+        from yggdrasil.realms.test_realm.handler import TestRealmHandler
 
         self.handler = TestRealmHandler()
 
@@ -411,7 +411,7 @@ class TestDataFetchPlanSteps(unittest.TestCase):
     """
 
     def setUp(self):
-        from lib.realms.test_realm.recipes import data_fetch_plan_steps
+        from yggdrasil.realms.test_realm.recipes import data_fetch_plan_steps
 
         self.helper = data_fetch_plan_steps
 
@@ -445,7 +445,7 @@ class TestDataFetchPlanSteps(unittest.TestCase):
         self.assertIn("failed", steps[1].params["message"])
 
     def test_data_fetch_plan_not_in_recipes_registry(self):
-        from lib.realms.test_realm.recipes import RECIPES
+        from yggdrasil.realms.test_realm.recipes import RECIPES
 
         self.assertNotIn("data_fetch_plan", RECIPES)
 
@@ -459,7 +459,7 @@ class TestScenarioFailurePolicy(unittest.TestCase):
     """The failure policy TestRealmHandler gives the plan it drafts."""
 
     def setUp(self):
-        from lib.realms.test_realm.handler import TestRealmHandler
+        from yggdrasil.realms.test_realm.handler import TestRealmHandler
 
         self.handler = TestRealmHandler()
         self.handler.realm_id = "test_realm"
@@ -518,7 +518,7 @@ class TestBranchingRecipes(unittest.TestCase):
     """The branching recipes, as the integration scenarios rely on them."""
 
     def test_metadata_prerequisite_is_the_only_difference(self):
-        from lib.realms.test_realm.recipes import (
+        from yggdrasil.realms.test_realm.recipes import (
             branch_failure,
             branch_failure_metadata_required,
         )
@@ -545,7 +545,7 @@ class TestBranchingRecipes(unittest.TestCase):
                     self.assertEqual(alone.deps, joined.deps)
 
     def test_branch_roots_declare_the_file_they_write_after_overrides(self):
-        from lib.realms.test_realm.recipes import branch_failure
+        from yggdrasil.realms.test_realm.recipes import branch_failure
 
         steps = branch_failure(overrides={"lane_1__prepare": {"filename": "own.txt"}})
 

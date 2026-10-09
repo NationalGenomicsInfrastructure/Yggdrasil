@@ -1,13 +1,13 @@
 """
-Unit tests for lib.watchers.backends.couchdb module — init and config.
+Unit tests for yggdrasil.watchers.backends.couchdb module — init and config.
 
 Polling, retry, and stream behavior is covered in test_couchdb_backend.py.
 """
 
 import unittest
 
-from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
-from lib.watchers.backends.couchdb import CouchDBBackend
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from yggdrasil.watchers.backends.couchdb import CouchDBBackend
 
 
 class TestCouchDBBackendInit(unittest.TestCase):

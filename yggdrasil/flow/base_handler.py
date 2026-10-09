@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from lib.core_utils.event_types import EventType
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
+from yggdrasil.watchers.events import EventType
 
 if TYPE_CHECKING:
     from yggdrasil.flow.data_access import DataAccess

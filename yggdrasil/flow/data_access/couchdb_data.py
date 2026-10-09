@@ -34,7 +34,7 @@ from yggdrasil.flow.events.attempt_records import (
 )
 
 if TYPE_CHECKING:
-    from lib.couchdb.couchdb_connection import CouchDBHandler
+    from yggdrasil.couchdb.connection import CouchDBHandler
 
 _logger = logging.getLogger(__name__)
 

@@ -10,9 +10,9 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.backends.base import RawWatchEvent
-from lib.watchers.plan_watcher import PlanWatcher
+from yggdrasil.watchers.backends.base import RawWatchEvent
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.plan_watcher import PlanWatcher
 
 
 def _raw(change: dict) -> RawWatchEvent:
@@ -40,20 +40,22 @@ class TestPlanWatcher(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures with mocked DB connections."""
         # Patch PlanDBManager
-        self.plan_db_patcher = patch("lib.watchers.plan_watcher.PlanDBManager")
+        self.plan_db_patcher = patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
         self.mock_plan_db_class = self.plan_db_patcher.start()
         self.mock_plan_db = MagicMock()
         self.mock_plan_db_class.return_value = self.mock_plan_db
 
         # Patch YggdrasilDBManager
-        self.ygg_db_patcher = patch("lib.watchers.plan_watcher.YggdrasilDBManager")
+        self.ygg_db_patcher = patch(
+            "yggdrasil.watchers.plan_watcher.YggdrasilDBManager"
+        )
         self.mock_ygg_db_class = self.ygg_db_patcher.start()
         self.mock_ygg_db = MagicMock()
         self.mock_ygg_db_class.return_value = self.mock_ygg_db
 
         # Patch CouchDBCheckpointStore
         self.checkpoint_patcher = patch(
-            "lib.watchers.plan_watcher.CouchDBCheckpointStore"
+            "yggdrasil.watchers.plan_watcher.CouchDBCheckpointStore"
         )
         self.mock_checkpoint_class = self.checkpoint_patcher.start()
         self.mock_checkpoint = MagicMock()
@@ -62,7 +64,7 @@ class TestPlanWatcher(unittest.TestCase):
         self.mock_checkpoint_class.return_value = self.mock_checkpoint
 
         # Patch ChangesFetcher
-        self.fetcher_patcher = patch("lib.watchers.plan_watcher.ChangesFetcher")
+        self.fetcher_patcher = patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
         self.mock_fetcher_class = self.fetcher_patcher.start()
         self.mock_fetcher = MagicMock()
         self.mock_fetcher_class.return_value = self.mock_fetcher
@@ -447,12 +449,14 @@ class TestPlanWatcherIntegration(unittest.TestCase):
 
     def setUp(self):
         """Set up with mocked dependencies."""
-        self.plan_db_patcher = patch("lib.watchers.plan_watcher.PlanDBManager")
-        self.ygg_db_patcher = patch("lib.watchers.plan_watcher.YggdrasilDBManager")
-        self.checkpoint_patcher = patch(
-            "lib.watchers.plan_watcher.CouchDBCheckpointStore"
+        self.plan_db_patcher = patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
+        self.ygg_db_patcher = patch(
+            "yggdrasil.watchers.plan_watcher.YggdrasilDBManager"
         )
-        self.fetcher_patcher = patch("lib.watchers.plan_watcher.ChangesFetcher")
+        self.checkpoint_patcher = patch(
+            "yggdrasil.watchers.plan_watcher.CouchDBCheckpointStore"
+        )
+        self.fetcher_patcher = patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
 
         self.mock_plan_db_class = self.plan_db_patcher.start()
         self.mock_ygg_db_class = self.ygg_db_patcher.start()
@@ -602,20 +606,22 @@ class TestPlanWatcherFiltering(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures with mocked DB connections."""
         # Patch PlanDBManager
-        self.plan_db_patcher = patch("lib.watchers.plan_watcher.PlanDBManager")
+        self.plan_db_patcher = patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
         self.mock_plan_db_class = self.plan_db_patcher.start()
         self.mock_plan_db = MagicMock()
         self.mock_plan_db_class.return_value = self.mock_plan_db
 
         # Patch YggdrasilDBManager
-        self.ygg_db_patcher = patch("lib.watchers.plan_watcher.YggdrasilDBManager")
+        self.ygg_db_patcher = patch(
+            "yggdrasil.watchers.plan_watcher.YggdrasilDBManager"
+        )
         self.mock_ygg_db_class = self.ygg_db_patcher.start()
         self.mock_ygg_db = MagicMock()
         self.mock_ygg_db_class.return_value = self.mock_ygg_db
 
         # Patch CouchDBCheckpointStore
         self.checkpoint_patcher = patch(
-            "lib.watchers.plan_watcher.CouchDBCheckpointStore"
+            "yggdrasil.watchers.plan_watcher.CouchDBCheckpointStore"
         )
         self.mock_checkpoint_class = self.checkpoint_patcher.start()
         self.mock_checkpoint = MagicMock()
@@ -623,7 +629,7 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         self.mock_checkpoint_class.return_value = self.mock_checkpoint
 
         # Patch ChangesFetcher
-        self.fetcher_patcher = patch("lib.watchers.plan_watcher.ChangesFetcher")
+        self.fetcher_patcher = patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
         self.mock_fetcher_class = self.fetcher_patcher.start()
         self.mock_fetcher = MagicMock()
         self.mock_fetcher_class.return_value = self.mock_fetcher

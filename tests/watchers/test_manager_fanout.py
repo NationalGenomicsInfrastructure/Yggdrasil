@@ -11,11 +11,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.abstract_watcher import YggdrasilEvent
-from lib.watchers.backends.base import RawWatchEvent, WatcherBackend
-from lib.watchers.manager import WatcherBackendGroup, WatcherManager
-from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
+from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.watchers.backends.base import RawWatchEvent, WatcherBackend
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.manager import WatcherBackendGroup, WatcherManager
+from yggdrasil.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 
 def _build_scope(event: RawWatchEvent) -> dict[str, Any]:

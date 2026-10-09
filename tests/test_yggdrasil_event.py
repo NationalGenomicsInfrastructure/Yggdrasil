@@ -1,7 +1,7 @@
 import unittest
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.watchers.abstract_watcher import YggdrasilEvent
+from yggdrasil.watchers.events import EventType
 
 
 class TestYggdrasilEvent(unittest.TestCase):
