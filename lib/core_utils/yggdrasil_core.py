@@ -1,5 +1,4 @@
 import asyncio
-import importlib.metadata
 import logging
 import uuid
 from collections.abc import Mapping
@@ -93,11 +92,6 @@ class YggdrasilCore:
 
         # Realm registry: realm_id -> RealmDescriptor
         self._realm_registry: dict[str, RealmDescriptor] = {}
-
-        # Legacy realm class registry: realm_id -> handler class
-        # Used only by _derive_realm_id() for legacy handler dedup.
-        # Kept separate from _realm_registry (which stores RealmDescriptors).
-        self._legacy_realm_class_registry: dict[str, type] = {}
 
         # Handler identity registry: (realm_id, handler_id) -> handler instance
         self._handler_identity_registry: dict[tuple[str, str], BaseHandler] = {}
@@ -210,33 +204,6 @@ class YggdrasilCore:
 
         self._logger.info("DB managers initialized.")
 
-    def _derive_realm_id(self, handler, ep=None) -> None:
-        realm_id = getattr(handler, "realm_id", None)
-        if not realm_id:
-            # deterministic fallback, but still explicit:
-            # prefer entry-point dist name; else top-level module
-            realm_id = (
-                (
-                    getattr(getattr(ep, "dist", None), "name", None)
-                    or handler.__module__.split(".")[0]
-                )
-                .replace("-", "_")
-                .lower()
-            )
-            # surface it back to the handler for consistency
-            setattr(handler, "realm_id", realm_id)
-
-        # Enforce uniqueness across classes (legacy path only)
-        prev = self._legacy_realm_class_registry.get(realm_id)
-        if prev and prev is not handler.__class__:
-            raise RuntimeError(
-                f"Duplicate realm_id '{realm_id}' claimed by "
-                f"{prev.__module__}.{prev.__qualname__} and "
-                f"{handler.__class__.__module__}.{handler.__class__.__qualname__}. "
-                f"Set a unique `realm_id` on your handler."
-            )
-        self._legacy_realm_class_registry[realm_id] = handler.__class__
-
     def _make_planning_ctx(
         self, handler, scope: dict[str, Any], *, doc: dict[str, Any], reason: str
     ) -> PlanningContext:
@@ -265,132 +232,41 @@ class YggdrasilCore:
 
         Flow:
             1. Discover realms via ygg.realm entry points
-            2. Register legacy ygg.handler entry points (backward compat)
-            3. Validate realm_id uniqueness
-            4. Instantiate and register handlers from each realm
-            5. Collect and validate watchspecs
-            6. Wire watchspecs into WatcherManager
+            2. Validate realm_id uniqueness
+            3. Instantiate and register handlers from each realm
+            4. Collect and validate watchspecs
+            5. Wire watchspecs into WatcherManager
         """
         self._logger.info("Discovering realms...")
 
         # 1. Discover realms via ygg.realm entry points
         descriptors = discover_realms()
 
-        # 2. Legacy ygg.handler support (backward compat)
-        legacy_descriptors = self._discover_legacy_handlers()
-        descriptors.extend(legacy_descriptors)
-
         if not descriptors:
             self._logger.warning("No realms discovered.")
             return
 
-        # 3. Validate realm_id uniqueness
+        # 2. Validate realm_id uniqueness
         self._validate_realm_id_uniqueness(descriptors)
 
-        # 4. Register handlers from each realm
+        # 3. Register handlers from each realm
         all_bound_specs: list[BoundWatchSpec] = []
 
         for descriptor in descriptors:
             self._realm_registry[descriptor.realm_id] = descriptor
             self._register_realm_handlers(descriptor)
 
-            # 5. Collect watchspecs
+            # 4. Collect watchspecs
             bound_specs = self._collect_realm_watchspecs(descriptor)
             all_bound_specs.extend(bound_specs)
 
-        # 6. Validate watchspec bindings
+        # 5. Validate watchspec bindings
         if all_bound_specs:
             self._validate_watchspec_bindings(all_bound_specs)
             self._setup_watcher_manager(all_bound_specs)
 
         # Summary
         self._log_realm_summary()
-
-    def _discover_legacy_handlers(self) -> list[RealmDescriptor]:
-        """
-        Discover handlers via legacy ygg.handler entry points.
-
-        Wraps each legacy handler into a RealmDescriptor for uniform
-        processing.  Logs deprecation notice.
-
-        Returns:
-            List of RealmDescriptor (one per legacy handler)
-        """
-        eps_list = list(importlib.metadata.entry_points(group="ygg.handler"))
-
-        # Deduplicate
-        seen: set[tuple[str, str]] = set()
-        unique_eps = []
-        for ep in eps_list:
-            key = (ep.name, ep.value)
-            if key not in seen:
-                seen.add(key)
-                unique_eps.append(ep)
-
-        if not unique_eps:
-            return []
-
-        self._logger.info(
-            "Found %d legacy 'ygg.handler' entry point(s) "
-            "(migrate to 'ygg.realm' entry points)",
-            len(unique_eps),
-        )
-
-        descriptors: list[RealmDescriptor] = []
-
-        for ep in unique_eps:
-            try:
-                handler_cls = ep.load()
-            except Exception as e:
-                self._logger.exception(
-                    "✘  Legacy handler '%s' load failed: %s", ep.name, e
-                )
-                continue
-
-            event_type_raw = getattr(handler_cls, "event_type", None)
-            event_type = self._as_event_type(event_type_raw)
-            if not event_type:
-                self._logger.error(
-                    "✘  Legacy handler '%s' skipped: invalid event_type '%r'",
-                    ep.name,
-                    event_type_raw,
-                )
-                continue
-
-            # Derive realm_id for legacy handler
-            realm_id = getattr(handler_cls, "realm_id", None)
-            if not realm_id:
-                realm_id = (
-                    (
-                        getattr(getattr(ep, "dist", None), "name", None)
-                        or handler_cls.__module__.split(".")[0]
-                    )
-                    .replace("-", "_")
-                    .lower()
-                )
-
-            # Ensure handler_id exists (legacy handlers may not have it)
-            if not getattr(handler_cls, "handler_id", None):
-                handler_cls.handler_id = ep.name  # type: ignore[attr-defined]
-                self._logger.debug(
-                    "Assigned handler_id='%s' to legacy handler %s",
-                    ep.name,
-                    handler_cls.__qualname__,
-                )
-
-            desc = RealmDescriptor(
-                realm_id=realm_id,
-                handler_classes=[handler_cls],
-                watchspecs=[],  # Legacy handlers don't provide watchspecs
-            )
-            descriptors.append(desc)
-            self._logger.info(
-                "✓  Wrapped legacy handler '%s' as realm '%s'",
-                ep.name,
-                realm_id,
-            )
-
-        return descriptors
 
     def _validate_realm_id_uniqueness(self, descriptors: list[RealmDescriptor]) -> None:
         """
@@ -604,7 +480,7 @@ class YggdrasilCore:
 
     def register_watcher(self, watcher) -> None:
         """
-        Attach a watcher (e.g. CouchDBWatcher, PlanWatcher).
+        Attach a watcher (e.g. PlanWatcher).
         The watchers will be started/stopped by YggdrasilCore.
         """
         self._logger.debug(f"Registering watcher: {watcher}")

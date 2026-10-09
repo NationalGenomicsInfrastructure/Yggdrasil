@@ -8,7 +8,7 @@ These tests focus on the NEW Phase 2 code paths in YggdrasilCore.
 import logging
 import unittest
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from lib.core_utils.event_types import EventType
 from lib.core_utils.singleton_decorator import SingletonMeta
@@ -133,10 +133,9 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- setup_realms basic flow ---
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_setup_realms_single_realm(self, _test_enabled, mock_discover, _mock_eps):
+    def test_setup_realms_single_realm(self, _test_enabled, mock_discover):
         """setup_realms registers handlers from a single discovered realm."""
         desc = RealmDescriptor(
             realm_id="tenx",
@@ -160,12 +159,9 @@ class TestSetupRealms(unittest.TestCase):
         # Handler identity registry populated
         self.assertIn(("tenx", "handler_a"), core._handler_identity_registry)
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_setup_realms_multiple_realms(
-        self, _test_enabled, mock_discover, _mock_eps
-    ):
+    def test_setup_realms_multiple_realms(self, _test_enabled, mock_discover):
         """setup_realms registers handlers from multiple realms."""
         desc1 = RealmDescriptor(
             realm_id="tenx",
@@ -186,10 +182,9 @@ class TestSetupRealms(unittest.TestCase):
         realm_ids = {h.realm_id for h in handlers}
         self.assertEqual(realm_ids, {"tenx", "smartseq3"})
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_setup_realms_no_realms(self, _test_enabled, mock_discover, _mock_eps):
+    def test_setup_realms_no_realms(self, _test_enabled, mock_discover):
         """setup_realms handles no realms discovered gracefully."""
         mock_discover.return_value = []
 
@@ -201,10 +196,9 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- Realm ID uniqueness ---
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_duplicate_realm_id_raises(self, _test_enabled, mock_discover, _mock_eps):
+    def test_duplicate_realm_id_raises(self, _test_enabled, mock_discover):
         """Duplicate realm_id raises RuntimeError."""
         desc1 = RealmDescriptor(
             realm_id="duplicate",
@@ -223,10 +217,9 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- Handler identity ---
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_handler_id_set_on_instance(self, _test_enabled, mock_discover, _mock_eps):
+    def test_handler_id_set_on_instance(self, _test_enabled, mock_discover):
         """Handler instances have realm_id set by core."""
         desc = RealmDescriptor(
             realm_id="my_realm",
@@ -240,10 +233,9 @@ class TestSetupRealms(unittest.TestCase):
         handler = core._handler_identity_registry[("my_realm", "handler_a")]
         self.assertEqual(handler.realm_id, "my_realm")
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_missing_handler_id_raises(self, _test_enabled, mock_discover, _mock_eps):
+    def test_missing_handler_id_raises(self, _test_enabled, mock_discover):
         """Handler class missing handler_id raises RuntimeError."""
 
         class _NoIdHandler(BaseHandler):
@@ -270,10 +262,9 @@ class TestSetupRealms(unittest.TestCase):
             core.setup_realms()
         self.assertIn("missing required 'handler_id'", str(ctx.exception))
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_missing_event_type_raises(self, _test_enabled, mock_discover, _mock_eps):
+    def test_missing_event_type_raises(self, _test_enabled, mock_discover):
         """Handler class with invalid event_type raises RuntimeError."""
 
         class _BadEventHandler(BaseHandler):
@@ -302,11 +293,10 @@ class TestSetupRealms(unittest.TestCase):
 
     # --- WatchSpec validation ---
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_watchspec_target_handler_unknown_raises(
-        self, _test_enabled, mock_discover, _mock_eps
+        self, _test_enabled, mock_discover
     ):
         """WatchSpec referencing unknown handler_id raises RuntimeError."""
         spec = WatchSpec(
@@ -329,12 +319,9 @@ class TestSetupRealms(unittest.TestCase):
             core.setup_realms()
         self.assertIn("unknown handler_id", str(ctx.exception))
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_watchspec_no_receiver_raises(
-        self, _test_enabled, mock_discover, _mock_eps
-    ):
+    def test_watchspec_no_receiver_raises(self, _test_enabled, mock_discover):
         """WatchSpec with event_type that no handler subscribes to raises RuntimeError."""
         # Handler subscribes to PROJECT_CHANGE, but spec emits COUCHDB_DOC_CHANGED
         spec = WatchSpec(
@@ -356,12 +343,9 @@ class TestSetupRealms(unittest.TestCase):
             core.setup_realms()
         self.assertIn("no handler in this realm subscribes", str(ctx.exception))
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    def test_watchspec_valid_target_handler_passes(
-        self, _test_enabled, mock_discover, _mock_eps
-    ):
+    def test_watchspec_valid_target_handler_passes(self, _test_enabled, mock_discover):
         """WatchSpec with valid target_handlers passes validation."""
         spec = WatchSpec(
             backend="couchdb",
@@ -389,11 +373,10 @@ class TestSetupRealms(unittest.TestCase):
             ("valid_target", "couchdb_handler"), core._handler_identity_registry
         )
 
-    @patch("importlib.metadata.entry_points", return_value=[])
     @patch("lib.core_utils.yggdrasil_core.discover_realms")
     @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
     def test_setup_realms_does_not_validate_watcher_connections(
-        self, _test_enabled, mock_discover, _mock_eps
+        self, _test_enabled, mock_discover
     ):
         """setup_realms wires WatchSpecs but leaves daemon config validation to setup_watchers."""
         spec = WatchSpec(
@@ -418,44 +401,6 @@ class TestSetupRealms(unittest.TestCase):
         self.assertIn(
             ("daemon_only", "couchdb_handler"), core._handler_identity_registry
         )
-
-    # --- Legacy handler wrapping ---
-
-    @patch("lib.core_utils.yggdrasil_core.discover_realms")
-    @patch("lib.realms.test_realm.is_test_realm_enabled", return_value=False)
-    @patch("importlib.metadata.entry_points")
-    def test_legacy_handler_wrapped_as_realm(
-        self, mock_eps, _test_enabled, mock_discover
-    ):
-        """Legacy ygg.handler entry points are wrapped as RealmDescriptors."""
-        mock_discover.return_value = []
-
-        # Create a mock legacy handler class
-        legacy_cls = type(
-            "LegacyHandler",
-            (_ProjectHandlerA,),
-            {
-                "event_type": EventType.PROJECT_CHANGE,
-                "handler_id": "legacy_proj",
-                "realm_id": None,
-                "__module__": "legacy_pkg.handler",
-                "__qualname__": "LegacyHandler",
-            },
-        )
-
-        ep = MagicMock()
-        ep.name = "legacy_proj"
-        ep.value = "legacy_pkg.handler:LegacyHandler"
-        ep.load.return_value = legacy_cls
-        ep.dist = MagicMock()
-        ep.dist.name = "legacy_pkg"
-        mock_eps.return_value = [ep]
-
-        core = self._make_core()
-        core.setup_realms()
-
-        # Should be registered with derived realm_id
-        self.assertIn("legacy_pkg", core._realm_registry)
 
 
 class TestHandleEventRouting(unittest.TestCase):
