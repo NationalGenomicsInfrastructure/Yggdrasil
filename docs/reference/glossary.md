@@ -58,7 +58,7 @@ The raw event object produced by a backend (e.g. `CouchDBBackend`). Contains the
 ## Event routing
 
 ### EventType
-Enum (`yggdrasil.watchers.events`) controlling which handlers receive a given event. Active values:
+Enum (`yggdrasil.watchers.EventType`) controlling which handlers receive a given event. Active values:
 - `COUCHDB_DOC_CHANGED` — a document was created or updated in a watched CouchDB database
 - `COUCHDB_DOC_DELETED` — a document was deleted
 - `PLAN_EXECUTION` — internal; used by `PlanWatcher` to trigger Engine runs

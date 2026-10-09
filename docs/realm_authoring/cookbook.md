@@ -10,7 +10,7 @@ Return `None` from `get_realm_descriptor()` when the realm should not be active:
 
 ```python
 # my_realm/__init__.py
-from yggdrasil.config.session import YggSession
+from yggdrasil.config import YggSession
 from yggdrasil.core.realm.descriptor import RealmDescriptor
 
 

@@ -30,7 +30,7 @@ Yggdrasil is an event-driven orchestration framework. It watches external system
 
 ### WatcherManager
 
-`lib/watchers/manager.py`
+`yggdrasil/watchers/manager.py`
 
 - Consumes `WatchSpec` objects declared by realm descriptors
 - Resolves logical connection names (e.g. `"projects_db"`) to concrete endpoints via the `external_systems` config block
@@ -40,7 +40,7 @@ Yggdrasil is an event-driven orchestration framework. It watches external system
 
 ### CouchDB backend behavior
 
-`lib/watchers/backends/couchdb.py`
+`yggdrasil/watchers/backends/couchdb.py`
 
 The CouchDB backend polls the `_changes` feed using a raw HTTP GET request (not the IBM CloudantV1 SDK).
 
@@ -65,7 +65,7 @@ If this block is absent, defaults are `max_observation_retries=3` and `observati
 
 ### YggdrasilCore
 
-`lib/core_utils/yggdrasil_core.py`
+`yggdrasil/daemon/core.py`
 
 - Central orchestrator (singleton)
 - Manages realm discovery via the `ygg.realm` entry-point group
@@ -102,7 +102,7 @@ See [Flow API](../flow_api/overview.md#engine-yggdrasilcoreengine).
 
 ### PlanExecutionCoordinator
 
-`lib/core_utils/plan_execution.py`
+`yggdrasil/daemon/plan_execution.py`
 
 The one execution path for both the daemon and `run-doc --run-once`:
 
@@ -115,7 +115,7 @@ See [Plan Execution](../reference/plan_execution.md).
 
 ### PlanWatcher
 
-`lib/watchers/plan_watcher.py`
+`yggdrasil/watchers/plan_watcher.py`
 
 Monitors the `yggdrasil_plans` database. When a plan document transitions to `status="approved"` and `run_token > executed_run_token`, the PlanWatcher picks it up and hands it to the execution coordinator.
 
@@ -123,7 +123,7 @@ PlanWatcher uses `ChangesFetcher` for continuous polling with `include_docs=True
 
 ### ChangesFetcher
 
-`lib/couchdb/changes_fetcher.py`
+`yggdrasil/couchdb/changes_fetcher.py`
 
 Continuous `_changes` feed poller used by PlanWatcher. Key behaviours:
 
@@ -197,13 +197,16 @@ Trigger events control *which handler runs*. Step events record *what happened d
 
 | Path | Contents |
 |------|---------|
-| `yggdrasil/` | Public API: `flow/`, `cli.py`, `core/` |
+| `yggdrasil/` | The package; realm-facing API: `flow/`, `watchers` (`EventType`, `WatchSpec`), `core/realm/` |
 | `yggdrasil/flow/` | `@step` decorator, planner protocol, event emitter interface |
 | `yggdrasil/core/` | Engine, `RealmDescriptor`, core registry |
-| `lib/core_utils/` | `YggdrasilCore`, `YggSession`, config loader, logging |
-| `lib/watchers/` | `WatcherManager`, `WatchSpec`, backends (CouchDB, filesystem) |
-| `lib/couchdb/` | CouchDB connection handler, document managers, `ChangesFetcher` (continuous poller), typed models (`couchdb_models.py`) |
-| `lib/realms/` | `test_realm`, the dev-only reference realm; production realms are external packages |
+| `yggdrasil/daemon/` | `YggdrasilCore`, `PlanExecutionCoordinator`, daemon lock, ops consumer service |
+| `yggdrasil/config/` | `ConfigLoader`, `YggSession`, workspace paths, external-systems resolver, runtime paths |
+| `yggdrasil/watchers/` | `EventType`, `WatchSpec`, `WatcherManager`, `PlanWatcher`, backends (CouchDB, filesystem) |
+| `yggdrasil/storage/` | Internal-storage protocols and factory, plan-document rules, SQLite backend; `couchdb/` holds the CouchDB backend (plan store, checkpoint store, ops sink) |
+| `yggdrasil/couchdb/` | CouchDB connection handler, `ChangesFetcher` (continuous poller), typed models (`models.py`), endpoint defaults |
+| `yggdrasil/ops/` | Event spool consumer and `plan_status` snapshots |
+| `yggdrasil/realms/` | `test_realm`, the dev-only reference realm; production realms are external packages |
 | `tests/` | Full test suite (1700+ tests) |
 
 ---

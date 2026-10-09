@@ -23,10 +23,10 @@ The handler is the core of any realm. It subscribes to an event type, extracts a
 # my_realm/handlers.py
 from typing import Any, ClassVar
 
-from yggdrasil.watchers.events import EventType
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner import PlanDraft, PlanningContext
+from yggdrasil.watchers import EventType
 
 
 class MyProjectHandler(BaseHandler):
@@ -93,9 +93,8 @@ To have a CouchDB change automatically trigger your handler, add a `WatchSpec` t
 # my_realm/__init__.py
 from typing import Any
 
-from yggdrasil.watchers.events import EventType
-from yggdrasil.watchers.watchspec import WatchSpec
 from yggdrasil.core.realm import RealmDescriptor
+from yggdrasil.watchers import EventType, WatchSpec
 
 from my_realm.handlers import MyProjectHandler, MyDeliveryHandler
 
@@ -284,7 +283,7 @@ filter_expr = {"!!": [{"var": "doc.project_id"}]}
 Make `watchspecs` a callable that returns `[]` when disabled:
 
 ```python
-from yggdrasil.config.session import YggSession
+from yggdrasil.config import YggSession
 
 
 def _get_watchspecs() -> list[WatchSpec]:
