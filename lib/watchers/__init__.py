@@ -34,7 +34,6 @@ Public API:
 
 Legacy watchers (deprecated after Phase 3):
     - AbstractWatcher
-    - CouchDBWatcher
     - SeqDataWatcher
     - PlanWatcher (excluded from refactor; remains core infrastructure)
 """
