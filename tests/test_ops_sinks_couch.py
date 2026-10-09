@@ -10,8 +10,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from lib.ops.sinks.couch import OpsWriter
-from yggdrasil.flow.model import Plan, StepSpec
-from yggdrasil.flow.planner import PlanDraft
 
 
 class MockApiException(Exception):
@@ -204,150 +202,6 @@ class TestOpsWriterWrite(unittest.TestCase):
 
 
 @patch("lib.ops.sinks.couch.ApiException", MockApiException)
-class TestOpsWriterUpsertPlanDraft(unittest.TestCase):
-    """Tests for upsert_plan_draft method."""
-
-    def setUp(self):
-        with patch("lib.ops.sinks.couch.CouchDBHandler.__init__", return_value=None):
-            self.writer = OpsWriter()
-            self.writer.server = Mock()
-            self.writer.db_name = "test_db"
-
-    def test_upsert_plan_draft_creates_document(self):
-        """Test upsert_plan_draft creates new document."""
-        plan = Plan(
-            plan_id="plan_001",
-            realm="tenx",
-            scope={"kind": "project", "id": "P123"},
-            steps=[
-                StepSpec(
-                    step_id="step1",
-                    name="test_step",
-                    fn_ref="test.fn",
-                    params={},
-                )
-            ],
-        )
-
-        draft = PlanDraft(
-            plan=plan,
-            notes="Test plan",
-            preview="Preview text",  # type: ignore
-            auto_run=True,
-            approvals_required=["admin"],
-        )
-
-        # Mock no existing document
-        self.writer.server.get_document.side_effect = ApiException(404)  # type: ignore
-
-        self.writer.upsert_plan_draft(draft)
-
-        # Should call put_document
-        self.writer.server.put_document.assert_called_once()  # type: ignore
-        call_kwargs = self.writer.server.put_document.call_args[1]  # type: ignore
-        self.assertEqual(call_kwargs["doc_id"], "proj-P123:plan_draft:tenx:plan_001")
-
-    def test_upsert_plan_draft_structure(self):
-        """Test upsert_plan_draft creates correct structure."""
-        plan = Plan(
-            plan_id="plan_001",
-            realm="tenx",
-            scope={"kind": "project", "id": "P123"},
-            steps=[],
-        )
-
-        draft = PlanDraft(
-            plan=plan,
-            notes="Test notes",
-            preview="Preview",  # type: ignore
-            auto_run=False,
-            approvals_required=["user1", "user2"],
-        )
-
-        self.writer.server.get_document.side_effect = ApiException(404)  # type: ignore
-
-        with patch(
-            "lib.ops.sinks.couch.utcnow_iso", return_value="2025-01-01T00:00:00Z"
-        ):
-            self.writer.upsert_plan_draft(draft)
-
-        # Extract the document that was passed
-        call_kwargs = self.writer.server.put_document.call_args[1]  # type: ignore
-        doc = call_kwargs["document"]
-
-        # Verify structure by checking the call was made
-        self.writer.server.put_document.assert_called_once()  # type: ignore
-
-    def test_upsert_plan_draft_updates_existing(self):
-        """Test upsert_plan_draft updates existing document."""
-        plan = Plan(
-            plan_id="plan_001",
-            realm="tenx",
-            scope={"kind": "project", "id": "P123"},
-            steps=[],
-        )
-
-        draft = PlanDraft(plan=plan, notes="Updated", preview="", auto_run=True)  # type: ignore
-
-        # Mock existing document
-        existing_doc = {"_id": "doc_id", "_rev": "1-xyz"}
-        self.writer.server.get_document.return_value = Mock(get_result=lambda: existing_doc)  # type: ignore
-
-        self.writer.upsert_plan_draft(draft)
-
-        # Should get existing document
-        self.writer.server.get_document.assert_called()  # type: ignore
-
-        # Should call put_document
-        self.writer.server.put_document.assert_called_once()  # type: ignore
-
-    def test_upsert_plan_draft_approved_false(self):
-        """Test that approved is always False on upsert."""
-        plan = Plan(
-            plan_id="plan_001",
-            realm="tenx",
-            scope={"kind": "project", "id": "P123"},
-            steps=[],
-        )
-
-        draft = PlanDraft(plan=plan, notes="", preview="", auto_run=True)  # type: ignore
-
-        self.writer.server.get_document.side_effect = ApiException(404)  # type: ignore
-
-        self.writer.upsert_plan_draft(draft)
-
-        # approved should be False (verified by the call happening)
-        self.writer.server.put_document.assert_called_once()  # type: ignore
-
-    def test_upsert_plan_draft_with_steps(self):
-        """Test upsert_plan_draft serializes steps correctly."""
-        plan = Plan(
-            plan_id="plan_001",
-            realm="tenx",
-            scope={"kind": "project", "id": "P123"},
-            steps=[
-                StepSpec(
-                    step_id="step1",
-                    name="test_step",
-                    fn_ref="test.fn",
-                    params={"key": "value"},
-                    deps=["dep1"],
-                    scope={"kind": "project", "id": "P123"},
-                    inputs={"input1": "path1"},
-                )
-            ],
-        )
-
-        draft = PlanDraft(plan=plan, notes="", preview="", auto_run=False)  # type: ignore
-
-        self.writer.server.get_document.side_effect = ApiException(404)  # type: ignore
-
-        self.writer.upsert_plan_draft(draft)
-
-        self.writer.server.put_document.assert_called_once()  # type: ignore
-
-
-@patch("lib.ops.sinks.couch.ApiException", MockApiException)
 class TestOpsWriterUpsert(unittest.TestCase):
     """Tests for _upsert helper method."""
 
@@ -482,39 +336,6 @@ class TestOpsWriterIntegration(unittest.TestCase):
             self.writer = OpsWriter(db_name="integration_test_db")
             self.writer.server = Mock()
             self.writer.db_name = "integration_test_db"
-
-    def test_write_and_upsert_draft_different_ids(self):
-        """Test that write and upsert_plan_draft use different doc IDs."""
-        plan = Plan(
-            plan_id="plan_001",
-            realm="tenx",
-            scope={"kind": "project", "id": "P123"},
-            steps=[],
-        )
-
-        draft = PlanDraft(plan=plan, notes="", preview="", auto_run=True)  # type: ignore
-
-        snapshot = {
-            "type": "plan_status",
-            "realm": "tenx",
-            "plan_id": "plan_001",
-            "scope": {"kind": "project", "id": "P123"},
-            "steps": {},
-        }
-
-        self.writer.server.get_document.side_effect = ApiException(404)  # type: ignore
-
-        with TemporaryDirectory() as tmpdir:
-            self.writer.write(Path(tmpdir), snapshot)
-            status_doc_id = self.writer.server.put_document.call_args_list[0][1]["doc_id"]  # type: ignore
-
-        self.writer.upsert_plan_draft(draft)
-        draft_doc_id = self.writer.server.put_document.call_args_list[1][1]["doc_id"]  # type: ignore
-
-        # IDs should be different
-        self.assertIn("plan_status", status_doc_id)
-        self.assertIn("plan_draft", draft_doc_id)
-        self.assertNotEqual(status_doc_id, draft_doc_id)
 
     def test_multiple_writes_update_same_document(self):
         """Test multiple writes to same plan update the same document."""

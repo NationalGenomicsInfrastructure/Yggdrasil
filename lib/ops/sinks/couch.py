@@ -12,8 +12,6 @@ from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.config_loader import ConfigLoader
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.couchdb.partitions import partition_key
-from yggdrasil.flow.planner import PlanDraft
-from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
 # Default environment variable names for credentials
 DEFAULT_USER_ENV = "YGG_COUCH_USER"
@@ -32,7 +30,6 @@ def _get_couchdb_endpoint_config() -> dict[str, Any]:
 class OpsWriter(CouchDBHandler):
     """
     - write(plan_dir, snapshot): used by the FileSpoolConsumer to upsert plan_status.
-    - upsert_plan_draft(draft): used by realm handlers/planners to publish a plan draft.
     """
 
     def __init__(
@@ -79,33 +76,6 @@ class OpsWriter(CouchDBHandler):
         realm = snapshot["realm"]
         plan_id = snapshot["plan_id"]
         return f"{part}:plan_status:{realm}:{plan_id}"
-
-    # ---------- plan_draft (new, used by planners) ----------
-    def upsert_plan_draft(self, draft: PlanDraft) -> None:
-        plan = draft.plan
-        part = partition_key(plan.scope or {})
-        doc_id = f"{part}:plan_draft:{plan.realm}:{plan.plan_id}"
-
-        payload: dict[str, Any] = {
-            "_id": doc_id,
-            "type": "plan_draft",
-            "realm": plan.realm,
-            "plan_id": plan.plan_id,
-            "scope": plan.scope,
-            "notes": draft.notes,
-            "preview": draft.preview,
-            "auto_run": draft.auto_run,
-            "approved": False,  # flipped by a human through an operations UI
-            "approvals_required": draft.approvals_required,
-            "plan": {
-                "plan_id": plan.plan_id,
-                "realm": plan.realm,
-                "scope": plan.scope,
-                "steps": [s.__dict__ for s in plan.steps],
-            },
-            "updated_at": utcnow_iso(),
-        }
-        self._upsert(doc_id, payload)
 
     # ---------- shared upsert ----------
     def _upsert(self, doc_id: str, payload: dict[str, Any]) -> None:
