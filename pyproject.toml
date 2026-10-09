@@ -60,6 +60,7 @@ exclude = [
     "trashcan/.*",
     "htmlcov/.*",
     "sim_out/.*",
+    "^build/.*",
 ]
 
 [project.scripts]
@@ -73,8 +74,10 @@ test_realm = "yggdrasil.realms.test_realm:get_realm_descriptor"
 requires = ["setuptools>=68", "wheel", "setuptools-scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["yggdrasil"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["yggdrasil", "yggdrasil.*"]
+namespaces = true
 
 [tool.setuptools.package-data]
 yggdrasil = ["assets/*", "py.typed"]
