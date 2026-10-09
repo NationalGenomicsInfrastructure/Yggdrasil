@@ -18,23 +18,33 @@ try:
 except ImportError:
     _RICH_AVAILABLE = False
 
-# Suppress logging for specific noisy libraries
-for noisy in ("matplotlib", "numba", "h5py", "PIL", "watchdog"):
-    logging.getLogger(noisy).setLevel(logging.WARNING)
+# Third-party loggers quieted by configure_logging()
+_NOISY_LOGGER_LEVELS: dict[str, int] = {
+    "matplotlib": logging.WARNING,
+    "numba": logging.WARNING,
+    "h5py": logging.WARNING,
+    "PIL": logging.WARNING,
+    "watchdog": logging.WARNING,
+    "ibm-cloud-sdk-core": logging.ERROR,
+    "ibmcloudant.cloudant_v1": logging.WARNING,
+    "urllib3.connectionpool": logging.WARNING,
+}
 
-logging.getLogger("ibm-cloud-sdk-core").setLevel(logging.ERROR)  # Only errors
-logging.getLogger("ibmcloudant.cloudant_v1").setLevel(logging.WARNING)  # Warnings+
-logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)  # Suppress debug
-
-# Helper to abbreviate level names
-for _name, _abbr in {
+_LEVEL_ABBREVIATIONS: dict[str, str] = {
     "DEBUG": "D",
     "INFO": "I",
     "WARNING": "W",
     "ERROR": "E",
     "CRITICAL": "C",
-}.items():
-    logging.addLevelName(getattr(logging, _name), _abbr)
+}
+
+
+def _apply_process_logging_defaults() -> None:
+    """Abbreviate level names and quiet noisy third-party loggers, process-wide."""
+    for name, level in _NOISY_LOGGER_LEVELS.items():
+        logging.getLogger(name).setLevel(level)
+    for level_name, abbreviation in _LEVEL_ABBREVIATIONS.items():
+        logging.addLevelName(getattr(logging, level_name), abbreviation)
 
 
 def _truncate_long_sequences(message: str, max_len: int = 20) -> str:
@@ -171,10 +181,13 @@ def configure_logging(debug: bool = False, console: bool = True) -> None:
     """
     Set up logging for the Yggdrasil application.
 
+    - Process-wide defaults first: one-letter level names, quieter
+      third-party loggers (importing this module changes neither)
     - File log: full logger name (%(name)s)
     - Console log: short logger name (%(shortname)s) via ShortNameFilter
     - Console dedup enabled; file dedup disabled
     """
+    _apply_process_logging_defaults()
     configs: Mapping[str, Any] = ConfigLoader().load_config("main.json")
     log_dir = Path(configs["yggdrasil"]["log_dir"])
     log_dir.mkdir(parents=True, exist_ok=True)

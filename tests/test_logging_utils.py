@@ -207,11 +207,24 @@ class TestLoggingUtils(unittest.TestCase):
         self.assertIs(logger1, logger2)
 
     def test_logging_levels_suppressed(self):
-        # Test that logging levels for specified noisy libraries are set to WARNING
+        # configure_logging sets the noisy libraries' loggers to WARNING
+        configure_logging()
         noisy_libraries = ["matplotlib", "numba", "h5py", "PIL"]
         for lib in noisy_libraries:
             logger = logging.getLogger(lib)
             self.assertEqual(logger.level, logging.WARNING)
+
+    def test_configure_logging_applies_process_defaults(self):
+        configure_logging()
+        for name, level in {
+            "watchdog": logging.WARNING,
+            "ibm-cloud-sdk-core": logging.ERROR,
+            "ibmcloudant.cloudant_v1": logging.WARNING,
+            "urllib3.connectionpool": logging.WARNING,
+        }.items():
+            self.assertEqual(logging.getLogger(name).level, level)
+        self.assertEqual(logging.getLevelName(logging.DEBUG), "D")
+        self.assertEqual(logging.getLevelName(logging.CRITICAL), "C")
 
     def test_configure_logging_no_configs(self):
         # Test behavior when configs do not contain 'yggdrasil.log_dir'
@@ -454,6 +467,7 @@ class TestLoggingUtils(unittest.TestCase):
 
     def test_suppressed_loggers_levels(self):
         # Ensure that suppressed loggers have their levels set to WARNING
+        configure_logging()
         suppressed_loggers = ["matplotlib", "numba", "h5py", "PIL"]
         for logger_name in suppressed_loggers:
             logger = logging.getLogger(logger_name)
