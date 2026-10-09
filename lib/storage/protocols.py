@@ -8,9 +8,8 @@ implements them against a single local database file.
 The bundle intentionally has no coordination-document ("state") store: the
 only live internal consumer of the ``yggdrasil`` coordination database in the
 modern daemon path is checkpoint persistence, which is covered by
-``CheckpointStore``. The legacy ``YggdrasilDocument`` operations are used only
-by unwired legacy code (see ``docs/TECH_DEBT_LEDGER.md``) and are excluded
-until a live consumer exists.
+``CheckpointStore``. A store protocol for coordination documents is added
+here once such documents gain a live consumer.
 """
 
 from __future__ import annotations
