@@ -75,6 +75,9 @@ class PlanWatcher(AbstractWatcher):
         """
         Initialize PlanWatcher.
 
+        The legacy CouchDB defaults for bare construction are tracked as
+        ``docs/TECH_DEBT_LEDGER.md`` entry 22.
+
         Args:
             on_event: Callback to invoke when eligible plan is detected
             poll_interval_sec: Seconds between change poll cycles (default 5.0)
