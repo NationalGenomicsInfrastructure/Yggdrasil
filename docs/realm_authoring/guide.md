@@ -386,46 +386,6 @@ Events can be triggered via:
 
 ## Migration from Legacy Patterns
 
-### From `ygg.handler` Entry Point
-
-**Before (deprecated):**
-```toml
-[project.entry-points."ygg.handler"]
-my_handler = "my_realm.handler:MyHandler"
-```
-
-**After:**
-```toml
-[project.entry-points."ygg.realm"]
-my_realm = "my_realm:get_realm_descriptor"
-```
-
-### From CouchDBWatcher
-
-**Before (deprecated):**
-```python
-from lib.watchers.couchdb_watcher import CouchDBWatcher
-
-watcher = CouchDBWatcher(
-    on_event=core.handle_event,
-    changes_fetcher=db.fetch_changes,
-    event_type=EventType.PROJECT_CHANGE,
-)
-```
-
-**After:**
-```python
-# In your realm's get_realm_descriptor()
-WatchSpec(
-    backend="couchdb",
-    connection="projects_db",
-    event_type=EventType.COUCHDB_DOC_CHANGED,
-    filter_expr={"==": [{"var": "doc.type"}, "project"]},
-    build_scope=...,
-    build_payload=...,
-)
-```
-
 ### From ScenarioDocWatcher (Test Realm)
 
 The test realm watcher is now configured via WatchSpec in the realm's

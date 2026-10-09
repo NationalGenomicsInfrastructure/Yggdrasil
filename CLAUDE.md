@@ -28,7 +28,7 @@ Yggdrasil is an event-driven orchestration framework: watchers observe external 
 Event flow, end to end:
 
 1. **`YggdrasilCore`** (`lib/core_utils/yggdrasil_core.py`) is the central orchestrator. It discovers realms, collects their WatchSpecs, wires watchers, and routes events to handlers via a `dict[EventType, list[BaseHandler]]` subscription model.
-2. **Realms** are the plugin extension point. Each provides a `RealmDescriptor` (`realm_id`, `handler_classes`, `watchspecs`) registered through the `ygg.realm` entry-point group (legacy `ygg.handler` is deprecated). Production realms are external packages; `lib/realms/` holds only the dev-only `test_realm`.
+2. **Realms** are the plugin extension point. Each provides a `RealmDescriptor` (`realm_id`, `handler_classes`, `watchspecs`) registered through the `ygg.realm` entry-point group. Production realms are external packages; `lib/realms/` holds only the dev-only `test_realm`.
 3. **WatcherManager** (`lib/watchers/manager.py`) consumes BoundWatchSpecs, resolves connection config, deduplicates backends per `(backend, connection)`, evaluates each spec's `filter_expr`, builds payload/scope, and fans out `YggdrasilEvent`s to core. Startup wiring is validated by `lib/watchers/config_validation.py` (raises `WatcherConfigurationError`).
 4. **Watcher backends** (`lib/watchers/backends/`) produce backend-agnostic `RawWatchEvent`s and persist resume positions via `CheckpointStore` (`InMemoryCheckpointStore` available for tests). Realm logic stays out of backends; the architecture is one-way — no ack/return path from realms back to backends.
 5. **Handlers** (subclass `yggdrasil.flow.base_handler.BaseHandler`) declare `event_type: ClassVar[EventType]`, implement `derive_scope()` and async `generate_plan_drafts()`. Handlers generate plan *intent* (`PlanDraft`), never execute work directly.
@@ -47,7 +47,7 @@ Namespacing: `yggdrasil/*` is the public API, `lib/*` is internal implementation
 ### CouchDB layer
 
 - `CouchDBHandler` (`lib/couchdb/couchdb_connection.py`) is the sync base wrapper; async consumers call it via `asyncio.to_thread`. `_changes` polling policy is centralized in `ChangesFetcher`.
-- `YggdrasilDBManager` / `ProjectDBManager` extend it for specific databases; `@auto_load_and_save` persists `YggdrasilDocument` changes automatically.
+- `YggdrasilDBManager` / `ProjectDBManager` extend it as bare handlers bound to the `yggdrasil` coordination database and the external `projects` database.
 
 ### CLI
 
