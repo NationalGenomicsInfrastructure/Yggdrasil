@@ -3,12 +3,26 @@
 import unittest
 from unittest.mock import patch
 
+from yggdrasil.config import external_systems
 from yggdrasil.couchdb.defaults import (
     DEFAULT_ENDPOINT,
     DEFAULT_PASS_ENV,
     DEFAULT_USER_ENV,
     resolve_couchdb_params,
 )
+from yggdrasil.storage.couchdb import ops_sink
+
+
+class TestCredentialDefaults(unittest.TestCase):
+    """The credential env-var names are defined once, in config.external_systems."""
+
+    def test_defaults_are_shared(self):
+        for name in ("DEFAULT_USER_ENV", "DEFAULT_PASS_ENV"):
+            canonical = getattr(external_systems, name)
+            self.assertIs(globals()[name], canonical)
+            self.assertIs(getattr(ops_sink, name), canonical)
+        self.assertEqual(DEFAULT_USER_ENV, "YGG_COUCH_USER")
+        self.assertEqual(DEFAULT_PASS_ENV, "YGG_COUCH_PASS")
 
 
 class TestCouchDBDefaults(unittest.TestCase):

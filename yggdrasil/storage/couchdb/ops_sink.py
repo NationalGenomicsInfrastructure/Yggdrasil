@@ -8,14 +8,14 @@ from typing import Any, cast
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant.cloudant_v1 import Document
 
-from yggdrasil.config.external_systems import normalize_url
+from yggdrasil.config.external_systems import (
+    DEFAULT_PASS_ENV,
+    DEFAULT_USER_ENV,
+    normalize_url,
+)
 from yggdrasil.config.loader import ConfigLoader
 from yggdrasil.couchdb.connection import CouchDBHandler
 from yggdrasil.storage.partitions import partition_key
-
-# Default environment variable names for credentials
-DEFAULT_USER_ENV = "YGG_COUCH_USER"
-DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
 
 
 def _get_couchdb_endpoint_config() -> dict[str, Any]:

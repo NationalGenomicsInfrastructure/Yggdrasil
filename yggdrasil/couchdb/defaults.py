@@ -9,11 +9,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from yggdrasil.config.external_systems import normalize_url
+from yggdrasil.config.external_systems import (
+    DEFAULT_PASS_ENV,
+    DEFAULT_USER_ENV,
+    normalize_url,
+)
 from yggdrasil.config.loader import ConfigLoader
 
-DEFAULT_USER_ENV = "YGG_COUCH_USER"
-DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
+__all__ = [
+    "DEFAULT_ENDPOINT",
+    "DEFAULT_PASS_ENV",
+    "DEFAULT_USER_ENV",
+    "CouchDBParams",
+    "resolve_couchdb_params",
+]
+
 DEFAULT_ENDPOINT = "couchdb"
 
 

@@ -26,9 +26,9 @@ from yggdrasil.logging_utils import custom_logger
 
 logger = custom_logger(__name__)
 
-# Built-in defaults for CouchDB auth env var names (same as WatcherManager)
-_DEFAULT_USER_ENV = "YGG_COUCH_USER"
-_DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
+# Built-in defaults for CouchDB auth env var names, shared by every CouchDB client
+DEFAULT_USER_ENV = "YGG_COUCH_USER"
+DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
 
 _ALLOWED_PERMISSIONS = frozenset({"read", "write"})
 _ALLOWED_PHASES = frozenset({"planning", "execution"})
@@ -195,8 +195,8 @@ def resolve_endpoint(endpoint_name: str, cfg: dict[str, Any]) -> ResolvedEndpoin
     return ResolvedEndpoint(
         name=endpoint_name,
         url=normalized_url,
-        user_env=auth.get("user_env", _DEFAULT_USER_ENV),
-        pass_env=auth.get("pass_env", _DEFAULT_PASS_ENV),
+        user_env=auth.get("user_env", DEFAULT_USER_ENV),
+        pass_env=auth.get("pass_env", DEFAULT_PASS_ENV),
         backend_type=endpoint.get("backend", "couchdb"),
         dsn_env=dsn_env,
     )
