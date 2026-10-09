@@ -185,7 +185,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
     @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
     @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
-    @patch("yggdrasil.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
+    @patch("yggdrasil.storage.couchdb.checkpoint_store.CouchDBCheckpointStore")
     @patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
     def test_watcher_filters_draft_plans(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
@@ -232,7 +232,7 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
     @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
     @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
-    @patch("yggdrasil.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
+    @patch("yggdrasil.storage.couchdb.checkpoint_store.CouchDBCheckpointStore")
     @patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
     def test_watcher_emits_event_for_approved_plan(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls
@@ -375,7 +375,7 @@ class TestStartupRecoveryE2E(unittest.TestCase):
 
     @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
     @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
-    @patch("yggdrasil.watchers.backends.checkpoint_store.CouchDBCheckpointStore")
+    @patch("yggdrasil.storage.couchdb.checkpoint_store.CouchDBCheckpointStore")
     @patch("yggdrasil.watchers.plan_watcher.PlanDBManager")
     def test_recovery_queries_pending_plans(
         self, mock_plan_db_cls, mock_checkpoint_cls, mock_fetcher_cls, mock_ygg_db_cls

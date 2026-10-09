@@ -23,13 +23,13 @@ from yggdrasil.couchdb.changes_fetcher import ChangesFetcher
 from yggdrasil.couchdb.connection import CouchDBHandler
 from yggdrasil.logging_utils import custom_logger
 from yggdrasil.storage.couchdb.bundle import CouchPlanChangeSource
+from yggdrasil.storage.couchdb.checkpoint_store import CouchDBCheckpointStore
 from yggdrasil.storage.couchdb.plan_store import PlanDBManager
 from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from yggdrasil.storage.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from yggdrasil.storage.protocols import PlanChangeSource, PlanStore
 from yggdrasil.watchers.abstract_watcher import AbstractWatcher
 from yggdrasil.watchers.backends.base import Checkpoint, CheckpointStore, RawWatchEvent
-from yggdrasil.watchers.backends.checkpoint_store import CouchDBCheckpointStore
 from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 

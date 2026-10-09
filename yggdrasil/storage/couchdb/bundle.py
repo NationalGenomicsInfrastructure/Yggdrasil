@@ -16,12 +16,12 @@ from collections.abc import AsyncIterator
 from yggdrasil.couchdb.changes_fetcher import ChangesFetcher
 from yggdrasil.logging_utils import custom_logger
 from yggdrasil.storage.config import CouchInternalStorageConfig
+from yggdrasil.storage.couchdb.checkpoint_store import CouchDBCheckpointStore
 from yggdrasil.storage.couchdb.ops_sink import OpsWriter
 from yggdrasil.storage.couchdb.plan_store import PlanDBManager
 from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 from yggdrasil.storage.protocols import InternalStorageBundle
 from yggdrasil.watchers.backends.base import RawWatchEvent
-from yggdrasil.watchers.backends.checkpoint_store import CouchDBCheckpointStore
 
 logger = custom_logger(__name__)
 

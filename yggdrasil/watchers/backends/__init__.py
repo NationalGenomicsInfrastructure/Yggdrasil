@@ -10,7 +10,7 @@ Public API:
 - CheckpointStore: Abstract interface for checkpoint persistence
 - WatcherBackend: Abstract base class for all backends
 - CouchDBBackend: CouchDB _changes feed backend
-- CouchDBCheckpointStore: Default checkpoint storage in yggdrasil DB
+- InMemoryCheckpointStore: In-memory checkpoint storage (tests)
 """
 
 from yggdrasil.watchers.backends.base import (

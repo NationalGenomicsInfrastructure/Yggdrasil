@@ -30,7 +30,8 @@ Public API:
     from yggdrasil.watchers import CouchDBBackend
 
     # Checkpoint stores
-    from yggdrasil.watchers import CouchDBCheckpointStore, InMemoryCheckpointStore
+    from yggdrasil.watchers import InMemoryCheckpointStore
+    # (CouchDBCheckpointStore lives in yggdrasil.storage.couchdb.checkpoint_store)
 
     # Manager
     from yggdrasil.watchers import WatcherManager, WatcherBackendGroup
@@ -47,10 +48,7 @@ from yggdrasil.watchers.backends.base import (
     RawWatchEvent,
     WatcherBackend,
 )
-from yggdrasil.watchers.backends.checkpoint_store import (
-    CouchDBCheckpointStore,
-    InMemoryCheckpointStore,
-)
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
 from yggdrasil.watchers.backends.couchdb import CouchDBBackend
 from yggdrasil.watchers.config_validation import (
     WatcherConfigurationError,
@@ -79,7 +77,6 @@ __all__ = [
     # Backends
     "CouchDBBackend",
     # Checkpoint stores
-    "CouchDBCheckpointStore",
     "InMemoryCheckpointStore",
     # Manager
     "WatcherManager",
