@@ -23,7 +23,7 @@ The handler is the core of any realm. It subscribes to an event type, extracts a
 # my_realm/handlers.py
 from typing import Any, ClassVar
 
-from lib.core_utils.event_types import EventType
+from yggdrasil.watchers.events import EventType
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner import PlanDraft, PlanningContext
@@ -93,8 +93,8 @@ To have a CouchDB change automatically trigger your handler, add a `WatchSpec` t
 # my_realm/__init__.py
 from typing import Any
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.watchspec import WatchSpec
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.watchspec import WatchSpec
 from yggdrasil.core.realm import RealmDescriptor
 
 from my_realm.handlers import MyProjectHandler, MyDeliveryHandler
@@ -284,7 +284,7 @@ filter_expr = {"!!": [{"var": "doc.project_id"}]}
 Make `watchspecs` a callable that returns `[]` when disabled:
 
 ```python
-from lib.core_utils.ygg_session import YggSession
+from yggdrasil.config.session import YggSession
 
 
 def _get_watchspecs() -> list[WatchSpec]:
@@ -383,13 +383,6 @@ Events can be triggered via:
 │  9. Result recorded on the plan document; snapshot from events      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-
-## Migration from Legacy Patterns
-
-### From ScenarioDocWatcher (Test Realm)
-
-The test realm watcher is now configured via WatchSpec in the realm's
-`get_realm_descriptor()`. No custom watcher class needed.
 
 ## Common Pitfalls
 

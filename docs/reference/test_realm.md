@@ -803,7 +803,7 @@ curl -X POST http://localhost:5984/yggdrasil \
 ### Via Python REPL:
 
 ```python
-from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
+from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 
 ydm = YggdrasilDBManager()
 
@@ -824,7 +824,7 @@ print("Scenario inserted successfully")
 ```python
 #!/usr/bin/env python3
 import json
-from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
+from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 
 scenarios = [
     {
