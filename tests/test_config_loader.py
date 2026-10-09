@@ -20,9 +20,9 @@ class TestConfigLoader(unittest.TestCase):
         self.assertIsNone(self.config_loader._config)
 
     def test_load_config_success(self):
-        # Test loading config from a file name using Ygg.get_path
+        # Test loading config from a file name using get_path
         with (
-            patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path,
+            patch("yggdrasil.config.loader.get_path") as mock_get_path,
             patch("builtins.open", mock_open(read_data=self.mock_config_json)),
         ):
             mock_get_path.return_value = Path("/path/to/config.json")
@@ -45,7 +45,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_load_config_file_not_found(self):
         # Test behavior when config file is not found
-        with patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path:
+        with patch("yggdrasil.config.loader.get_path") as mock_get_path:
             mock_get_path.return_value = None
             config = self.config_loader.load_config("nonexistent.json")
             self.assertEqual(config, types.MappingProxyType({}))
@@ -61,7 +61,7 @@ class TestConfigLoader(unittest.TestCase):
         # Test behavior when config file contains invalid JSON
         invalid_json = "{key1: value1"  # Missing quotes and closing brace
         with (
-            patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path,
+            patch("yggdrasil.config.loader.get_path") as mock_get_path,
             patch("builtins.open", mock_open(read_data=invalid_json)),
         ):
             mock_get_path.return_value = Path("/path/to/config.json")
@@ -72,7 +72,7 @@ class TestConfigLoader(unittest.TestCase):
         # Test behavior when config file is empty
         empty_json = ""
         with (
-            patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path,
+            patch("yggdrasil.config.loader.get_path") as mock_get_path,
             patch("builtins.open", mock_open(read_data=empty_json)),
         ):
             mock_get_path.return_value = Path("/path/to/config.json")
@@ -105,7 +105,7 @@ class TestConfigLoader(unittest.TestCase):
         # Clear cache to avoid interference from other tests
         ConfigLoader._cache.clear()
         with (
-            patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path,
+            patch("yggdrasil.config.loader.get_path") as mock_get_path,
             patch("builtins.open", mock_open(read_data=self.mock_config_json)),
             patch("json.load", side_effect=TypeError("Type error")),
         ):
@@ -116,7 +116,7 @@ class TestConfigLoader(unittest.TestCase):
     def test_load_config_unexpected_exception(self):
         # Test handling of an unexpected exception during file loading
         with (
-            patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path,
+            patch("yggdrasil.config.loader.get_path") as mock_get_path,
             patch("builtins.open", side_effect=Exception("Unexpected error")),
         ):
             mock_get_path.return_value = Path("/path/to/config.json")
@@ -139,7 +139,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_load_config_with_directory_traversal(self):
         # Test that directory traversal in file_name is handled safely
-        with patch("yggdrasil.config.loader.Ygg.get_path") as mock_get_path:
+        with patch("yggdrasil.config.loader.get_path") as mock_get_path:
             mock_get_path.return_value = None  # Simulate blocked traversal
             config = self.config_loader.load_config("../../../etc/passwd")
             self.assertEqual(config, types.MappingProxyType({}))

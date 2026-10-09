@@ -8,8 +8,8 @@ from typing import Any, cast
 from ibm_cloud_sdk_core.api_exception import ApiException
 from ibmcloudant.cloudant_v1 import Document
 
+from yggdrasil.config.external_systems import normalize_url
 from yggdrasil.config.loader import ConfigLoader
-from yggdrasil.config.workspace import YggdrasilUtilities as Ygg
 from yggdrasil.couchdb.connection import CouchDBHandler
 from yggdrasil.storage.partitions import partition_key
 
@@ -51,7 +51,7 @@ class OpsWriter(CouchDBHandler):
                         "CouchDB URL not configured. Set external_systems.endpoints.couchdb.url "
                         "in main.json or pass url= explicitly."
                     )
-                url = Ygg.normalize_url(raw_url)
+                url = normalize_url(raw_url)
             if user_env is None:
                 user_env = auth.get("user_env", DEFAULT_USER_ENV)
             if pass_env is None:

@@ -31,7 +31,7 @@ class TestCouchDBDefaults(unittest.TestCase):
         }
 
         with patch("yggdrasil.couchdb.defaults.ConfigLoader.load_config") as mock_load:
-            with patch("yggdrasil.couchdb.defaults.Ygg.normalize_url") as mock_norm:
+            with patch("yggdrasil.couchdb.defaults.normalize_url") as mock_norm:
                 mock_load.return_value = cfg
                 mock_norm.return_value = "http://couchdb.local:5984"
 
@@ -58,7 +58,7 @@ class TestCouchDBDefaults(unittest.TestCase):
         }
 
         with patch("yggdrasil.couchdb.defaults.ConfigLoader.load_config") as mock_load:
-            with patch("yggdrasil.couchdb.defaults.Ygg.normalize_url") as mock_norm:
+            with patch("yggdrasil.couchdb.defaults.normalize_url") as mock_norm:
                 mock_load.return_value = cfg
                 mock_norm.return_value = "https://override:6984"
 

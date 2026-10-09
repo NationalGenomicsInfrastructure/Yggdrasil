@@ -22,7 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from yggdrasil.config.workspace import YggdrasilUtilities as Ygg
 from yggdrasil.logging_utils import custom_logger
 
 logger = custom_logger(__name__)
@@ -33,6 +32,13 @@ _DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
 
 _ALLOWED_PERMISSIONS = frozenset({"read", "write"})
 _ALLOWED_PHASES = frozenset({"planning", "execution"})
+
+
+def normalize_url(url: str) -> str:
+    """Return ``url`` with an ``http://`` scheme if it has none, without a trailing slash."""
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    return url.rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +187,7 @@ def resolve_endpoint(endpoint_name: str, cfg: dict[str, Any]) -> ResolvedEndpoin
     if not raw_url:
         raise KeyError(f"Endpoint '{endpoint_name}' is missing required 'url' field")
 
-    normalized_url = Ygg.normalize_url(raw_url)
+    normalized_url = normalize_url(raw_url)
     auth = endpoint.get("auth") or {}
 
     dsn_env: str | None = auth.get("dsn_env")

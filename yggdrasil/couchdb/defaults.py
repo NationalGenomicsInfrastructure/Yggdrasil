@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from yggdrasil.config.external_systems import normalize_url
 from yggdrasil.config.loader import ConfigLoader
-from yggdrasil.config.workspace import YggdrasilUtilities as Ygg
 
 DEFAULT_USER_ENV = "YGG_COUCH_USER"
 DEFAULT_PASS_ENV = "YGG_COUCH_PASS"
@@ -41,7 +41,7 @@ def resolve_couchdb_params(
     2) ``external_systems.endpoints.<endpoint>`` from ``main.json``
     3) Built-in env var defaults for username/password names
 
-    URL is normalized via ``Ygg.normalize_url`` and credential env-var names
+    URL is normalized via ``normalize_url`` and credential env-var names
     are intentionally not validated here; validation remains fail-fast in
     ``CouchDBClientFactory`` at client-creation time.
     """
@@ -66,7 +66,7 @@ def resolve_couchdb_params(
         )
 
     return CouchDBParams(
-        url=Ygg.normalize_url(str(resolved_url)),
+        url=normalize_url(str(resolved_url)),
         user_env=(user_env or auth.get("user_env") or DEFAULT_USER_ENV),
         pass_env=(pass_env or auth.get("pass_env") or DEFAULT_PASS_ENV),
     )

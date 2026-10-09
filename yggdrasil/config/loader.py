@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from yggdrasil.config.session import YggSession
-from yggdrasil.config.workspace import YggdrasilUtilities as Ygg
+from yggdrasil.config.workspace import get_path
 
 # NOTE: To use custom_logger resolve circular import issue
 
@@ -75,7 +75,7 @@ class ConfigLoader:
         Unified method that respects dev mode for both is_path=True/False.
         """
         # 1) Build the 'base_file' (path to config.json)
-        base_file = Path(file_name) if is_path else Ygg.get_path(file_name)
+        base_file = Path(file_name) if is_path else get_path(file_name)
 
         if base_file is None:
             self._config = types.MappingProxyType({})

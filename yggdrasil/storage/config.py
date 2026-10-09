@@ -27,7 +27,7 @@ from yggdrasil.config.external_systems import (
     resolve_connection,
 )
 from yggdrasil.config.session import YggSession
-from yggdrasil.config.workspace import YggdrasilUtilities as Ygg
+from yggdrasil.config.workspace import workspace_path
 from yggdrasil.errors import InternalStorageConfigurationError
 
 # Logical database roles that must each map to a named connection.
@@ -66,7 +66,7 @@ class SQLiteInternalStorageConfig:
 
 def default_sqlite_path() -> Path:
     """Return the default dev SQLite database path inside the workspace."""
-    return Ygg.workspace_path() / "internal_state" / "dev" / "yggdrasil.sqlite3"
+    return workspace_path() / "internal_state" / "dev" / "yggdrasil.sqlite3"
 
 
 def resolve_internal_storage_config(
