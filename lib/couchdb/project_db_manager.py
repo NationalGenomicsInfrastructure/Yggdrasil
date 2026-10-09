@@ -1,25 +1,15 @@
-import json
 import logging
-from collections.abc import AsyncGenerator
-from typing import Any, cast
 
-from requests import Response
-
-from lib.core_utils.common import YggdrasilUtilities as Ygg
 from lib.core_utils.logging_utils import custom_logger
 from lib.couchdb.couchdb_connection import CouchDBHandler
 from lib.couchdb.couchdb_defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 
-# logger = custom_logger(__name__)
-
 
 class ProjectDBManager(CouchDBHandler):
-    """
-    Manages interactions with the 'projects' database, such as:
+    """CouchDB handler bound to the external ``projects`` database.
 
-      - Asynchronously streaming document changes (`get_changes`).
-
-    Inherits from `CouchDBHandler` to reuse the CouchDB connection.
+    Used only by the run-doc paths, which read single project documents
+    through the inherited ``CouchDBHandler`` members.
     """
 
     def __init__(
@@ -31,6 +21,15 @@ class ProjectDBManager(CouchDBHandler):
         pass_env: str | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
+        """Resolve connection parameters and connect to the database.
+
+        Args:
+            endpoint: Name of the CouchDB endpoint in ``external_systems``.
+            url: Explicit server URL; overrides the endpoint's URL.
+            user_env: Name of the environment variable holding the user name.
+            pass_env: Name of the environment variable holding the password.
+            logger: Logger to use; a module-scoped one is created if omitted.
+        """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         params = resolve_couchdb_params(
             endpoint=endpoint,
@@ -46,62 +45,3 @@ class ProjectDBManager(CouchDBHandler):
             pass_env=params.pass_env,
             logger=self._logger,
         )
-
-    async def get_changes(
-        self, last_processed_seq: str | None = None
-    ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        Fetch and yield document changes from a CouchDB database.
-
-        Args:
-            last_processed_seq (Optional[str]): The sequence number from which to start
-                monitoring changes.
-
-        Yields:
-            Dict[str, Any]: A document representing a change.
-        """
-        if last_processed_seq is None:
-            last_processed_seq = Ygg.get_last_processed_seq()
-
-        response = self.server.post_changes_as_stream(
-            db=self.db_name,
-            feed="continuous",
-            since=last_processed_seq,
-            include_docs=False,
-        ).get_result()
-
-        # Type assertion: we expect a Response object for streaming
-        changes = cast(Response, response)  # Makes Pylance happy
-
-        for line in changes.iter_lines():
-            # Reduce nesting / skip empty lines
-            if not line:
-                continue
-
-            change = json.loads(line)
-
-            # Only process real change entries
-            if "id" not in change or "seq" not in change:
-                continue
-
-            try:
-                doc = self.fetch_document_by_id(change["id"])
-                last_processed_seq = change["seq"]
-                if last_processed_seq is not None:
-                    Ygg.save_last_processed_seq(last_processed_seq)
-                else:
-                    self._logger.warning(
-                        "Received `None` for last_processed_seq. Skipping save."
-                    )
-
-                if doc is not None:
-                    yield doc
-                else:
-                    self._logger.warning(f"Document with ID {change['id']} is None.")
-            except Exception as e:
-                self._logger.warning(f"Error processing change: {e}")
-                self._logger.debug(f"Data causing the error: {change}")
-                self._logger.debug(f"Data causing the error: {change}")
-                self._logger.debug(f"Data causing the error: {change}")
-                self._logger.debug(f"Data causing the error: {change}")
-                self._logger.debug(f"Data causing the error: {change}")
