@@ -1,5 +1,5 @@
 """
-Unit tests for lib.watchers.watchspec module.
+Unit tests for yggdrasil.watchers.watchspec module.
 
 Tests WatchSpec and BoundWatchSpec dataclasses.
 """
@@ -7,9 +7,9 @@ Tests WatchSpec and BoundWatchSpec dataclasses.
 import unittest
 from typing import Any
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.backends.base import RawWatchEvent
-from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
+from yggdrasil.watchers.backends.base import RawWatchEvent
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 
 def _build_scope(event: RawWatchEvent) -> dict[str, Any]:

@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from lib.watchers.seq_data_watcher import SeqDataWatcher, YggdrasilEvent
+from yggdrasil.watchers.events import YggdrasilEvent
+from yggdrasil.watchers.seq_data_watcher import SeqDataWatcher
 
 
 class TestSeqDataWatcher(unittest.TestCase):

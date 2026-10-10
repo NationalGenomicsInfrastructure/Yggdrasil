@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.storage.sqlite import (
+from yggdrasil.flow.model import Plan, StepSpec
+from yggdrasil.storage.sqlite import (
     SQLiteInternalStore,
     SQLitePlanChangeSource,
     SQLitePlanStore,
 )
-from yggdrasil.flow.model import Plan, StepSpec
 
 
 def _make_plan(plan_id: str) -> Plan:

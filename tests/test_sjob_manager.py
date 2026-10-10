@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from lib.module_utils.sjob_manager import SlurmJobManager
+from yggdrasil.toolkit.sjob_manager import SlurmJobManager
 
 
 class Sample:
@@ -24,8 +24,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         self.job_id = "12345"
         self.sample = Sample("sample1")
 
-    @patch("lib.module_utils.sjob_manager.Path")
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_exec")
+    @patch("yggdrasil.toolkit.sjob_manager.Path")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_exec")
     async def test_submit_job_success(self, mock_create_subprocess_exec, mock_path):
         # Mock Path.is_file() to return True
         mock_path.return_value.is_file.return_value = True
@@ -41,7 +41,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         job_id = await self.manager.submit_job(self.script_path)
         self.assertEqual(job_id, "12345")
 
-    @patch("lib.module_utils.sjob_manager.Path")
+    @patch("yggdrasil.toolkit.sjob_manager.Path")
     async def test_submit_job_script_not_found(self, mock_path):
         # Mock Path.is_file() to return False
         mock_path.return_value.is_file.return_value = False
@@ -49,8 +49,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         job_id = await self.manager.submit_job(self.script_path)
         self.assertIsNone(job_id)
 
-    @patch("lib.module_utils.sjob_manager.Path")
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_exec")
+    @patch("yggdrasil.toolkit.sjob_manager.Path")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_exec")
     async def test_submit_job_sbatch_error(
         self, mock_create_subprocess_exec, mock_path
     ):
@@ -68,8 +68,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         job_id = await self.manager.submit_job(self.script_path)
         self.assertIsNone(job_id)
 
-    @patch("lib.module_utils.sjob_manager.Path")
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_exec")
+    @patch("yggdrasil.toolkit.sjob_manager.Path")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_exec")
     async def test_submit_job_no_job_id(self, mock_create_subprocess_exec, mock_path):
         # Mock Path.is_file() to return True
         mock_path.return_value.is_file.return_value = True
@@ -85,8 +85,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         job_id = await self.manager.submit_job(self.script_path)
         self.assertIsNone(job_id)
 
-    @patch("lib.module_utils.sjob_manager.Path")
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_exec")
+    @patch("yggdrasil.toolkit.sjob_manager.Path")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_exec")
     async def test_submit_job_timeout(self, mock_create_subprocess_exec, mock_path):
         # Mock Path.is_file() to return True
         mock_path.return_value.is_file.return_value = True
@@ -102,8 +102,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         job_id = await self.manager.submit_job(self.script_path)
         self.assertIsNone(job_id)
 
-    @patch("lib.module_utils.sjob_manager.asyncio.sleep", new_callable=AsyncMock)
-    @patch("lib.module_utils.sjob_manager.SlurmJobManager._job_status")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.sleep", new_callable=AsyncMock)
+    @patch("yggdrasil.toolkit.sjob_manager.SlurmJobManager._job_status")
     async def test_monitor_job_completed(self, mock_job_status, mock_sleep):
         # Mock _job_status to return 'COMPLETED' after a few calls
         mock_job_status.side_effect = ["PENDING", "RUNNING", "COMPLETED"]
@@ -111,8 +111,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         await self.manager.monitor_job(self.job_id, self.sample)
         self.assertEqual(self.sample.status, "processed")
 
-    @patch("lib.module_utils.sjob_manager.asyncio.sleep", new_callable=AsyncMock)
-    @patch("lib.module_utils.sjob_manager.SlurmJobManager._job_status")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.sleep", new_callable=AsyncMock)
+    @patch("yggdrasil.toolkit.sjob_manager.SlurmJobManager._job_status")
     async def test_monitor_job_failed(self, mock_job_status, mock_sleep):
         # Mock _job_status to return 'FAILED'
         mock_job_status.return_value = "FAILED"
@@ -120,8 +120,8 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         await self.manager.monitor_job(self.job_id, self.sample)
         self.assertEqual(self.sample.status, "processing_failed")
 
-    @patch("lib.module_utils.sjob_manager.asyncio.sleep", new_callable=AsyncMock)
-    @patch("lib.module_utils.sjob_manager.SlurmJobManager._job_status")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.sleep", new_callable=AsyncMock)
+    @patch("yggdrasil.toolkit.sjob_manager.SlurmJobManager._job_status")
     async def test_monitor_job_unexpected_status(self, mock_job_status, mock_sleep):
         # Mock _job_status to return 'UNKNOWN_STATUS' a few times, then 'COMPLETED'
         mock_job_status.side_effect = ["UNKNOWN_STATUS"] * 3 + ["COMPLETED"]
@@ -129,7 +129,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         await self.manager.monitor_job(self.job_id, self.sample)
         self.assertEqual(self.sample.status, "processed")
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_success(self, mock_create_subprocess_shell):
         # Mock the subprocess to return a valid status
         process_mock = MagicMock()
@@ -139,7 +139,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         status = await self.manager._job_status(self.job_id)
         self.assertEqual(status, "COMPLETED")
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_error(self, mock_create_subprocess_shell):
         # Mock the subprocess to return stderr
         process_mock = MagicMock()
@@ -149,7 +149,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         status = await self.manager._job_status(self.job_id)
         self.assertIsNone(status)
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_timeout(self, mock_create_subprocess_shell):
         # Mock the subprocess to simulate a timeout
         mock_create_subprocess_shell.side_effect = asyncio.TimeoutError
@@ -172,25 +172,25 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         self.manager.check_status(self.job_id, "UNKNOWN_STATUS", self.sample)
         self.assertEqual(self.sample.status, "processing_failed")
 
-    @patch("lib.module_utils.sjob_manager.custom_logger")
+    @patch("yggdrasil.toolkit.sjob_manager.custom_logger")
     def test_init_with_configs(self, mock_custom_logger):
         # Mock configs to return custom polling interval (nested under yggdrasil)
         with patch(
-            "lib.module_utils.sjob_manager.SlurmJobManager.configs",
+            "yggdrasil.toolkit.sjob_manager.SlurmJobManager.configs",
             {"yggdrasil": {"job_monitor_poll_interval": 5.0}},
         ):
             manager = SlurmJobManager()
             self.assertEqual(manager.polling_interval, 5.0)
 
-    @patch("lib.module_utils.sjob_manager.custom_logger")
+    @patch("yggdrasil.toolkit.sjob_manager.custom_logger")
     def test_init_with_default_configs(self, mock_custom_logger):
         # Mock configs to be empty (no yggdrasil section → falls back to default)
-        with patch("lib.module_utils.sjob_manager.SlurmJobManager.configs", {}):
+        with patch("yggdrasil.toolkit.sjob_manager.SlurmJobManager.configs", {}):
             manager = SlurmJobManager()
             self.assertEqual(manager.polling_interval, 10.0)
 
-    @patch("lib.module_utils.sjob_manager.Path")
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_exec")
+    @patch("yggdrasil.toolkit.sjob_manager.Path")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_exec")
     async def test_submit_job_exception(self, mock_create_subprocess_exec, mock_path):
         # Mock Path.is_file() to return True
         mock_path.return_value.is_file.return_value = True
@@ -201,7 +201,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         job_id = await self.manager.submit_job(self.script_path)
         self.assertIsNone(job_id)
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_exception(self, mock_create_subprocess_shell):
         # Simulate an exception during subprocess creation
         mock_create_subprocess_shell.side_effect = Exception("Unexpected error")
@@ -209,14 +209,14 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         status = await self.manager._job_status(self.job_id)
         self.assertIsNone(status)
 
-    @patch("lib.module_utils.sjob_manager.SlurmJobManager._job_status")
+    @patch("yggdrasil.toolkit.sjob_manager.SlurmJobManager._job_status")
     async def test_monitor_job_no_status(self, mock_job_status):
         # Mock _job_status to return None
         mock_job_status.return_value = None
 
         # We need to prevent an infinite loop; we'll let it run only once
         with patch(
-            "lib.module_utils.sjob_manager.asyncio.sleep", new_callable=AsyncMock
+            "yggdrasil.toolkit.sjob_manager.asyncio.sleep", new_callable=AsyncMock
         ) as mock_sleep:
             mock_sleep.side_effect = asyncio.CancelledError
 
@@ -237,7 +237,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         self.manager.check_status(self.job_id, "FAILED", self.sample)
         self.sample.post_process.assert_not_called()
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_with_multiple_lines(self, mock_create_subprocess_shell):
         # Mock sacct output with multiple lines
         process_mock = MagicMock()
@@ -249,7 +249,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         status = await self.manager._job_status(self.job_id)
         self.assertEqual(status, "COMPLETED\nCOMPLETED")
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_empty_output(self, mock_create_subprocess_shell):
         # Mock sacct output with empty stdout and stderr
         process_mock = MagicMock()
@@ -259,7 +259,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         status = await self.manager._job_status(self.job_id)
         self.assertIsNone(status)
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_shell")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_shell")
     async def test_job_status_decode_error(self, mock_create_subprocess_shell):
         # Mock sacct output with bytes that cannot be decoded
         process_mock = MagicMock()
@@ -269,7 +269,7 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         status = await self.manager._job_status(self.job_id)
         self.assertIsNone(status)
 
-    @patch("lib.module_utils.sjob_manager.asyncio.create_subprocess_exec")
+    @patch("yggdrasil.toolkit.sjob_manager.asyncio.create_subprocess_exec")
     async def test_submit_job_decode_error(self, mock_create_subprocess_exec):
         # Mock sbatch output with bytes that cannot be decoded
         process_mock = MagicMock()

@@ -8,7 +8,7 @@ Usage::
 
     from yggdrasil.core.realm import RealmDescriptor, discover_realms
 
-Realm implementations live in separate packages (e.g., lib/realms/test_realm,
+Realm implementations live in separate packages (e.g., yggdrasil/realms/test_realm,
 external tenx/smartseq3 packages) and register via ``ygg.realm`` entry points.
 """
 

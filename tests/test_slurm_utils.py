@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
-from lib.module_utils.slurm_utils import generate_slurm_script
+from yggdrasil.toolkit.slurm_utils import generate_slurm_script
 
 
 class TestGenerateSlurmScript(unittest.TestCase):
@@ -18,7 +18,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         self.template_fpath = "template.slurm"
         self.output_fpath = "output.slurm"
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open, read_data="")
     def test_generate_slurm_script_file_not_found(self, mock_file, mock_path):
         # Simulate FileNotFoundError when opening the template file
@@ -33,7 +33,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         )
         self.assertFalse(result)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open, read_data="")
     def test_generate_slurm_script_missing_placeholder(self, mock_file, mock_path):
         # Simulate KeyError due to missing placeholder in args_dict
@@ -49,7 +49,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         )
         self.assertFalse(result)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_success(self, mock_file, mock_path):
         # Mock reading the template file and writing the output file
@@ -80,7 +80,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         mock_template_file.read.assert_called_once()
         mock_output_file.write.assert_called_once_with(self.expected_script)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_general_exception(self, mock_file, mock_path):
         # Simulate a general exception during file writing
@@ -110,7 +110,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         )
         self.assertFalse(result)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_empty_template(self, mock_file, mock_path):
         # Test with an empty template
@@ -133,7 +133,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         self.assertTrue(result)
         mock_output_file.write.assert_called_once_with("")
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_empty_args_dict(self, mock_file, mock_path):
         # Test with empty args_dict but placeholders in template
@@ -153,7 +153,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         result = generate_slurm_script({}, self.template_fpath, self.output_fpath)
         self.assertFalse(result)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_output_file_unwritable(self, mock_file, mock_path):
         # Simulate exception when opening output file for writing
@@ -177,7 +177,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         )
         self.assertFalse(result)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_non_string_args(self, mock_file, mock_path):
         # Test with non-string values in args_dict
@@ -205,7 +205,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         self.assertTrue(result)
         mock_output_file.write.assert_called_once_with(expected_script)
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_template_syntax_error(self, mock_file, mock_path):
         # Simulate ValueError due to invalid template syntax
@@ -239,7 +239,7 @@ class TestGenerateSlurmScript(unittest.TestCase):
         with self.assertRaises(TypeError):
             generate_slurm_script(self.args_dict, self.template_fpath, None)  # type: ignore
 
-    @patch("lib.module_utils.slurm_utils.Path")
+    @patch("yggdrasil.toolkit.slurm_utils.Path")
     @patch("builtins.open", new_callable=mock_open)
     def test_generate_slurm_script_no_placeholders(self, mock_file, mock_path):
         # Test template with no placeholders

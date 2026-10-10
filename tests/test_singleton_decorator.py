@@ -3,7 +3,7 @@ from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
-from lib.core_utils.singleton_decorator import SingletonMeta, singleton
+from yggdrasil.daemon.singleton import SingletonMeta, singleton
 
 
 class TestSingletonDecorator(unittest.TestCase):

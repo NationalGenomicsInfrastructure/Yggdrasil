@@ -1,12 +1,12 @@
 """
-Comprehensive tests for lib/couchdb/partitions.py
+Comprehensive tests for yggdrasil/storage/partitions.py
 
 Tests the partition_key function for CouchDB partition key generation.
 """
 
 import unittest
 
-from lib.couchdb.partitions import partition_key
+from yggdrasil.storage.partitions import partition_key
 
 
 class TestPartitionKey(unittest.TestCase):

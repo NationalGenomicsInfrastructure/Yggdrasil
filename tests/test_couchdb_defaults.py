@@ -3,12 +3,26 @@
 import unittest
 from unittest.mock import patch
 
-from lib.couchdb.couchdb_defaults import (
+from yggdrasil.config import external_systems
+from yggdrasil.couchdb.defaults import (
     DEFAULT_ENDPOINT,
     DEFAULT_PASS_ENV,
     DEFAULT_USER_ENV,
     resolve_couchdb_params,
 )
+from yggdrasil.storage.couchdb import ops_sink
+
+
+class TestCredentialDefaults(unittest.TestCase):
+    """The credential env-var names are defined once, in config.external_systems."""
+
+    def test_defaults_are_shared(self):
+        for name in ("DEFAULT_USER_ENV", "DEFAULT_PASS_ENV"):
+            canonical = getattr(external_systems, name)
+            self.assertIs(globals()[name], canonical)
+            self.assertIs(getattr(ops_sink, name), canonical)
+        self.assertEqual(DEFAULT_USER_ENV, "YGG_COUCH_USER")
+        self.assertEqual(DEFAULT_PASS_ENV, "YGG_COUCH_PASS")
 
 
 class TestCouchDBDefaults(unittest.TestCase):
@@ -30,10 +44,8 @@ class TestCouchDBDefaults(unittest.TestCase):
             }
         }
 
-        with patch(
-            "lib.couchdb.couchdb_defaults.ConfigLoader.load_config"
-        ) as mock_load:
-            with patch("lib.couchdb.couchdb_defaults.Ygg.normalize_url") as mock_norm:
+        with patch("yggdrasil.couchdb.defaults.ConfigLoader.load_config") as mock_load:
+            with patch("yggdrasil.couchdb.defaults.normalize_url") as mock_norm:
                 mock_load.return_value = cfg
                 mock_norm.return_value = "http://couchdb.local:5984"
 
@@ -59,10 +71,8 @@ class TestCouchDBDefaults(unittest.TestCase):
             }
         }
 
-        with patch(
-            "lib.couchdb.couchdb_defaults.ConfigLoader.load_config"
-        ) as mock_load:
-            with patch("lib.couchdb.couchdb_defaults.Ygg.normalize_url") as mock_norm:
+        with patch("yggdrasil.couchdb.defaults.ConfigLoader.load_config") as mock_load:
+            with patch("yggdrasil.couchdb.defaults.normalize_url") as mock_norm:
                 mock_load.return_value = cfg
                 mock_norm.return_value = "https://override:6984"
 
@@ -78,9 +88,7 @@ class TestCouchDBDefaults(unittest.TestCase):
 
     def test_missing_endpoint_config_raises(self):
         """Missing endpoint config raises when no overrides provided."""
-        with patch(
-            "lib.couchdb.couchdb_defaults.ConfigLoader.load_config"
-        ) as mock_load:
+        with patch("yggdrasil.couchdb.defaults.ConfigLoader.load_config") as mock_load:
             mock_load.return_value = {}
             with self.assertRaises(RuntimeError) as ctx:
                 resolve_couchdb_params()
@@ -102,9 +110,7 @@ class TestCouchDBDefaults(unittest.TestCase):
             }
         }
 
-        with patch(
-            "lib.couchdb.couchdb_defaults.ConfigLoader.load_config"
-        ) as mock_load:
+        with patch("yggdrasil.couchdb.defaults.ConfigLoader.load_config") as mock_load:
             mock_load.return_value = cfg
             with self.assertRaises(RuntimeError) as ctx:
                 resolve_couchdb_params()

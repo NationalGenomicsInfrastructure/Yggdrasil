@@ -6,14 +6,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lib.core_utils.daemon_lock import DaemonLock, DaemonLockError
+from yggdrasil.daemon.lock import DaemonLock, DaemonLockError
 
 
 class TestDaemonLock(unittest.TestCase):
     def test_acquire_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
-                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                 return_value=tmpdir,
                 create=True,
             ):
@@ -32,7 +32,7 @@ class TestDaemonLock(unittest.TestCase):
     def test_second_acquire_fails_with_existing_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
-                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                 return_value=tmpdir,
                 create=True,
             ):
@@ -49,7 +49,7 @@ class TestDaemonLock(unittest.TestCase):
     def test_second_dev_acquire_fails_with_dev_mode_in_message(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
-                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                 return_value=tmpdir,
                 create=True,
             ):
@@ -65,7 +65,7 @@ class TestDaemonLock(unittest.TestCase):
     def test_dev_and_prod_use_distinct_lock_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
-                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                 return_value=tmpdir,
                 create=True,
             ):
@@ -82,7 +82,7 @@ class TestDaemonLock(unittest.TestCase):
     def test_prod_and_dev_locks_held_concurrently(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
-                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                 return_value=tmpdir,
                 create=True,
             ):
@@ -98,7 +98,7 @@ class TestDaemonLock(unittest.TestCase):
             fallback_dir = Path(tmpdir) / "yggdrasil-lock"
             with (
                 patch(
-                    "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                    "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                     return_value=None,
                     create=True,
                 ),
@@ -137,7 +137,7 @@ class TestDaemonLock(unittest.TestCase):
             runtime_dir = Path(tmpdir)
             runtime_dir.chmod(0o755)
             with patch(
-                "lib.core_utils.daemon_lock.appdirs.user_runtime_dir",
+                "yggdrasil.daemon.lock.appdirs.user_runtime_dir",
                 return_value=runtime_dir,
                 create=True,
             ):
@@ -159,7 +159,7 @@ class TestDaemonLock(unittest.TestCase):
                     "_fallback_runtime_dir",
                     return_value=fallback_dir,
                 ),
-                patch("lib.core_utils.daemon_lock.os.getuid", return_value=other_uid),
+                patch("yggdrasil.daemon.lock.os.getuid", return_value=other_uid),
             ):
                 with self.assertRaises(PermissionError):
                     DaemonLock._prepare_runtime_dir(fallback_dir)

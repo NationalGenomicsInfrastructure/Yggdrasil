@@ -1,5 +1,5 @@
 """
-Unit tests for lib.watchers.manager module.
+Unit tests for yggdrasil.watchers.manager module.
 
 Tests the WatcherManager class including lifecycle management,
 grouping/deduplication, and config resolution.
@@ -12,12 +12,16 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.backends.base import CheckpointStore, RawWatchEvent, WatcherBackend
-from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
-from lib.watchers.config_validation import WatcherConfigurationError
-from lib.watchers.manager import WatcherBackendGroup, WatcherManager
-from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
+from yggdrasil.watchers.backends.base import (
+    CheckpointStore,
+    RawWatchEvent,
+    WatcherBackend,
+)
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from yggdrasil.watchers.config_validation import WatcherConfigurationError
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.manager import WatcherBackendGroup, WatcherManager
+from yggdrasil.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 
 class MockWatcherBackend(WatcherBackend):
@@ -417,7 +421,7 @@ class TestWatcherManagerConfigValidation(unittest.TestCase):
         manager.add_watchspec(bound_spec)
 
         with patch(
-            "lib.watchers.manager.validate_watcher_config_wiring"
+            "yggdrasil.watchers.manager.validate_watcher_config_wiring"
         ) as mock_validate:
             manager.validate_configuration()
 

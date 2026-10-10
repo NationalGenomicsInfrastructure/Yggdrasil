@@ -23,7 +23,6 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
-from lib.ops.consumer import build_plan_snapshot
 from tests.execution_support import (
     REALM,
     SCOPE,
@@ -67,6 +66,7 @@ from yggdrasil.flow.events.emitter import EventEmitter, FileSpoolEmitter
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY, Plan
 from yggdrasil.flow.outcomes import AttemptReport, StepOutcome, TerminationReason
 from yggdrasil.flow.step import StepContext
+from yggdrasil.ops.consumer import build_plan_snapshot
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
 FAIL_FAST = FAIL_FAST_POLICY

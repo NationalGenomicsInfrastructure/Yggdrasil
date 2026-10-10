@@ -9,10 +9,10 @@ import unittest
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
-from lib.core_utils.event_types import EventType
 from yggdrasil.core.realm import RealmDescriptor, discover_realms
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.planner.api import PlanDraft
+from yggdrasil.watchers.events import EventType
 
 
 class _FakeHandler(BaseHandler):

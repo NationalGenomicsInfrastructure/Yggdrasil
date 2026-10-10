@@ -1,6 +1,6 @@
 import unittest
 
-from lib.core_utils.event_types import EventType
+from yggdrasil.watchers.events import EventType
 
 
 class TestEventType(unittest.TestCase):

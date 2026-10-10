@@ -1,8 +1,7 @@
 """
-Unit tests for lib.watchers.backends.checkpoint_store module.
-
-Tests the checkpoint store implementations: InMemoryCheckpointStore and
-CouchDBCheckpointStore.
+Unit tests for the checkpoint store implementations: InMemoryCheckpointStore
+(yggdrasil.watchers.backends.checkpoint_store) and CouchDBCheckpointStore
+(yggdrasil.storage.couchdb.checkpoint_store).
 """
 
 import unittest
@@ -10,11 +9,9 @@ from unittest.mock import MagicMock
 
 from ibm_cloud_sdk_core.api_exception import ApiException
 
-from lib.watchers.backends.base import Checkpoint
-from lib.watchers.backends.checkpoint_store import (
-    CouchDBCheckpointStore,
-    InMemoryCheckpointStore,
-)
+from yggdrasil.storage.couchdb.checkpoint_store import CouchDBCheckpointStore
+from yggdrasil.watchers.backends.base import Checkpoint
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
 
 
 class TestInMemoryCheckpointStore(unittest.TestCase):

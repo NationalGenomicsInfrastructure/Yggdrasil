@@ -15,23 +15,6 @@ import logging
 import unittest
 from typing import Any
 
-from lib.storage.errors import PlanStoreError, RevisionConflictError
-from lib.storage.plan_documents import (
-    build_plan_document,
-    new_plan_generation,
-    plan_generation_of,
-    plan_summary_from_document,
-)
-from lib.storage.plan_updates import (
-    ExecutionFinalization,
-    FinalizationResult,
-    FinalizationStatus,
-    SupersessionReason,
-    check_finalization,
-    finalize_execution,
-    finishes_request,
-    initialize_plan_generation,
-)
 from tests.plan_store_support import (
     CANCELLED,
     DRAINED_FAILURE,
@@ -50,6 +33,23 @@ from yggdrasil.flow.outcomes import (
     AttemptDiagnostic,
     ExecutionOutcome,
     TerminationReason,
+)
+from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
+from yggdrasil.storage.plan_documents import (
+    build_plan_document,
+    new_plan_generation,
+    plan_generation_of,
+    plan_summary_from_document,
+)
+from yggdrasil.storage.plan_updates import (
+    ExecutionFinalization,
+    FinalizationResult,
+    FinalizationStatus,
+    SupersessionReason,
+    check_finalization,
+    finalize_execution,
+    finishes_request,
+    initialize_plan_generation,
 )
 
 LOGGER = logging.getLogger("tests.plan_updates")

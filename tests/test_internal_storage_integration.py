@@ -6,12 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib.core_utils.event_types import EventType
-from lib.storage import build_internal_storage
-from lib.storage.config import CouchInternalStorageConfig
-from lib.watchers.backends.base import Checkpoint
-from lib.watchers.plan_watcher import PlanWatcher
 from yggdrasil.flow.model import Plan, StepSpec
+from yggdrasil.storage import build_internal_storage
+from yggdrasil.storage.config import CouchInternalStorageConfig
+from yggdrasil.watchers.backends.base import Checkpoint
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.plan_watcher import PlanWatcher
 
 
 def _sqlite_config(path: Path) -> dict:
@@ -28,7 +28,9 @@ class TestInternalStorageFactory(unittest.TestCase):
 
     def test_sqlite_mode_constructs_no_couch_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("lib.storage.couch.build_couchdb_bundle") as mock_couch:
+            with patch(
+                "yggdrasil.storage.couchdb.bundle.build_couchdb_bundle"
+            ) as mock_couch:
                 bundle = build_internal_storage(
                     _sqlite_config(Path(tmp) / "ygg.sqlite3"), dev_mode=True
                 )
@@ -36,7 +38,9 @@ class TestInternalStorageFactory(unittest.TestCase):
         mock_couch.assert_not_called()
 
     def test_absent_block_uses_legacy_couch_path(self):
-        with patch("lib.storage.couch.build_couchdb_bundle") as mock_couch:
+        with patch(
+            "yggdrasil.storage.couchdb.bundle.build_couchdb_bundle"
+        ) as mock_couch:
             mock_couch.return_value = MagicMock(backend="couchdb")
             bundle = build_internal_storage({})
         mock_couch.assert_called_once_with(None)
@@ -49,14 +53,14 @@ class TestInternalStorageFactory(unittest.TestCase):
         PlanWatcher starts at "now") if the 'yggdrasil' DB is unreachable,
         instead of failing fast at startup like pre-bundle Core did.
         """
-        from lib.storage.couch import build_couchdb_bundle
+        from yggdrasil.storage.couchdb.bundle import build_couchdb_bundle
 
         with (
-            patch("lib.storage.couch.PlanDBManager"),
-            patch("lib.storage.couch.OpsWriter"),
-            patch("lib.storage.couch.ChangesFetcher"),
-            patch("lib.storage.couch.YggdrasilDBManager") as mock_ydm,
-            patch("lib.storage.couch.CouchDBCheckpointStore") as mock_cp,
+            patch("yggdrasil.storage.couchdb.bundle.PlanDBManager"),
+            patch("yggdrasil.storage.couchdb.bundle.OpsWriter"),
+            patch("yggdrasil.storage.couchdb.bundle.ChangesFetcher"),
+            patch("yggdrasil.storage.couchdb.bundle.YggdrasilDBManager") as mock_ydm,
+            patch("yggdrasil.storage.couchdb.bundle.CouchDBCheckpointStore") as mock_cp,
         ):
             build_couchdb_bundle(None)
 
@@ -97,7 +101,9 @@ class TestInternalStorageFactory(unittest.TestCase):
                 },
             },
         }
-        with patch("lib.storage.couch.build_couchdb_bundle") as mock_couch:
+        with patch(
+            "yggdrasil.storage.couchdb.bundle.build_couchdb_bundle"
+        ) as mock_couch:
             mock_couch.return_value = MagicMock(backend="couchdb")
             build_internal_storage(config)
         (resolved,), _ = mock_couch.call_args

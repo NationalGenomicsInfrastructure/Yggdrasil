@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from lib.core_utils.external_systems_resolver import (
+from yggdrasil.config.external_systems import (
     load_external_systems_config,
     resolve_connection,
 )
@@ -14,7 +14,7 @@ from yggdrasil.flow.data_access.errors import (
 )
 
 if TYPE_CHECKING:
-    from lib.core_utils.external_systems_resolver import ResolvedConnection
+    from yggdrasil.config.external_systems import ResolvedConnection
     from yggdrasil.flow.data_access.models import DataAccessTraceContext
 
 DataAccessPhase = Literal["planning", "execution"]
@@ -154,7 +154,7 @@ class DataAccess:
         conn: ResolvedConnection,
         permissions: frozenset[str],
     ) -> Any:
-        from lib.couchdb.couchdb_connection import CouchDBHandler
+        from yggdrasil.couchdb.connection import CouchDBHandler
         from yggdrasil.flow.data_access.couchdb_data import (
             CouchDBExecutionClient,
             CouchDBPlanningClient,

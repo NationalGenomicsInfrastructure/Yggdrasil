@@ -3,13 +3,13 @@
 import unittest
 from pathlib import Path
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.backends.base import WatcherBackend
-from lib.watchers.config_validation import (
+from yggdrasil.watchers.backends.base import WatcherBackend
+from yggdrasil.watchers.config_validation import (
     WatcherConfigurationError,
     validate_watcher_config_wiring,
 )
-from lib.watchers.watchspec import BoundWatchSpec, WatchSpec
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.watchspec import BoundWatchSpec, WatchSpec
 
 
 def _bound_spec(

@@ -23,10 +23,10 @@ The handler is the core of any realm. It subscribes to an event type, extracts a
 # my_realm/handlers.py
 from typing import Any, ClassVar
 
-from lib.core_utils.event_types import EventType
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner import PlanDraft, PlanningContext
+from yggdrasil.watchers import EventType
 
 
 class MyProjectHandler(BaseHandler):
@@ -93,9 +93,8 @@ To have a CouchDB change automatically trigger your handler, add a `WatchSpec` t
 # my_realm/__init__.py
 from typing import Any
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.watchspec import WatchSpec
 from yggdrasil.core.realm import RealmDescriptor
+from yggdrasil.watchers import EventType, WatchSpec
 
 from my_realm.handlers import MyProjectHandler, MyDeliveryHandler
 
@@ -284,7 +283,7 @@ filter_expr = {"!!": [{"var": "doc.project_id"}]}
 Make `watchspecs` a callable that returns `[]` when disabled:
 
 ```python
-from lib.core_utils.ygg_session import YggSession
+from yggdrasil.config import YggSession
 
 
 def _get_watchspecs() -> list[WatchSpec]:
@@ -383,53 +382,6 @@ Events can be triggered via:
 │  9. Result recorded on the plan document; snapshot from events      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-
-## Migration from Legacy Patterns
-
-### From `ygg.handler` Entry Point
-
-**Before (deprecated):**
-```toml
-[project.entry-points."ygg.handler"]
-my_handler = "my_realm.handler:MyHandler"
-```
-
-**After:**
-```toml
-[project.entry-points."ygg.realm"]
-my_realm = "my_realm:get_realm_descriptor"
-```
-
-### From CouchDBWatcher
-
-**Before (deprecated):**
-```python
-from lib.watchers.couchdb_watcher import CouchDBWatcher
-
-watcher = CouchDBWatcher(
-    on_event=core.handle_event,
-    changes_fetcher=db.fetch_changes,
-    event_type=EventType.PROJECT_CHANGE,
-)
-```
-
-**After:**
-```python
-# In your realm's get_realm_descriptor()
-WatchSpec(
-    backend="couchdb",
-    connection="projects_db",
-    event_type=EventType.COUCHDB_DOC_CHANGED,
-    filter_expr={"==": [{"var": "doc.type"}, "project"]},
-    build_scope=...,
-    build_payload=...,
-)
-```
-
-### From ScenarioDocWatcher (Test Realm)
-
-The test realm watcher is now configured via WatchSpec in the realm's
-`get_realm_descriptor()`. No custom watcher class needed.
 
 ## Common Pitfalls
 

@@ -24,8 +24,8 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 
-from lib.core_utils.logging_utils import custom_logger
 from yggdrasil.core.realm.descriptor import RealmDescriptor
+from yggdrasil.logging_utils import custom_logger
 
 
 def discover_realms(

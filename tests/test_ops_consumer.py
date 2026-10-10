@@ -1,5 +1,5 @@
 """
-Comprehensive tests for lib/ops/consumer.py
+Comprehensive tests for yggdrasil/ops/consumer.py
 
 Tests the FileSpoolConsumer and plan snapshot building logic.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
-from lib.ops.consumer import (
+from yggdrasil.ops.consumer import (
     FileSpoolConsumer,
     _event_files,
     _find_any_event,

@@ -2,17 +2,17 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from lib.core_utils.config_loader import ConfigLoader
-from lib.core_utils.daemon_lock import DaemonLock, DaemonLockError
-from lib.core_utils.errors import (
+from yggdrasil.config.loader import ConfigLoader
+from yggdrasil.config.session import YggSession
+from yggdrasil.daemon.core import YggdrasilCore
+from yggdrasil.daemon.lock import DaemonLock, DaemonLockError
+from yggdrasil.errors import (
     ExternalSystemUnavailableError,
     InternalStorageConfigurationError,
 )
-from lib.core_utils.logging_utils import configure_logging, custom_logger
-from lib.core_utils.ygg_session import YggSession
-from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.watchers.config_validation import WatcherConfigurationError
+from yggdrasil.logging_utils import configure_logging, custom_logger
 from yggdrasil.logo_utils import print_logo
+from yggdrasil.watchers.config_validation import WatcherConfigurationError
 
 try:
     from yggdrasil import __version__

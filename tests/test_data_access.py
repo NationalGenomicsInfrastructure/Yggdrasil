@@ -91,7 +91,7 @@ SAMPLE_CFG = {
     },
 }
 
-_PATCH_HANDLER = "lib.couchdb.couchdb_connection.CouchDBHandler"
+_PATCH_HANDLER = "yggdrasil.couchdb.connection.CouchDBHandler"
 
 
 def _mock_handler():
@@ -336,9 +336,9 @@ class TestPlanningContextGuard(unittest.TestCase):
 
     def test_build_planning_context_returns_populated_context(self):
         """build_planning_context() returns PlanningContext with data set."""
-        from lib.core_utils.event_types import EventType
         from yggdrasil.flow.base_handler import BaseHandler
         from yggdrasil.flow.planner.api import PlanningContext
+        from yggdrasil.watchers.events import EventType
 
         class _Handler(BaseHandler):
             event_type = EventType.PROJECT_CHANGE
@@ -373,8 +373,8 @@ class TestPlanningContextGuard(unittest.TestCase):
 
     def test_data_access_is_lazy_per_handler_instance(self):
         """_data_access lazy property returns same instance on repeated access."""
-        from lib.core_utils.event_types import EventType
         from yggdrasil.flow.base_handler import BaseHandler
+        from yggdrasil.watchers.events import EventType
 
         class _Handler(BaseHandler):
             event_type = EventType.PROJECT_CHANGE

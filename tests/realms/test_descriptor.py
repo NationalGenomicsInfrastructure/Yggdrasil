@@ -8,11 +8,11 @@ from both static lists and callables.
 import unittest
 from typing import Any, ClassVar
 
-from lib.core_utils.event_types import EventType
-from lib.watchers.watchspec import WatchSpec
 from yggdrasil.core.realm import RealmDescriptor
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.planner.api import PlanDraft
+from yggdrasil.watchers.events import EventType
+from yggdrasil.watchers.watchspec import WatchSpec
 
 
 class _FakeHandler(BaseHandler):

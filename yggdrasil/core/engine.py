@@ -13,8 +13,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
-from lib.core_utils.logging_utils import custom_logger
-from lib.core_utils.runtime_paths import resolve_work_root
+from yggdrasil.config.runtime_paths import resolve_work_root
 from yggdrasil.core.execution_ids import (
     AttemptReserver,
     ExecutionIdAllocator,
@@ -70,6 +69,7 @@ from yggdrasil.flow.utils.callable_ref import resolve_callable
 from yggdrasil.flow.utils.hash import dirhash_stats, sha256_file
 from yggdrasil.flow.utils.typing_coerce import coerce_params_to_signature_types
 from yggdrasil.flow.utils.ygg_time import utcnow_compact, utcnow_iso
+from yggdrasil.logging_utils import custom_logger
 
 logger = custom_logger(__name__)
 
@@ -591,7 +591,7 @@ class Engine:
         """
         self._logger = logger or custom_logger(f"{__name__}.{type(self).__name__}")
         # Default resolution ($YGG_WORK_ROOT → mode default) is centralized
-        # in lib.core_utils.runtime_paths.
+        # in yggdrasil.config.runtime_paths.
         self.work_root = Path(work_root) if work_root else resolve_work_root()
         self.emitter = emitter or FileSpoolEmitter()
         spool = (

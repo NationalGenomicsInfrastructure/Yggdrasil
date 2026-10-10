@@ -1,6 +1,6 @@
 import unittest
 
-from lib.module_utils.hpc_submission_policy import HPCSubmissionPolicy
+from yggdrasil.toolkit.hpc_submission_policy import HPCSubmissionPolicy
 
 
 class TestHPCSubmissionPolicy(unittest.TestCase):

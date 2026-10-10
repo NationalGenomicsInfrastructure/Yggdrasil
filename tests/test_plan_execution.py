@@ -31,19 +31,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from lib.core_utils.plan_eligibility import is_plan_eligible
-from lib.core_utils.plan_execution import (
-    DAEMON_CLAIM,
-    ExecutionClaim,
-    ExecutionResult,
-    ExecutionStatus,
-    PlanExecutionCoordinator,
-    _log_level,
-)
-from lib.ops.consumer import build_plan_snapshot
-from lib.storage.errors import PlanStoreError
-from lib.storage.plan_documents import build_plan_document
-from lib.storage.plan_updates import FinalizationStatus, SupersessionReason
 from tests.execution_support import (
     PLAN_ID,
     REALM,
@@ -62,6 +49,14 @@ from tests.execution_support import (
     spec,
 )
 from yggdrasil.core.execution_ids import ExecutionIdAllocator, execution_timestamp
+from yggdrasil.daemon.plan_execution import (
+    DAEMON_CLAIM,
+    ExecutionClaim,
+    ExecutionResult,
+    ExecutionStatus,
+    PlanExecutionCoordinator,
+    _log_level,
+)
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.errors import (
     AttemptCancelledError,
@@ -83,6 +78,11 @@ from yggdrasil.flow.outcomes import (
     StepOutcome,
     TerminationReason,
 )
+from yggdrasil.ops.consumer import build_plan_snapshot
+from yggdrasil.storage.errors import PlanStoreError
+from yggdrasil.storage.plan_documents import build_plan_document
+from yggdrasil.storage.plan_eligibility import is_plan_eligible
+from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
 FAIL_FAST = FAIL_FAST_POLICY
@@ -90,7 +90,7 @@ POLICIES = (FAIL_FAST, CONTINUE)
 
 T0 = datetime(2026, 9, 21, 12, 5, tzinfo=UTC)
 
-COORDINATOR_LOGGER = "lib.core_utils.plan_execution.PlanExecutionCoordinator"
+COORDINATOR_LOGGER = "yggdrasil.daemon.plan_execution.PlanExecutionCoordinator"
 
 
 def cyclic_plan(policy: str, plan_id: str = PLAN_ID) -> Plan:

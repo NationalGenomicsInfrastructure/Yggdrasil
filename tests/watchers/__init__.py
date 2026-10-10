@@ -1,1 +1,1 @@
-# Tests for lib.watchers module
+# Tests for yggdrasil.watchers module

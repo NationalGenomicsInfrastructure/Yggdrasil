@@ -1,5 +1,5 @@
 """
-Unit tests for lib.watchers.backends.base module.
+Unit tests for yggdrasil.watchers.backends.base module.
 
 Tests the core abstractions: RawWatchEvent, Checkpoint, CheckpointStore,
 and WatcherBackend.
@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from dataclasses import FrozenInstanceError
 from typing import Any
 
-from lib.watchers.backends.base import (
+from yggdrasil.watchers.backends.base import (
     Checkpoint,
     CheckpointStore,
     RawWatchEvent,

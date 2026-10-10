@@ -1,4 +1,4 @@
-"""Tests for lib/ops/consumer_service.py.
+"""Tests for yggdrasil/daemon/ops_service.py.
 
 The service runs every consumption cycle in a worker thread of its own, one
 cycle at a time, and never abandons a cycle it started. These tests drive it
@@ -17,10 +17,10 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
-from lib.ops.consumer_service import OpsConsumerService
 from tests.execution_support import WAIT, Gate, run_bounded
+from yggdrasil.daemon.ops_service import OpsConsumerService
 
-SERVICE_LOGGER = "lib.ops.consumer_service.OpsConsumerService"
+SERVICE_LOGGER = "yggdrasil.daemon.ops_service.OpsConsumerService"
 
 
 class ScriptedConsumer:
@@ -99,7 +99,7 @@ class ServiceTestCase(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.consumer = ScriptedConsumer()
         consumer_class = patch(
-            "lib.ops.consumer_service.FileSpoolConsumer", return_value=self.consumer
+            "yggdrasil.daemon.ops_service.FileSpoolConsumer", return_value=self.consumer
         )
         self.consumer_class = consumer_class.start()
         self.addCleanup(consumer_class.stop)
@@ -119,7 +119,7 @@ class ServiceTestCase(unittest.TestCase):
             return worker
 
         creation = patch(
-            "lib.ops.consumer_service.ThreadPoolExecutor", side_effect=create
+            "yggdrasil.daemon.ops_service.ThreadPoolExecutor", side_effect=create
         )
         creation.start()
         self.addCleanup(creation.stop)
@@ -136,47 +136,47 @@ class TestConstruction(unittest.TestCase):
 
     def test_init_default_values(self):
         with patch.dict(os.environ, {}, clear=True):
-            with patch("lib.ops.consumer_service.OpsWriter"):
+            with patch("yggdrasil.daemon.ops_service.OpsWriter"):
                 service = OpsConsumerService()
 
                 self.assertEqual(service.interval, 2.0)
                 self.assertEqual(service.spool, Path("/tmp/ygg_events"))
 
     def test_init_custom_interval(self):
-        with patch("lib.ops.consumer_service.OpsWriter"):
+        with patch("yggdrasil.daemon.ops_service.OpsWriter"):
             service = OpsConsumerService(interval_sec=5.0)
             self.assertEqual(service.interval, 5.0)
 
     def test_init_custom_db_name(self):
-        with patch("lib.ops.consumer_service.OpsWriter") as mock_writer:
+        with patch("yggdrasil.daemon.ops_service.OpsWriter") as mock_writer:
             OpsConsumerService(db_name="custom_db")
 
             mock_writer.assert_called_once_with(db_name="custom_db")
 
     def test_init_env_spool_path(self):
         with patch.dict(os.environ, {"YGG_EVENT_SPOOL": "/custom/spool"}):
-            with patch("lib.ops.consumer_service.OpsWriter"):
+            with patch("yggdrasil.daemon.ops_service.OpsWriter"):
                 service = OpsConsumerService()
 
                 self.assertEqual(service.spool, Path("/custom/spool"))
 
     def test_init_env_db_name(self):
         with patch.dict(os.environ, {"OPS_DB": "env_db"}):
-            with patch("lib.ops.consumer_service.OpsWriter") as mock_writer:
+            with patch("yggdrasil.daemon.ops_service.OpsWriter") as mock_writer:
                 OpsConsumerService()
 
                 mock_writer.assert_called_once_with(db_name="env_db")
 
     def test_injected_writer_replaces_the_legacy_one(self):
         writer = Mock()
-        with patch("lib.ops.consumer_service.OpsWriter") as legacy:
+        with patch("yggdrasil.daemon.ops_service.OpsWriter") as legacy:
             service = OpsConsumerService(writer=writer)
 
         legacy.assert_not_called()
         self.assertIs(service.writer, writer)
 
     def test_nothing_runs_before_start(self):
-        with patch("lib.ops.consumer_service.OpsWriter"):
+        with patch("yggdrasil.daemon.ops_service.OpsWriter"):
             service = OpsConsumerService()
 
         self.assertIsNone(service._task)

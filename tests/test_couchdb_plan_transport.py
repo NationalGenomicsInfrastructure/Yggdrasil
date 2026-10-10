@@ -24,12 +24,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest.mock import Mock, patch
 
-from lib.couchdb.couchdb_connection import CouchDBClientFactory
-from lib.couchdb.plan_db_manager import PlanDBManager
-from lib.storage.errors import PlanStoreError
-from lib.storage.plan_documents import build_plan_document
-from lib.storage.plan_updates import FinalizationStatus, SupersessionReason
 from tests.plan_store_support import SCOPE, finalization_for, make_plan
+from yggdrasil.couchdb.connection import CouchDBClientFactory
+from yggdrasil.storage.couchdb.plan_store import PlanDBManager
+from yggdrasil.storage.errors import PlanStoreError
+from yggdrasil.storage.plan_documents import build_plan_document
+from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 
 DB_NAME = "yggdrasil_plans"
 PLAN_ID = "pln_test_P1_v1"
@@ -187,7 +187,7 @@ class _StubCouchTestCase(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         params = patch(
-            "lib.couchdb.plan_db_manager.resolve_couchdb_params",
+            "yggdrasil.storage.couchdb.plan_store.resolve_couchdb_params",
             return_value=Mock(url=self.stub.url, user_env=USER_ENV, pass_env=PASS_ENV),
         )
         params.start()
@@ -310,7 +310,7 @@ class TestClientRetryConfiguration(unittest.TestCase):
         self.addCleanup(env.stop)
         self.client = Mock()
         factory = patch(
-            "lib.couchdb.couchdb_connection.cloudant_v1.CloudantV1",
+            "yggdrasil.couchdb.connection.cloudant_v1.CloudantV1",
             return_value=self.client,
         )
         factory.start()
@@ -333,7 +333,7 @@ class TestClientRetryConfiguration(unittest.TestCase):
 
     def test_the_plan_store_builds_its_client_without_sdk_retries(self):
         with patch(
-            "lib.couchdb.plan_db_manager.resolve_couchdb_params",
+            "yggdrasil.storage.couchdb.plan_store.resolve_couchdb_params",
             return_value=Mock(
                 url="http://couch.invalid", user_env=USER_ENV, pass_env=PASS_ENV
             ),

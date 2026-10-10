@@ -1,5 +1,5 @@
 """
-Unit tests for lib.watchers.filter_eval module.
+Unit tests for yggdrasil.watchers.filter_eval module.
 
 Tests FilterResult, evaluate_filter, and raw_event_to_dict.
 """
@@ -7,8 +7,12 @@ Tests FilterResult, evaluate_filter, and raw_event_to_dict.
 import logging
 import unittest
 
-from lib.watchers.backends.base import RawWatchEvent
-from lib.watchers.filter_eval import FilterResult, evaluate_filter, raw_event_to_dict
+from yggdrasil.watchers.backends.base import RawWatchEvent
+from yggdrasil.watchers.filter_eval import (
+    FilterResult,
+    evaluate_filter,
+    raw_event_to_dict,
+)
 
 
 class TestFilterResult(unittest.TestCase):

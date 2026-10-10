@@ -803,7 +803,7 @@ curl -X POST http://localhost:5984/yggdrasil \
 ### Via Python REPL:
 
 ```python
-from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
+from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 
 ydm = YggdrasilDBManager()
 
@@ -824,7 +824,7 @@ print("Scenario inserted successfully")
 ```python
 #!/usr/bin/env python3
 import json
-from lib.couchdb.yggdrasil_db_manager import YggdrasilDBManager
+from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
 
 scenarios = [
     {
@@ -989,9 +989,9 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 - Check PlanWatcher is running: `tail -f yggdrasil.log | grep PlanWatcher`
 
 **Step failures with missing fn_ref:**
-- For standard recipes, ensure the recipe exists in `lib/realms/test_realm/recipes.py`.
-- For planning-time handler scenarios such as `data_fetch_plan` or `metadata_harvest`, ensure the handler special-case exists in `lib/realms/test_realm/handler.py` — these are intentionally not in the RECIPES registry.
-- Verify step function exists in `lib/realms/test_realm/steps.py`
+- For standard recipes, ensure the recipe exists in `yggdrasil/realms/test_realm/recipes.py`.
+- For planning-time handler scenarios such as `data_fetch_plan` or `metadata_harvest`, ensure the handler special-case exists in `yggdrasil/realms/test_realm/handler.py` — these are intentionally not in the RECIPES registry.
+- Verify step function exists in `yggdrasil/realms/test_realm/steps.py`
 - Check error message for typos in override field names or fn_name
 
 **Custom steps not working:**

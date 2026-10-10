@@ -37,22 +37,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
-import lib.realms.test_realm as test_realm
-from lib.core_utils.event_types import EventType
-from lib.core_utils.plan_eligibility import is_plan_eligible
-from lib.core_utils.plan_execution import ExecutionResult, ExecutionStatus
-from lib.core_utils.singleton_decorator import SingletonMeta
-from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.couchdb.partitions import partition_key
-from lib.ops.consumer import FileSpoolConsumer
-from lib.storage import build_internal_storage
-from lib.storage.protocols import InternalStorageBundle
-from lib.storage.sqlite import SQLiteInternalStore
-from lib.watchers.abstract_watcher import YggdrasilEvent
-from lib.watchers.backends.base import RawWatchEvent
-from lib.watchers.backends.checkpoint_store import InMemoryCheckpointStore
-from lib.watchers.manager import WatcherManager
-from lib.watchers.watchspec import BoundWatchSpec
+import yggdrasil.realms.test_realm as test_realm
 from tests.execution_support import SCENARIO_LIMIT, Watchdog, run_bounded
 from tests.plan_store_support import (
     FakeCouchServer,
@@ -61,19 +46,33 @@ from tests.plan_store_support import (
     plan_db_manager_on,
 )
 from yggdrasil.core.execution_ids import execution_order_key
+from yggdrasil.daemon.core import YggdrasilCore
+from yggdrasil.daemon.plan_execution import ExecutionResult, ExecutionStatus
+from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.outcomes import (
     AttemptReport,
     ExecutionOutcome,
     StepOutcome,
     TerminationReason,
 )
+from yggdrasil.ops.consumer import FileSpoolConsumer
+from yggdrasil.storage import build_internal_storage
+from yggdrasil.storage.partitions import partition_key
+from yggdrasil.storage.plan_eligibility import is_plan_eligible
+from yggdrasil.storage.protocols import InternalStorageBundle
+from yggdrasil.storage.sqlite import SQLiteInternalStore
+from yggdrasil.watchers.backends.base import RawWatchEvent
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
+from yggdrasil.watchers.manager import WatcherManager
+from yggdrasil.watchers.watchspec import BoundWatchSpec
 
 REALM = "test_realm"
 SCENARIO_ID = "test_scenario:lanes"
 PLAN_ID = f"{REALM}:{SCENARIO_ID}"
 SCOPE = {"kind": "test_scenario", "id": SCENARIO_ID}
 SNAPSHOT_ID = f"{partition_key(SCOPE)}:plan_status:{REALM}:{PLAN_ID}"
-CORE_LOGGER = "lib.core_utils.yggdrasil_core.YggdrasilCore"
+CORE_LOGGER = "yggdrasil.daemon.core.YggdrasilCore"
 
 SUCCEEDED = StepOutcome.SUCCEEDED
 REUSED = StepOutcome.REUSED

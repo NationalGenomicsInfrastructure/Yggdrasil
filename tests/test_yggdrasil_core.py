@@ -4,15 +4,14 @@ import os
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
-from lib.core_utils.event_types import EventType
-from lib.core_utils.plan_execution import DAEMON_CLAIM
-from lib.core_utils.singleton_decorator import SingletonMeta
-from lib.core_utils.yggdrasil_core import YggdrasilCore
-from lib.watchers.abstract_watcher import YggdrasilEvent
-from lib.watchers.config_validation import (
+from yggdrasil.daemon.core import YggdrasilCore
+from yggdrasil.daemon.plan_execution import DAEMON_CLAIM
+from yggdrasil.daemon.singleton import SingletonMeta
+from yggdrasil.watchers.config_validation import (
     WatcherConfigurationError,
     WatcherConfigValidationIssue,
 )
+from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 class TestYggdrasilCore(unittest.TestCase):
@@ -50,15 +49,13 @@ class TestYggdrasilCore(unittest.TestCase):
         SingletonMeta._instances.clear()
 
         # Patch OpsConsumerService and Engine to avoid CouchDB connections
-        self.ops_patcher = patch("lib.core_utils.yggdrasil_core.OpsConsumerService")
-        self.engine_patcher = patch("lib.core_utils.yggdrasil_core.Engine")
+        self.ops_patcher = patch("yggdrasil.daemon.core.OpsConsumerService")
+        self.engine_patcher = patch("yggdrasil.daemon.core.Engine")
         self.mock_ops_service_class = self.ops_patcher.start()
         self.mock_engine = self.engine_patcher.start()
 
         # Patch internal-storage bundle construction (no real backends)
-        self.storage_patcher = patch(
-            "lib.core_utils.yggdrasil_core.build_internal_storage"
-        )
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
         self.mock_build_storage = self.storage_patcher.start()
         self.mock_storage = MagicMock()
         self.mock_build_storage.return_value = self.mock_storage
@@ -103,7 +100,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # INITIALIZATION AND SINGLETON TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_initialization_with_config_and_logger(self, mock_init_db):
         """Test basic initialization with config and custom logger."""
         # Act
@@ -119,7 +116,7 @@ class TestYggdrasilCore(unittest.TestCase):
         mock_init_db.assert_called_once()
         self.mock_logger.info.assert_called_with("YggdrasilCore initialized.")
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_initialization_with_default_logger(self, mock_init_db):
         """Test initialization with default logger when none provided."""
         with patch("logging.getLogger") as mock_get_logger:
@@ -132,13 +129,13 @@ class TestYggdrasilCore(unittest.TestCase):
             # Assert
             self.assertEqual(core._logger, mock_default_logger)
             mock_get_logger.assert_called_once_with(
-                "lib.core_utils.yggdrasil_core.YggdrasilCore"
+                "yggdrasil.daemon.core.YggdrasilCore"
             )
             mock_default_logger.info.assert_called_with("YggdrasilCore initialized.")
 
     def test_singleton_behavior(self):
         """Test that YggdrasilCore properly implements singleton pattern."""
-        with patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers"):
+        with patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers"):
             # Act - create multiple instances
             core1 = YggdrasilCore(self.test_config, self.mock_logger)
             core2 = YggdrasilCore({"different": "config"}, Mock())
@@ -149,7 +146,7 @@ class TestYggdrasilCore(unittest.TestCase):
             self.assertEqual(core2.config, self.test_config)
             self.assertEqual(core2._logger, self.mock_logger)
 
-    @patch("lib.core_utils.yggdrasil_core.ProjectDBManager")
+    @patch("yggdrasil.daemon.core.ProjectDBManager")
     def test_init_db_managers_success(self, mock_pdm_class):
         """Plan store comes from the bundle; ProjectDBManager stays lazy."""
         # Arrange
@@ -190,7 +187,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # WATCHER REGISTRATION AND SETUP TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_register_watcher(self, mock_init_db):
         """Test watcher registration functionality."""
         # Arrange
@@ -206,8 +203,8 @@ class TestYggdrasilCore(unittest.TestCase):
             f"Registering watcher: {mock_watcher}"
         )
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._setup_plan_watcher")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_setup_watchers(self, mock_init_db, mock_setup_plan):
         """Test main setup_watchers method."""
         # Arrange
@@ -221,8 +218,8 @@ class TestYggdrasilCore(unittest.TestCase):
         expected_calls = [call("Setting up watchers..."), call("Watchers setup done.")]
         self.mock_logger.info.assert_has_calls(expected_calls, any_order=True)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._setup_plan_watcher")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._setup_plan_watcher")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_setup_watchers_validates_watcher_manager_before_plan_watcher(
         self, mock_init_db, mock_setup_plan
     ):
@@ -250,7 +247,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # HANDLER REGISTRATION AND SETUP TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_register_handler(self, mock_init_db):
         """Test handler registration functionality."""
         # Arrange
@@ -269,7 +266,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # ASYNC LIFECYCLE TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_start_not_running(self, mock_init_db):
         """Test starting watchers when not already running."""
         # Arrange
@@ -301,7 +298,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Run the async test
         asyncio.run(test_start())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_start_already_running(self, mock_init_db):
         """Test starting watchers when already running."""
         # Arrange
@@ -319,7 +316,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         asyncio.run(test_start())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_stop_when_running(self, mock_init_db):
         """Test stopping watchers when running."""
         # Arrange
@@ -350,7 +347,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         asyncio.run(test_stop())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_stop_when_not_running(self, mock_init_db):
         """Test stopping watchers when not running."""
         # Arrange
@@ -372,8 +369,8 @@ class TestYggdrasilCore(unittest.TestCase):
     # EVENT HANDLING TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_persist_plan")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._generate_and_persist_plan")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_handle_event_with_registered_handler(
         self, mock_init_db, mock_generate_plan
     ):
@@ -398,7 +395,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_logger.info.assert_called()
         self.mock_logger.debug.assert_called()  # Logs scheduling message
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_handle_event_no_handler(self, mock_init_db):
         """Test event handling when no handler is registered."""
         # Arrange
@@ -411,8 +408,8 @@ class TestYggdrasilCore(unittest.TestCase):
         self.mock_logger.info.assert_called()
         self.mock_logger.warning.assert_called()
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._generate_and_persist_plan")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._generate_and_persist_plan")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_handle_event_handler_exception(self, mock_init_db, mock_generate_plan):
         """Test event handling when _make_planning_ctx raises exception."""
         # Arrange
@@ -444,7 +441,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # CLI TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_process_cli_command(self, mock_init_db):
         """Test CLI command processing."""
         # Arrange
@@ -463,7 +460,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # EDGE CASES AND ERROR SCENARIOS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_empty_config(self, mock_init_db):
         """Test initialization with empty configuration."""
         # Act
@@ -475,7 +472,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertIsInstance(core.watchers, list)
         self.assertIsInstance(core.subscriptions, dict)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_multiple_watchers_and_handlers(self, mock_init_db):
         """Test registering multiple watchers and handlers."""
         # Arrange
@@ -501,7 +498,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertIn(EventType.PROJECT_CHANGE, core.subscriptions)
         self.assertIn(EventType.FLOWCELL_READY, core.subscriptions)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_start_with_watcher_exception(self, mock_init_db):
         """Test starting watchers when one raises an exception."""
         # Arrange
@@ -529,7 +526,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # PLAN PERSISTENCE AND GENERATION TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_persist_plan_draft_daemon_mode(self, mock_init_db):
         """Test persisting a plan draft with daemon execution authority."""
         # Arrange
@@ -563,7 +560,7 @@ class TestYggdrasilCore(unittest.TestCase):
             notes="Test notes",
         )
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_persist_plan_draft_run_once_mode(self, mock_init_db):
         """Test persisting a plan draft with run_once execution authority."""
         # Arrange
@@ -597,87 +594,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertEqual(call_kwargs["execution_owner"], "run_once:abc123")
         self.assertTrue(call_kwargs["auto_run"])
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_derive_realm_id_from_handler_attribute(self, mock_init_db):
-        """Test deriving realm_id when handler has explicit realm_id attribute."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        mock_handler = Mock()
-        mock_handler.realm_id = "explicit_realm"
-        mock_handler.__class__ = Mock
-        mock_handler.__class__.__name__ = "TestHandler"
-
-        # Act
-        core._derive_realm_id(mock_handler)
-
-        # Assert
-        self.assertEqual(mock_handler.realm_id, "explicit_realm")
-        self.assertIn("explicit_realm", core._legacy_realm_class_registry)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_derive_realm_id_from_entry_point(self, mock_init_db):
-        """Test deriving realm_id from entry point distribution name."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        mock_handler = Mock()
-        del mock_handler.realm_id  # No explicit realm_id
-        mock_handler.__module__ = "test_module.handlers"
-        mock_handler.__class__ = Mock
-
-        mock_ep = Mock()
-        mock_ep.dist = Mock()
-        mock_ep.dist.name = "test-realm-package"
-
-        # Act
-        core._derive_realm_id(mock_handler, mock_ep)
-
-        # Assert
-        self.assertEqual(mock_handler.realm_id, "test_realm_package")
-        self.assertIn("test_realm_package", core._legacy_realm_class_registry)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_derive_realm_id_from_module_name(self, mock_init_db):
-        """Test deriving realm_id from module name when no entry point."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-        mock_handler = Mock()
-        del mock_handler.realm_id  # No explicit realm_id
-        mock_handler.__module__ = "my_realm.handlers.project"
-        mock_handler.__class__ = Mock
-
-        # Act
-        core._derive_realm_id(mock_handler, None)
-
-        # Assert
-        self.assertEqual(mock_handler.realm_id, "my_realm")
-        self.assertIn("my_realm", core._legacy_realm_class_registry)
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
-    def test_derive_realm_id_duplicate_raises_error(self, mock_init_db):
-        """Test that duplicate realm_ids from different classes raise an error."""
-        # Arrange
-        core = YggdrasilCore(self.test_config, self.mock_logger)
-
-        # First handler
-        mock_handler1 = Mock()
-        mock_handler1.realm_id = "duplicate_realm"
-        mock_handler1.__class__ = type("Handler1", (), {})
-
-        # Second handler with same realm_id but different class
-        mock_handler2 = Mock()
-        mock_handler2.realm_id = "duplicate_realm"
-        mock_handler2.__class__ = type("Handler2", (), {})
-        mock_handler2.__module__ = "test.module"
-        mock_handler2.__qualname__ = "Handler2"
-
-        # Act & Assert
-        core._derive_realm_id(mock_handler1)
-        with self.assertRaises(RuntimeError) as context:
-            core._derive_realm_id(mock_handler2)
-
-        self.assertIn("Duplicate realm_id", str(context.exception))
-
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_make_planning_ctx(self, mock_init_db):
         """Test creating a PlanningContext from handler and scope."""
         # Arrange
@@ -710,7 +627,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Result is whatever build_planning_context returned
         self.assertEqual(result, mock_handler.build_planning_context.return_value)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_as_event_type_with_event_type_enum(self, mock_init_db):
         """Test _as_event_type with proper EventType enum."""
         # Arrange
@@ -722,7 +639,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Assert
         self.assertEqual(result, EventType.PROJECT_CHANGE)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_as_event_type_with_matching_value(self, mock_init_db):
         """Test _as_event_type with enum having matching value."""
         # Arrange
@@ -739,7 +656,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Assert
         self.assertEqual(result, EventType.PROJECT_CHANGE)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_as_event_type_with_string(self, mock_init_db):
         """Test _as_event_type with raw string value."""
         # Arrange
@@ -751,7 +668,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Assert
         self.assertEqual(result, EventType.FLOWCELL_READY)
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_as_event_type_with_invalid_value(self, mock_init_db):
         """Test _as_event_type with invalid value returns None."""
         # Arrange
@@ -767,7 +684,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # PLAN EXECUTION TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_handle_plan_execution_event_success(self, mock_init_db):
         """PLAN_EXECUTION events are handed to the coordinator under daemon authority.
 
@@ -795,7 +712,7 @@ class TestYggdrasilCore(unittest.TestCase):
             "pln_test_123", DAEMON_CLAIM
         )
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_handle_plan_execution_event_wrong_type(self, mock_init_db):
         """Test handling event with wrong type."""
         # Arrange
@@ -813,7 +730,7 @@ class TestYggdrasilCore(unittest.TestCase):
         # Assert
         self.mock_logger.warning.assert_called()
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_handle_plan_execution_event_missing_plan_id(self, mock_init_db):
         """Test handling PLAN_EXECUTION event without plan_doc_id."""
         # Arrange
@@ -833,9 +750,9 @@ class TestYggdrasilCore(unittest.TestCase):
     # CREATE_PLAN_FROM_DOC TESTS (--plan-only mode)
     # =====================================================
 
-    @patch("lib.ops.sinks.couch.OpsWriter")
-    @patch("lib.ops.consumer.FileSpoolConsumer")
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.storage.couchdb.ops_sink.OpsWriter")
+    @patch("yggdrasil.ops.consumer.FileSpoolConsumer")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_create_plan_from_doc_success(
         self, mock_init_db, mock_consumer, mock_writer
     ):
@@ -880,7 +797,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertIsNone(call_kwargs["execution_owner"])
         self.assertFalse(call_kwargs["auto_run"])  # Forced to False for plan-only
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_create_plan_from_doc_not_found(self, mock_init_db):
         """Test create_plan_from_doc when document doesn't exist."""
         # Arrange
@@ -895,7 +812,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertEqual(result, [])
         self.mock_logger.error.assert_called()
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_create_plan_from_doc_no_handlers(self, mock_init_db):
         """Test create_plan_from_doc when no handlers registered."""
         # Arrange
@@ -911,7 +828,7 @@ class TestYggdrasilCore(unittest.TestCase):
         self.assertEqual(result, [])
         self.mock_logger.error.assert_called()
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_create_plan_from_doc_existing_plan_without_force(self, mock_init_db):
         """Test create_plan_from_doc refuses to overwrite without --force."""
         # Arrange
@@ -954,7 +871,7 @@ class TestYggdrasilCore(unittest.TestCase):
     # GENERATE_AND_PERSIST_PLAN TESTS
     # =====================================================
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_generate_and_persist_plan_auto_run_true(self, mock_init_db):
         """Test generating and persisting plan when auto_run=True."""
 
@@ -994,7 +911,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         asyncio.run(test_generate())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_generate_and_persist_plan_auto_run_false(self, mock_init_db):
         """Test generating plan when auto_run=False (awaiting approval)."""
 
@@ -1033,7 +950,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         asyncio.run(test_generate())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_generate_and_persist_plan_handler_exception(self, mock_init_db):
         """Test handling exception during plan generation."""
 
@@ -1057,7 +974,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         asyncio.run(test_generate())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_generate_and_persist_plan_multi_draft(self, mock_init_db):
         """Test that multiple drafts returned by a fan-out handler are all persisted."""
 
@@ -1098,7 +1015,7 @@ class TestYggdrasilCore(unittest.TestCase):
 
         asyncio.run(test_generate())
 
-    @patch("lib.core_utils.yggdrasil_core.YggdrasilCore._init_db_managers")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
     def test_create_plan_from_doc_multi_draft(self, mock_init_db):
         """Test that multiple drafts from a fan-out handler are all persisted."""
         core = YggdrasilCore(self.test_config, self.mock_logger)

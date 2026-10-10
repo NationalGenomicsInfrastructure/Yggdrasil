@@ -3,8 +3,8 @@
 import unittest
 from pathlib import Path
 
-from lib.core_utils.errors import InternalStorageConfigurationError
-from lib.storage.config import (
+from yggdrasil.errors import InternalStorageConfigurationError
+from yggdrasil.storage.config import (
     CouchInternalStorageConfig,
     SQLiteInternalStorageConfig,
     default_sqlite_path,

@@ -1,8 +1,8 @@
-"""Tests for cross-cutting exceptions in lib/core_utils/errors.py."""
+"""Tests for cross-cutting exceptions in yggdrasil/errors.py."""
 
 import unittest
 
-from lib.core_utils.errors import ExternalSystemUnavailableError
+from yggdrasil.errors import ExternalSystemUnavailableError
 
 
 class TestExternalSystemUnavailableError(unittest.TestCase):

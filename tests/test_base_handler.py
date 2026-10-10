@@ -4,10 +4,10 @@ from abc import ABC
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
-from lib.core_utils.event_types import EventType
 from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.planner.api import PlanDraft
+from yggdrasil.watchers.events import EventType
 
 
 def make_dummy_plan_draft(plan_id: str = "test_plan") -> PlanDraft:
