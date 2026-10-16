@@ -17,11 +17,13 @@ from yggdrasil.storage.protocols import OpsSnapshotSink
 class OpsConsumerService:
     """Periodic event-spool consumer writing plan_status snapshots.
 
-    Each cycle reads the spool and writes every plan's snapshot. It runs in a
-    worker thread of the service's own, never on the event loop, however long
-    the spool: the loop only waits for it. With one worker thread, and each
-    cycle awaited before the next is scheduled, cycles never overlap. A cycle
-    that fails is logged, and the next one runs as usual.
+    Each cycle reads the spool and writes the snapshots that changed since
+    the service's consumer last wrote them, so the first cycle after a start
+    writes every plan's snapshot once (see ``FileSpoolConsumer``). A cycle
+    runs in a worker thread of the service's own, never on the event loop,
+    however long the spool: the loop only waits for it. With one worker
+    thread, and each cycle awaited before the next is scheduled, cycles never
+    overlap. A cycle that fails is logged, and the next one runs as usual.
 
     Work handed to the thread is never abandoned: stopping the service waits
     for the cycle in progress to finish, and so does its task when shutdown
