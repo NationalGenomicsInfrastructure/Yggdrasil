@@ -69,6 +69,7 @@ class PlanDBManager(CouchDBHandler):
     Plan Document Schema:
     {
         "_id": "pln_<realm>_<scope_id>_v<version>",
+        "schema_version": 1,
         "realm": "tenx",
         "scope": {"kind": "project", "id": "P36805"},
         "status": "draft" | "approved",
