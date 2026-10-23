@@ -26,6 +26,7 @@ dev = [
     "black>=24.8.0",
     "mypy>=1.11.2",
     "coverage>=7.0",
+    "jsonschema>=4.18",
     "pip-tools",
     "pre-commit",
     "setuptools-scm",
@@ -80,7 +81,7 @@ include = ["yggdrasil", "yggdrasil.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-yggdrasil = ["assets/*", "py.typed"]
+yggdrasil = ["assets/*", "py.typed", "contract/schemas/*.json"]
 
 [tool.setuptools_scm]
 version_scheme = "post-release"

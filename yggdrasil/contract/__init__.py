@@ -15,6 +15,12 @@ contract's runtime core:
   policy, the execution definition);
 - :mod:`yggdrasil.contract.timestamps`: the canonical timestamp spelling.
 
+It also publishes the contract itself: one handwritten JSON Schema per kind
+and family, in ``schemas/``, which :mod:`yggdrasil.contract.schema` loads and
+validates documents against. Validation is a development and test tool, never
+part of the runtime checks above, and needs the ``jsonschema`` package from
+the ``dev`` extra.
+
 Layering: the package sits in the bottom layer, beside ``config``,
 ``logging_utils`` and ``errors``, and imports only the standard library, so
 any layer can use it and importing it loads neither the CouchDB client, the

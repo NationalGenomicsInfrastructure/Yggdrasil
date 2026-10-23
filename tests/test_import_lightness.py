@@ -51,7 +51,8 @@ print(json.dumps({
 
 
 # Measured after ``import yggdrasil``, so the package initializer's own version
-# lookup is not counted against the contract.
+# lookup is not counted against the contract. Reading a published schema needs
+# no validation library either; only validating does.
 _CONTRACT_PROBE = """
 import json
 import logging
@@ -63,8 +64,11 @@ before = set(sys.modules)
 
 import yggdrasil.contract
 import yggdrasil.contract.controls
+import yggdrasil.contract.schema
 import yggdrasil.contract.timestamps
 import yggdrasil.contract.versions
+
+yggdrasil.contract.schema.schema_for("plan_document", 1)
 
 loaded = sorted(set(sys.modules) - before)
 print(json.dumps({
@@ -147,7 +151,11 @@ class TestLoggingUtilsImport(unittest.TestCase):
 
 
 class TestContractImport(unittest.TestCase):
-    """``yggdrasil.contract`` sits in the bottom layer: standard library only."""
+    """``yggdrasil.contract`` sits in the bottom layer: standard library only.
+
+    That includes its schemas: importing them, or reading one, loads no
+    validation library.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -155,6 +163,7 @@ class TestContractImport(unittest.TestCase):
 
     def test_the_probe_measured_the_contract(self):
         self.assertIn("yggdrasil.contract.versions", self.state["loaded"])
+        self.assertIn("yggdrasil.contract.schema", self.state["loaded"])
 
     def test_only_standard_library_modules_are_loaded(self):
         self.assertEqual(self.state["foreign"], [])

@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:yggdrasil:contract:attempt_report:1",
+  "title": "Attempt report, family 1",
+  "description": "What one execution attempt did, as the engine reports it (AttemptReport.to_dict). It has no schema_version of its own: it is versioned through the plan document that embeds it in last_finalized_execution.report, and the plan_status snapshot copies parts of it. The report describes plans that were malformed too, so step_ids, unreached_step_ids and failure_policy keep the values the plan gave.",
+  "type": "object",
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plan_generation": {
+      "description": "The generation captured with the execution request; null when the caller captured none.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "run_token": {
+      "description": "The run token captured with the execution request; null when the caller captured none.",
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "failure_policy": {
+      "description": "The policy the attempt ran under, as recorded: a plan with an unknown or malformed policy is rejected, and its report keeps the value it gave."
+    },
+    "started_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "ended_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "termination_reason": {
+      "$ref": "#/$defs/termination_reason"
+    },
+    "outcome": {
+      "$ref": "#/$defs/outcome"
+    },
+    "is_drained": {
+      "type": "boolean"
+    },
+    "step_ids": {
+      "description": "The plan's step IDs in plan order, exactly as the plan gave them: an entry need not be a string when preflight rejected the plan.",
+      "type": "array"
+    },
+    "step_outcomes": {
+      "description": "The terminal outcome of each step that reached one, by step ID.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/step_outcome"
+      }
+    },
+    "unreached_step_ids": {
+      "description": "The planned steps with no outcome, in plan order, exactly as the plan gave them.",
+      "type": "array"
+    },
+    "failures": {
+      "description": "How each failed step failed, by step ID.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/step_failure"
+      }
+    },
+    "direct_blockers": {
+      "description": "For each blocked step, the failed or blocked prerequisites that blocked it.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/step_id_list"
+      }
+    },
+    "failed_ancestors": {
+      "description": "For each blocked step, every failed step upstream of it.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/step_id_list"
+      }
+    },
+    "diagnostic": {
+      "description": "An attempt-level failure not attributable to one step.",
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/diagnostic"}
+      ]
+    },
+    "publication_failure": {
+      "description": "Why the report could not be published, when it could not.",
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/diagnostic"}
+      ]
+    },
+    "counts": {
+      "$ref": "#/$defs/counts"
+    }
+  },
+  "required": [
+    "execution_id",
+    "plan_id",
+    "plan_generation",
+    "run_token",
+    "failure_policy",
+    "started_at",
+    "ended_at",
+    "termination_reason",
+    "outcome",
+    "is_drained",
+    "step_ids",
+    "step_outcomes",
+    "unreached_step_ids",
+    "failures",
+    "direct_blockers",
+    "failed_ancestors",
+    "diagnostic",
+    "publication_failure",
+    "counts"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "timestamp": {
+      "description": "An RFC 3339 date-time in UTC, to the whole second, ending in Z, such as 2026-10-22T10:00:00Z.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "maxLength": 20
+    },
+    "outcome": {
+      "description": "The overall outcome of an attempt.",
+      "enum": ["succeeded", "failed"]
+    },
+    "termination_reason": {
+      "description": "How an attempt ended.",
+      "enum": [
+        "completed",
+        "failed_fast",
+        "cancelled",
+        "preflight_rejected",
+        "orchestration_error"
+      ]
+    },
+    "step_outcome": {
+      "description": "The terminal outcome of one step within one attempt.",
+      "enum": ["succeeded", "reused", "failed", "blocked"]
+    },
+    "step_id_list": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "step_failure": {
+      "description": "How one step failed. code and advice are kept as the step's error carried them, so their values are open.",
+      "type": "object",
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "code": {},
+        "advice": {},
+        "error_type": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["step_id", "error", "kind", "code", "advice", "error_type"],
+      "additionalProperties": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": ["string", "null"]
+        },
+        "details": {
+          "description": "Structured context, such as the step that was running.",
+          "type": "object"
+        }
+      },
+      "required": ["message", "error_type", "details"],
+      "additionalProperties": false
+    },
+    "counts": {
+      "description": "The number of steps per outcome, plus those never reached; together they cover the planned steps.",
+      "type": "object",
+      "properties": {
+        "succeeded": {"$ref": "#/$defs/count"},
+        "reused": {"$ref": "#/$defs/count"},
+        "failed": {"$ref": "#/$defs/count"},
+        "blocked": {"$ref": "#/$defs/count"},
+        "unreached": {"$ref": "#/$defs/count"}
+      },
+      "required": ["succeeded", "reused", "failed", "blocked", "unreached"],
+      "additionalProperties": false
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
