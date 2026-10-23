@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from yggdrasil.contract import CURRENT_FAMILIES, PLAN_DOCUMENT
+from yggdrasil.contract.versions import SCHEMA_VERSION_FIELD
 from yggdrasil.flow.model import Plan
+from yggdrasil.flow.utils.ygg_time import utcnow_iso
 
 # Valid values for the execution_authority field
 VALID_EXECUTION_AUTHORITIES = frozenset({"daemon", "run_once"})
@@ -63,8 +65,17 @@ def validate_execution_authority(authority: str) -> None:
 
 
 def utc_now_iso() -> str:
-    """Return current UTC timestamp in ISO-8601 format."""
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    """Return the current UTC time in the canonical contract spelling.
+
+    The spelling is RFC 3339 to the whole second, ending in ``Z``
+    (``2026-10-22T10:00:00Z``; see ``yggdrasil/contract/timestamps.py``). It
+    delegates to ``ygg_time.utcnow_iso``, so plan documents, events and
+    snapshots share one formatter.
+
+    Returns:
+        str: The current time, such as ``2026-10-22T10:00:00Z``.
+    """
+    return utcnow_iso()
 
 
 def new_plan_generation() -> str:
@@ -115,10 +126,12 @@ def build_plan_document(
     """Build the canonical plan document for persistence.
 
     Every call builds a new plan version: the document gets a fresh
-    ``plan_generation``. On regeneration (``existing`` provided), execution
-    tokens are reset so the new plan is eligible for execution, and any
-    recorded execution result is dropped with them, while ``created_at`` is
-    preserved. Backend-specific fields (``_rev``) are the caller's
+    ``plan_generation``, and ``schema_version`` names the family of the
+    release that built it (``CURRENT_FAMILIES`` in
+    ``yggdrasil/contract/__init__.py``). On regeneration (``existing`` provided),
+    execution tokens are reset so the new plan is eligible for execution, and
+    any recorded execution result is dropped with them, while ``created_at``
+    is preserved. Backend-specific fields (``_rev``) are the caller's
     responsibility.
 
     Args:
@@ -133,7 +146,8 @@ def build_plan_document(
         source_doc_rev: Optional source document revision.
         notes: Optional notes about the plan.
         existing: Previously persisted document, if any (for created_at).
-        now: ISO-8601 timestamp override; defaults to current UTC time.
+        now: Timestamp override for ``created_at`` and ``updated_at``,
+            written as given; defaults to utc_now_iso().
         plan_generation: Generation ID override; defaults to a fresh one from
             new_plan_generation().
 
@@ -152,6 +166,7 @@ def build_plan_document(
 
     plan_doc: dict[str, Any] = {
         "_id": doc_id,
+        SCHEMA_VERSION_FIELD: CURRENT_FAMILIES[PLAN_DOCUMENT],
         "realm": realm,
         "scope": scope,
         "status": "approved" if auto_run else "draft",

@@ -30,6 +30,7 @@ from tests.plan_store_support import (
     patch_api_exception,
     plan_db_manager_on,
 )
+from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
 from yggdrasil.storage.plan_documents import build_plan_document
 from yggdrasil.storage.plan_eligibility import is_plan_eligible
@@ -117,6 +118,31 @@ class PlanStoreContract:
         self.assertTrue(self.plans.delete_plan(PLAN_ID))
         recreated = self.save()
         self.assertNotEqual(recreated["plan_generation"], doc["plan_generation"])
+
+    # ----- version marker and timestamps -----
+
+    def test_saved_plan_is_family_one_with_canonical_timestamps(self):
+        doc = self.save()
+        self.assertIs(type(doc["schema_version"]), int)
+        self.assertEqual(doc["schema_version"], 1)
+        for field in ("created_at", "updated_at"):
+            with self.subTest(field=field):
+                self.assertTrue(is_canonical(doc[field]), doc[field])
+
+    def test_finalization_keeps_the_marker_and_writes_canonical_timestamps(self):
+        doc = self.save()
+        self.plans.finalize_execution(finalization_for(doc))
+
+        stored = self.plans.fetch_plan(PLAN_ID)
+        self.assertEqual(stored["schema_version"], 1)
+        written = {
+            "updated_at": stored["updated_at"],
+            "last_executed_at": stored["last_executed_at"],
+            "finalized_at": stored["last_finalized_execution"]["finalized_at"],
+        }
+        for field, value in written.items():
+            with self.subTest(field=field):
+                self.assertTrue(is_canonical(value), value)
 
     # ----- competing save_plan -----
 

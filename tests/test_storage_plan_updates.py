@@ -28,6 +28,9 @@ from tests.plan_store_support import (
     finished_attempt,
     make_plan,
 )
+from yggdrasil.contract import PLAN_DOCUMENT
+from yggdrasil.contract.timestamps import is_canonical
+from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY
 from yggdrasil.flow.outcomes import (
     AttemptDiagnostic,
@@ -40,6 +43,7 @@ from yggdrasil.storage.plan_documents import (
     new_plan_generation,
     plan_generation_of,
     plan_summary_from_document,
+    utc_now_iso,
 )
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
@@ -120,6 +124,35 @@ class TestPlanGeneration(unittest.TestCase):
         legacy = plan_summary_from_document({"_id": "p"})
         self.assertIsNone(legacy["plan_generation"])
         self.assertIsNone(legacy["last_finalized_outcome"])
+
+
+class TestBuiltDocumentContract(unittest.TestCase):
+    """Every built document names its family and spells timestamps canonically."""
+
+    def test_new_and_regenerated_documents_are_family_one(self):
+        unversioned = {k: v for k, v in _document().items() if k != "schema_version"}
+        cases = {
+            "new": build_plan_document(make_plan(), "test_realm", dict(SCOPE)),
+            "over an unversioned document": build_plan_document(
+                make_plan(), "test_realm", dict(SCOPE), existing=unversioned
+            ),
+            "over a family-1 document": build_plan_document(
+                make_plan(), "test_realm", dict(SCOPE), existing=_document()
+            ),
+        }
+        for case, doc in cases.items():
+            with self.subTest(case=case):
+                self.assertIs(type(doc["schema_version"]), int)
+                self.assertEqual(doc["schema_version"], 1)
+                self.assertEqual(version_of(PLAN_DOCUMENT, doc).state, SUPPORTED)
+
+    def test_built_timestamps_are_canonical(self):
+        doc = build_plan_document(make_plan(), "test_realm", dict(SCOPE))
+        self.assertTrue(is_canonical(doc["created_at"]), doc["created_at"])
+        self.assertEqual(doc["updated_at"], doc["created_at"])
+
+    def test_the_formatter_is_canonical(self):
+        self.assertTrue(is_canonical(utc_now_iso()))
 
 
 class TestFinishesRequest(unittest.TestCase):
@@ -469,6 +502,21 @@ class TestFinalizeExecutionDriver(unittest.TestCase):
             ("2026-09-17T12:00:00+00:00",) * 3,
         )
         self.assertEqual(plans.doc["run_token"], self.doc["run_token"])
+
+    def test_default_finalization_time_is_canonical(self):
+        plans = _InMemoryPlans(self.doc)
+        result = finalize_execution(
+            self.request, fetch=plans.fetch, replace=plans.replace, logger=LOGGER
+        )
+        self.assertEqual(result.status, FinalizationStatus.COMMITTED)
+        written = {
+            "updated_at": plans.doc["updated_at"],
+            "last_executed_at": plans.doc["last_executed_at"],
+            "finalized_at": plans.doc["last_finalized_execution"]["finalized_at"],
+        }
+        for field, value in written.items():
+            with self.subTest(field=field):
+                self.assertTrue(is_canonical(value), value)
 
     def test_storage_failure_propagates(self):
         plans = _InMemoryPlans(self.doc)
