@@ -23,6 +23,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
+from tests.contract.support import ConformingBuilders
 from tests.execution_support import (
     REALM,
     SCOPE,
@@ -96,7 +97,7 @@ def plan_of(*specs, policy: str = CONTINUE, plan_id: str = PLAN_ID) -> Plan:
     return make_plan(*specs, policy=policy, plan_id=plan_id)
 
 
-class EngineEventsTestCase(unittest.TestCase):
+class EngineEventsTestCase(ConformingBuilders):
     """An engine recording events in memory, and a spool for spool-backed ones."""
 
     def setUp(self) -> None:

@@ -29,6 +29,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
+from tests.contract.support import ConformingBuilders
 from tests.execution_support import CouchBackend, SQLiteBackend
 from tests.plan_store_support import SCOPE, make_plan
 from yggdrasil.daemon.core import YggdrasilCore
@@ -115,7 +116,7 @@ def label(value: Any) -> str:
     return "absent" if value is ABSENT else repr(value)
 
 
-class TestReplaceRule(unittest.TestCase):
+class TestReplaceRule(ConformingBuilders):
     """What ``build_plan_document`` may build over the document in a slot."""
 
     def rebuild(self, existing: dict[str, Any]) -> dict[str, Any]:
@@ -308,7 +309,7 @@ class CouchSlots(CouchBackend):
         self.server.after_read.append(action)
 
 
-class SlotTestCase(unittest.TestCase):
+class SlotTestCase(ConformingBuilders):
     """A plan store whose slots tests fill directly.
 
     Subclasses choose the backend with ``backend_type``.
@@ -524,7 +525,7 @@ class DraftingHandler:
         return f"{__name__}.DraftingHandler"
 
 
-class CallerTestCase(unittest.TestCase):
+class CallerTestCase(ConformingBuilders):
     """A real ``YggdrasilCore`` planning two drafts, one into a refused slot.
 
     The first draft's slot holds a family-2 document, which this release must

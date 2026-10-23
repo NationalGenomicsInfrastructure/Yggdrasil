@@ -15,6 +15,7 @@ import logging
 import unittest
 from typing import Any
 
+from tests.contract.support import ConformingBuilders
 from tests.plan_store_support import (
     CANCELLED,
     DRAINED_FAILURE,
@@ -69,7 +70,7 @@ def _document(**overrides: Any) -> dict[str, Any]:
     return doc
 
 
-class TestPlanGeneration(unittest.TestCase):
+class TestPlanGeneration(ConformingBuilders):
     """Generation IDs on plan documents."""
 
     def test_new_generations_are_unique_opaque_strings(self):
@@ -137,7 +138,7 @@ class TestPlanGeneration(unittest.TestCase):
         self.assertIsNone(legacy["last_finalized_outcome"])
 
 
-class TestBuiltDocumentContract(unittest.TestCase):
+class TestBuiltDocumentContract(ConformingBuilders):
     """Every built document names its family and spells timestamps canonically."""
 
     def test_new_and_regenerated_documents_are_family_one(self):
@@ -166,7 +167,7 @@ class TestBuiltDocumentContract(unittest.TestCase):
         self.assertTrue(is_canonical(utc_now_iso()))
 
 
-class TestFinishesRequest(unittest.TestCase):
+class TestFinishesRequest(ConformingBuilders):
     """Which attempt endings consume their execution request."""
 
     def test_rule_over_every_outcome_reason_and_policy(self):
@@ -199,7 +200,7 @@ class TestFinishesRequest(unittest.TestCase):
                 )
 
 
-class TestExecutionFinalization(unittest.TestCase):
+class TestExecutionFinalization(ConformingBuilders):
     """Building and validating a finalization request."""
 
     def test_success_captures_the_attempts_identity(self):
@@ -350,7 +351,7 @@ class TestExecutionFinalization(unittest.TestCase):
         )
 
 
-class TestFinalizationResult(unittest.TestCase):
+class TestFinalizationResult(ConformingBuilders):
     """Result invariants."""
 
     def test_reason_is_required_exactly_for_supersession(self):
@@ -392,7 +393,7 @@ class TestFinalizationResult(unittest.TestCase):
         )
 
 
-class TestCheckFinalization(unittest.TestCase):
+class TestCheckFinalization(ConformingBuilders):
     """The order in which a request is judged against a document."""
 
     def setUp(self):
@@ -463,7 +464,7 @@ class _InMemoryPlans:
         return new_rev
 
 
-class TestFinalizeExecutionDriver(unittest.TestCase):
+class TestFinalizeExecutionDriver(ConformingBuilders):
     """One attempt per call; the caller owns retries."""
 
     def setUp(self):
@@ -542,7 +543,7 @@ class TestFinalizeExecutionDriver(unittest.TestCase):
             )
 
 
-class TestInitializePlanGenerationDriver(unittest.TestCase):
+class TestInitializePlanGenerationDriver(ConformingBuilders):
     """Bounded rereads when assigning a legacy document's first generation."""
 
     def legacy(self, **overrides: Any) -> dict[str, Any]:

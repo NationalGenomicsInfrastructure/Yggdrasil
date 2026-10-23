@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import yggdrasil.ops.consumer as consumer_module
+from tests.contract.support import ConformingBuilders
 from tests.execution_support import (
     REALM,
     SCOPE,
@@ -73,7 +74,7 @@ def plan_of(*specs, policy: str = CONTINUE) -> Plan:
     return make_plan(*specs, policy=policy, plan_id=PLAN_ID)
 
 
-class SnapshotTestCase(unittest.TestCase):
+class SnapshotTestCase(ConformingBuilders):
     """An engine publishing to a temporary spool, and the snapshot it yields."""
 
     def setUp(self) -> None:

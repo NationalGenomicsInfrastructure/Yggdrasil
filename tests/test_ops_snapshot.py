@@ -9,6 +9,7 @@ envelope a projection is stored in.
 import unittest
 from typing import Any
 
+from tests.contract.support import ConformingBuilders
 from yggdrasil.contract import PLAN_STATUS
 from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.flow.events.attempt_records import (
@@ -77,7 +78,7 @@ def report_event(execution_id: str, **report: Any) -> dict[str, Any]:
     }
 
 
-class TestSelection(unittest.TestCase):
+class TestSelection(ConformingBuilders):
     """Attempts are tried newest first, by execution ID alone."""
 
     def test_newest_first_by_execution_id_whatever_the_suffix(self):
@@ -95,7 +96,7 @@ class TestSelection(unittest.TestCase):
         self.assertEqual(attempts_newest_first([]), [])
 
 
-class TestRunId(unittest.TestCase):
+class TestRunId(ConformingBuilders):
     """A step's run ID is read from its events, not from where they are."""
 
     def test_first_event_naming_a_run_gives_it(self):
@@ -117,7 +118,7 @@ class TestRunId(unittest.TestCase):
         )
 
 
-class TestOneRun(unittest.TestCase):
+class TestOneRun(ConformingBuilders):
     """A step's state comes from its effective event."""
 
     def test_sequence_numbers_order_events_before_file_names(self):
@@ -213,8 +214,14 @@ class TestOneRun(unittest.TestCase):
                 self.assertEqual(status.progress, 100)
 
 
-class TestAttemptProjection(unittest.TestCase):
+class TestAttemptProjection(ConformingBuilders):
     """A running attempt shows its events; a finished one defers to its report."""
+
+    # The reports here are hand-built and partial on purpose, holding only
+    # what each rule needs, so their projections are not checked against the
+    # contract. Snapshots of attempts the engine ran are checked in
+    # tests/test_ops_consumer_attempts.py.
+    check_builder_outputs = False
 
     def test_running_attempt_shows_every_planned_step(self):
         attempt = AttemptEvents(
@@ -477,7 +484,7 @@ class TestAttemptProjection(unittest.TestCase):
         self.assertEqual(steps["b"]["state"], STATE_UNREACHED)
 
 
-class TestLegacyProjection(unittest.TestCase):
+class TestLegacyProjection(ConformingBuilders):
     """Uncorrelated runs are shown per step, as before."""
 
     def test_each_steps_run_is_reduced_on_its_own(self):
@@ -494,7 +501,7 @@ class TestLegacyProjection(unittest.TestCase):
         self.assertEqual(steps["b"]["state"], STATE_UNKNOWN)
 
 
-class TestSnapshotDocument(unittest.TestCase):
+class TestSnapshotDocument(ConformingBuilders):
     """A projection is stored in an envelope that names its family."""
 
     def test_an_attempt_projection_is_wrapped_unchanged(self):

@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
+from tests.contract.support import ConformingBuilders
 from tests.plan_store_support import (
     FakeCouchServer,
     ops_writer_on,
@@ -34,7 +35,7 @@ from yggdrasil.ops.consumer import (
 from yggdrasil.storage.partitions import partition_key
 
 
-class TestSafeLoad(unittest.TestCase):
+class TestSafeLoad(ConformingBuilders):
     """Tests for _safe_load helper function."""
 
     def test_safe_load_valid_json(self):
@@ -72,7 +73,7 @@ class TestSafeLoad(unittest.TestCase):
             self.assertEqual(result, {})
 
 
-class TestFindAnyEvent(unittest.TestCase):
+class TestFindAnyEvent(ConformingBuilders):
     """Tests for _find_any_event helper function."""
 
     def test_find_any_event_single_event(self):
@@ -270,7 +271,7 @@ class TestFindAnyEvent(unittest.TestCase):
             self.assertEqual(result["scope"]["id"], "P_NORMAL")
 
 
-class TestEventFiles(unittest.TestCase):
+class TestEventFiles(ConformingBuilders):
     """Only files directly in a step's directory are its events."""
 
     def test_a_nested_steps_directory_is_not_an_event_file(self):
@@ -286,7 +287,7 @@ class TestEventFiles(unittest.TestCase):
             )
 
 
-class TestReadScopeFromSpool(unittest.TestCase):
+class TestReadScopeFromSpool(ConformingBuilders):
     """Tests for _read_scope_from_spool helper function."""
 
     def test_read_scope_from_event(self):
@@ -326,7 +327,7 @@ class TestReadScopeFromSpool(unittest.TestCase):
             self.assertEqual(result, {})
 
 
-class TestBuildPlanSnapshot(unittest.TestCase):
+class TestBuildPlanSnapshot(ConformingBuilders):
     """Tests for build_plan_snapshot function."""
 
     def test_build_plan_snapshot_single_step(self):
@@ -533,7 +534,7 @@ class TestBuildPlanSnapshot(unittest.TestCase):
             self.assertEqual(snapshot["steps"]["step1"]["progress"], 100)
 
 
-class TestFileSpoolConsumer(unittest.TestCase):
+class TestFileSpoolConsumer(ConformingBuilders):
     """Tests for FileSpoolConsumer class."""
 
     def test_consume_nonexistent_spool(self):
@@ -721,7 +722,7 @@ class TestFileSpoolConsumer(unittest.TestCase):
         self.assertIsNone(consumer.filt)
 
 
-class TestConsumerSkipsUnchangedSnapshots(unittest.TestCase):
+class TestConsumerSkipsUnchangedSnapshots(ConformingBuilders):
     """A plan's snapshot is written only when its content changes."""
 
     REALM = "test_realm"

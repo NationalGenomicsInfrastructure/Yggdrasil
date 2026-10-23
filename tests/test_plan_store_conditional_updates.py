@@ -18,6 +18,7 @@ from typing import Any
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
+from tests.contract.support import ConformingBuilders
 from tests.plan_store_support import (
     DRAINED_FAILURE,
     PREFLIGHT_REJECTED,
@@ -505,7 +506,7 @@ class PlanStoreContract:
         self.assertEqual(self.plans.fetch_plan(PLAN_ID), initialized)
 
 
-class TestSQLiteConditionalUpdates(PlanStoreContract, unittest.TestCase):
+class TestSQLiteConditionalUpdates(PlanStoreContract, ConformingBuilders):
     """The contract against SQLitePlanStore on a real temporary database."""
 
     def setUp(self):
@@ -563,7 +564,7 @@ class TestSQLiteConditionalUpdates(PlanStoreContract, unittest.TestCase):
         return int(doc["_rev"])
 
 
-class TestCouchConditionalUpdates(PlanStoreContract, unittest.TestCase):
+class TestCouchConditionalUpdates(PlanStoreContract, ConformingBuilders):
     """The contract against PlanDBManager on a revision-enforcing fake client."""
 
     def setUp(self):
