@@ -2,12 +2,15 @@
 
 These pin the selection and precedence rules on hand-built events: which
 attempt is shown, which event a step's state is read from, and which source
-wins when an attempt's events and its report disagree.
+wins when an attempt's events and its report disagree. The last tests pin the
+envelope a projection is stored in.
 """
 
 import unittest
 from typing import Any
 
+from yggdrasil.contract import PLAN_STATUS
+from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
     ATTEMPT_STARTED_EVENT,
@@ -16,6 +19,8 @@ from yggdrasil.flow.events.attempt_records import (
 from yggdrasil.ops.snapshot import (
     ATTEMPT_FINISHED,
     ATTEMPT_RUNNING,
+    PROJECTION_ATTEMPT,
+    PROJECTION_LEGACY,
     STATE_INTERRUPTED,
     STATE_PENDING,
     STATE_UNKNOWN,
@@ -29,6 +34,7 @@ from yggdrasil.ops.snapshot import (
     project_attempt,
     project_legacy,
     run_id_of,
+    snapshot_document,
 )
 
 OLDER = "20260921T120500000000Z_ffff"
@@ -486,6 +492,60 @@ class TestLegacyProjection(unittest.TestCase):
         self.assertEqual(steps["a"]["run_id"], "run_1")
         self.assertEqual(steps["a"]["step_name"], "A")
         self.assertEqual(steps["b"]["state"], STATE_UNKNOWN)
+
+
+class TestSnapshotDocument(unittest.TestCase):
+    """A projection is stored in an envelope that names its family."""
+
+    def test_an_attempt_projection_is_wrapped_unchanged(self):
+        summary, steps = project_attempt(
+            AttemptEvents(execution_id=NEWER, started=started(NEWER, "a"))
+        )
+
+        doc = snapshot_document(
+            realm="test_realm",
+            plan_id="plan_1",
+            scope={"kind": "project", "id": "P1"},
+            projection=PROJECTION_ATTEMPT,
+            attempt=summary,
+            steps=steps,
+            updated_at="2026-10-22T10:00:00Z",
+        )
+
+        self.assertEqual(
+            doc,
+            {
+                "schema_version": 1,
+                "type": "plan_status",
+                "realm": "test_realm",
+                "plan_id": "plan_1",
+                "scope": {"kind": "project", "id": "P1"},
+                "projection": PROJECTION_ATTEMPT,
+                "attempt": summary,
+                "steps": steps,
+                "updated_at": "2026-10-22T10:00:00Z",
+            },
+        )
+        self.assertIs(type(doc["schema_version"]), int)
+        self.assertEqual(version_of(PLAN_STATUS, doc).state, SUPPORTED)
+
+    def test_a_legacy_projection_has_no_attempt(self):
+        steps = project_legacy({"a": run("run_1", event("step.succeeded"))})
+
+        doc = snapshot_document(
+            realm="test_realm",
+            plan_id="plan_1",
+            scope={},
+            projection=PROJECTION_LEGACY,
+            attempt=None,
+            steps=steps,
+            updated_at="2026-10-22T10:00:00Z",
+        )
+
+        self.assertEqual(doc["schema_version"], 1)
+        self.assertEqual(doc["projection"], PROJECTION_LEGACY)
+        self.assertIsNone(doc["attempt"])
+        self.assertIs(doc["steps"], steps)
 
 
 if __name__ == "__main__":

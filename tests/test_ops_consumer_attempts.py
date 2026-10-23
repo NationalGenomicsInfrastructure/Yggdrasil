@@ -29,6 +29,7 @@ from tests.execution_support import (
     make_plan,
     spec,
 )
+from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.core.engine import Engine
 from yggdrasil.core.execution_ids import (
     ExecutionIdAllocator,
@@ -155,6 +156,22 @@ class SnapshotTestCase(unittest.TestCase):
         self.assertEqual(attempt["termination_reason"], report.termination_reason.value)
         self.assertEqual(attempt["outcome"], report.outcome.value)
         self.assertEqual(attempt["counts"], report.counts)
+
+
+class TestSnapshotEnvelope(SnapshotTestCase):
+    """The consumer's snapshot names its family and its write time."""
+
+    def test_an_attempt_snapshot_is_family_one(self):
+        self.attempt(plan_of(spec("a")))
+
+        snapshot = self.snapshot()
+
+        self.assertEqual(snapshot["projection"], PROJECTION_ATTEMPT)
+        self.assertIs(type(snapshot["schema_version"]), int)
+        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertEqual(snapshot["type"], "plan_status")
+        self.assertEqual((snapshot["realm"], snapshot["plan_id"]), (REALM, PLAN_ID))
+        self.assertTrue(is_canonical(snapshot["updated_at"]), snapshot["updated_at"])
 
 
 class TestOneAttemptPerSnapshot(SnapshotTestCase):
@@ -787,6 +804,16 @@ class TestLegacyHistories(SnapshotTestCase):
             snapshot["steps"]["a"]["run_id"], "run_20250102T000000000000Z_bbbbbb"
         )
         self.assertEqual(snapshot["steps"]["a"]["state"], "step.succeeded")
+
+    def test_a_legacy_snapshot_is_family_one(self):
+        self.write_legacy_run("a", "run_20250101T000000000000Z_aaaaaa", "step.started")
+
+        snapshot = self.snapshot()
+
+        self.assertEqual(snapshot["projection"], PROJECTION_LEGACY)
+        self.assertIs(type(snapshot["schema_version"]), int)
+        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertTrue(is_canonical(snapshot["updated_at"]), snapshot["updated_at"])
 
     def test_legacy_projection_never_treats_attempts_as_a_step(self):
         self.write_legacy_run("a", "run_20250101T000000000000Z_aaaaaa", "step.started")
