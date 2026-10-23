@@ -690,15 +690,21 @@ class SQLitePlanStore:
     ) -> str:
         """Persist a plan document (see PlanStore protocol).
 
+        The new document is built from the one read, so a slot that planning
+        may not replace (``check_replaceable`` in
+        ``yggdrasil/storage/plan_documents.py``) is refused before any write.
         The write is conditioned on the document state that was read: a
         brand-new plan is created only if no other writer created it first,
-        and a regeneration replaces only the revision it read. A lost race
-        is surfaced rather than replayed, because this call's planning intent
+        and a regeneration replaces only the revision it read, so a slot that
+        changes after the read is never replaced unchecked. A lost race is
+        surfaced rather than replayed, because this call's planning intent
         may be older than the document that won.
 
         Raises:
             ValueError: If execution_authority is invalid or plan.plan_id is
                 missing.
+            UnsupportedDocumentError: If planning may not replace the
+                document in the slot. Nothing was written.
             RevisionConflictError: If another writer changed the plan document
                 after it was read. Nothing was written.
         """

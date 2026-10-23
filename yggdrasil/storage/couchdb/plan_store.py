@@ -141,10 +141,14 @@ class PlanDBManager(CouchDBHandler):
 
         Creates or regenerates the plan document with a fresh
         ``plan_generation``. On regeneration, this resets execution tokens to
-        ensure the new plan is eligible for execution. The write carries the
-        ``_rev`` that was read (none for a new plan), so CouchDB rejects it if
-        another writer got there first; the conflict is raised, not retried,
-        because this call's planning intent may be older than the winner's.
+        ensure the new plan is eligible for execution. The new document is
+        built from the one read, so a slot that planning may not replace
+        (``check_replaceable`` in ``yggdrasil/storage/plan_documents.py``) is
+        refused before any write. The write carries the ``_rev`` that was read
+        (none for a new plan), so CouchDB rejects it if another writer got
+        there first, and a slot that changes after the read is never replaced
+        unchecked. The conflict is raised, not retried, because this call's
+        planning intent may be older than the winner's.
 
         The document ID is taken from ``plan.plan_id``, which is owned by the
         realm/planner. PlanDBManager is a generic CRUD layer and never derives
@@ -167,6 +171,8 @@ class PlanDBManager(CouchDBHandler):
 
         Raises:
             ValueError: If execution_authority is invalid or plan.plan_id is missing
+            UnsupportedDocumentError: If planning may not replace the document
+                in the slot. Nothing was written.
             RevisionConflictError: If another writer created or changed the plan
                 document after it was read (CouchDB 409). Nothing was written.
             ApiException: On other database errors

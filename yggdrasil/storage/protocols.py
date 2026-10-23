@@ -64,13 +64,19 @@ class PlanStore(Protocol):
         """Persist a new or regenerated plan document; returns the document ID.
 
         Every call assigns a fresh ``plan_generation`` and resets execution
-        tokens. The write applies only to the document state that was read,
-        so a lost race raises instead of replaying this call's planning intent
-        over a newer document.
+        tokens. It may replace an empty slot, an unversioned document or a
+        document of a supported family, and refuses an invalid marker, an
+        unsupported family or a ``created_at`` the replacement cannot keep
+        (``check_replaceable`` in ``yggdrasil/storage/plan_documents.py``).
+        The write applies only to the document state that was read, so a lost
+        race raises instead of replaying this call's planning intent over a
+        newer document.
 
         Raises:
             ValueError: If execution_authority is invalid or plan.plan_id is
                 missing.
+            UnsupportedDocumentError: If planning may not replace the document
+                in the slot. Nothing was written.
             RevisionConflictError: If another writer created or changed the
                 plan document first. Nothing was written.
         """

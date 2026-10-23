@@ -96,23 +96,34 @@ class TestPlanGeneration(unittest.TestCase):
         self.assertEqual(doc["plan_generation"], "fixed")
 
     def test_regeneration_drops_the_finalized_result_with_the_tokens(self):
-        existing = _document(
+        finalized = _document(
             run_token=4,
             executed_run_token=4,
-            created_at="2026-01-01T00:00:00+00:00",
             last_finalized_execution={"execution_id": "e", "outcome": "failed"},
         )
+        unversioned = {k: v for k, v in finalized.items() if k != "schema_version"}
+        cases = {
+            "family 1 keeps its canonical created_at": dict(
+                finalized, created_at="2026-01-01T00:00:00Z"
+            ),
+            "unversioned has its legacy created_at re-spelled": dict(
+                unversioned, created_at="2026-01-01T00:00:00+00:00"
+            ),
+        }
+        for case, existing in cases.items():
+            with self.subTest(case=case):
+                regenerated = build_plan_document(
+                    make_plan(), "test_realm", dict(SCOPE), existing=existing
+                )
 
-        regenerated = build_plan_document(
-            make_plan(), "test_realm", dict(SCOPE), existing=existing
-        )
-
-        self.assertNotEqual(regenerated["plan_generation"], "g1")
-        self.assertEqual(
-            (regenerated["run_token"], regenerated["executed_run_token"]), (0, -1)
-        )
-        self.assertNotIn("last_finalized_execution", regenerated)
-        self.assertEqual(regenerated["created_at"], "2026-01-01T00:00:00+00:00")
+                self.assertNotEqual(regenerated["plan_generation"], "g1")
+                self.assertEqual(
+                    (regenerated["run_token"], regenerated["executed_run_token"]),
+                    (0, -1),
+                )
+                self.assertNotIn("last_finalized_execution", regenerated)
+                self.assertEqual(regenerated["created_at"], "2026-01-01T00:00:00Z")
+                self.assertEqual(regenerated["schema_version"], 1)
 
     def test_summary_reports_generation_and_last_outcome_separately(self):
         doc = _document(last_finalized_execution={"outcome": "failed"})

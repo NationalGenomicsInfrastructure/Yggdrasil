@@ -166,27 +166,41 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(doc["status"], "approved")
 
     def test_save_plan_update_existing(self):
-        """Test updating existing plan preserves _rev and created_at."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "_rev": "2-xyz",
-            "created_at": "2025-01-01T00:00:00+00:00",
+        """Test updating existing plan preserves _rev and created_at.
+
+        A family-1 document's canonical created_at is kept as it is; an
+        unversioned document's legacy ``+00:00`` spelling is kept as the same
+        instant, spelled with ``Z``.
+        """
+        cases = {
+            "family 1": (
+                {"schema_version": 1, "created_at": "2025-01-01T00:00:00Z"},
+                "2025-01-01T00:00:00Z",
+            ),
+            "unversioned": (
+                {"created_at": "2025-01-01T00:00:00+00:00"},
+                "2025-01-01T00:00:00Z",
+            ),
         }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
         mock_result = Mock()
         mock_result.get_result.return_value = {"ok": True}
         self.manager.server.put_document.return_value = mock_result
 
-        self.manager.save_plan(
-            self.sample_plan,
-            realm="tenx",
-            scope={"kind": "project", "id": "P12345"},
-        )
+        for case, (fields, created_at) in cases.items():
+            with self.subTest(case=case):
+                existing_doc = {"_id": "pln_tenx_P12345_v1", "_rev": "2-xyz", **fields}
+                self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
 
-        call_kwargs = self.manager.server.put_document.call_args[1]
-        doc = call_kwargs["document"]
-        self.assertEqual(doc["_rev"], "2-xyz")
-        self.assertEqual(doc["created_at"], "2025-01-01T00:00:00+00:00")
+                self.manager.save_plan(
+                    self.sample_plan,
+                    realm="tenx",
+                    scope={"kind": "project", "id": "P12345"},
+                )
+
+                call_kwargs = self.manager.server.put_document.call_args[1]
+                doc = call_kwargs["document"]
+                self.assertEqual(doc["_rev"], "2-xyz")
+                self.assertEqual(doc["created_at"], created_at)
 
     def test_save_plan_with_optional_fields(self):
         """Test saving plan with optional metadata fields."""

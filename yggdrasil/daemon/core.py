@@ -22,7 +22,11 @@ from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 from yggdrasil.logging_utils import custom_logger
-from yggdrasil.storage import InternalStorageBundle, build_internal_storage
+from yggdrasil.storage import (
+    InternalStorageBundle,
+    UnsupportedDocumentError,
+    build_internal_storage,
+)
 from yggdrasil.watchers.events import EventType, YggdrasilEvent
 from yggdrasil.watchers.manager import WatcherManager
 from yggdrasil.watchers.plan_watcher import PlanWatcher
@@ -135,12 +139,18 @@ class YggdrasilCore:
         *,
         execution_authority: str = "daemon",
         execution_owner: str | None = None,
-    ) -> str:
+    ) -> str | None:
         """
         Persist a PlanDraft to the yggdrasil_plans database.
 
         Creates or updates the plan document with status based on auto_run flag.
         On regeneration, execution tokens are reset (plan becomes eligible again).
+
+        The plan store refuses to replace a stored plan whose schema_version
+        is invalid or unsupported, or whose created_at cannot be kept. That
+        refusal is logged here, once and without a traceback, and the draft is
+        skipped, so the caller can go on with its other drafts. Any other
+        failure propagates.
 
         Args:
             draft: The PlanDraft returned by the handler
@@ -149,18 +159,26 @@ class YggdrasilCore:
             execution_owner: Unique token for run_once isolation (e.g., "run_once:<uuid>")
 
         Returns:
-            str: The database document ID of the persisted plan
+            str | None: The database document ID of the persisted plan, or
+            None if the store refused to replace the stored plan.
         """
-        plan_doc_id = self.plan_dbm.save_plan(
-            plan=draft.plan,
-            realm=handler_realm,
-            scope=draft.plan.scope,
-            auto_run=draft.auto_run,
-            execution_authority=execution_authority,
-            execution_owner=execution_owner,
-            preview=draft.preview,
-            notes=draft.notes,
-        )
+        try:
+            plan_doc_id = self.plan_dbm.save_plan(
+                plan=draft.plan,
+                realm=handler_realm,
+                scope=draft.plan.scope,
+                auto_run=draft.auto_run,
+                execution_authority=execution_authority,
+                execution_owner=execution_owner,
+                preview=draft.preview,
+                notes=draft.notes,
+            )
+        except UnsupportedDocumentError as exc:
+            self._logger.error(
+                "%s. The draft was not persisted; the stored plan is unchanged.",
+                exc,
+            )
+            return None
 
         self._logger.info(
             "Persisted plan '%s' to yggdrasil_plans (realm=%s, auto_run=%s, authority=%s)",
@@ -869,6 +887,8 @@ class YggdrasilCore:
                         execution_authority="daemon",
                         execution_owner=None,
                     )
+                    if plan_doc_id is None:
+                        continue  # Refused and logged; go on with the rest
                     self._logger.info(
                         "✓ Plan '%s' created (status=draft, authority=daemon). "
                         "Awaiting external approval.",
@@ -1049,6 +1069,8 @@ class YggdrasilCore:
                     execution_authority="run_once",
                     execution_owner=execution_owner,
                 )
+                if persisted_id is None:
+                    continue  # Refused and logged; go on with the rest
                 self._logger.info(
                     "Plan '%s' created (realm=%s, status=%s, owner=%s)",
                     persisted_id,
@@ -1460,6 +1482,8 @@ class YggdrasilCore:
             realm_id = getattr(handler, "realm_id", "unknown_realm")
             for draft in drafts:
                 plan_doc_id = self._persist_plan_draft(draft, realm_id)
+                if plan_doc_id is None:
+                    continue  # Refused and logged; go on with the rest
 
                 if draft.auto_run:
                     self._logger.info(
