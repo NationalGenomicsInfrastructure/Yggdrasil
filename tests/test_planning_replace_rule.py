@@ -55,6 +55,10 @@ LEGACY_CREATED = "2026-01-01T00:00:00+00:00"
 # Marks a field to remove from a builder-made document.
 ABSENT = object()
 
+# An integer Python refuses to convert to text: it has more digits than
+# sys.get_int_max_str_digits() allows by default.
+HUGE = 10**5000
+
 # Markers planning refuses, with the reason it gives.
 REFUSED_MARKERS = (
     (2, "unsupported"),
@@ -214,6 +218,44 @@ class TestReplaceRule(unittest.TestCase):
             recorded=None,
         )
         self.assertIn("its created_at is missing", str(missing))
+
+    def test_a_value_that_cannot_be_shown_is_still_refused(self):
+        cases = {
+            "huge marker": ("schema_version", HUGE, "unsupported"),
+            "nested huge marker": ("schema_version", {"family": [HUGE]}, "invalid"),
+            "huge created_at": ("created_at", HUGE, "malformed"),
+            "nested huge created_at": ("created_at", {"at": [HUGE]}, "malformed"),
+        }
+        for case, (field, value, reason) in cases.items():
+            with self.subTest(case=case):
+                error = self.assert_refused(
+                    slot_document(**{field: value}),
+                    field=field,
+                    reason=reason,
+                    recorded=value,
+                )
+
+                self.assertIs(error.recorded, value)
+                shown = f"<unrepresentable {type(value).__name__}>"
+                self.assertIn(f"its {field} {shown} is {reason}", str(error))
+                self.assertIn(shown, repr(error))
+
+    def test_the_message_shows_a_bounded_representation(self):
+        cases = {
+            "long string": ("created_at", "x" * 100_000, "malformed"),
+            "long list": ("schema_version", list(range(100_000)), "invalid"),
+        }
+        for case, (field, value, reason) in cases.items():
+            with self.subTest(case=case):
+                error = self.assert_refused(
+                    slot_document(**{field: value}),
+                    field=field,
+                    reason=reason,
+                    recorded=value,
+                )
+
+                self.assertIs(error.recorded, value)
+                self.assertLess(len(str(error)), 400)
 
     def test_the_refusal_is_neither_a_backend_failure_nor_a_lost_race(self):
         error = self.assert_refused(
