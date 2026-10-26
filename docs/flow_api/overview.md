@@ -165,7 +165,7 @@ A planner is a `BaseHandler` subclass — not just any object implementing `gene
 
 ## Engine (`yggdrasil.core.engine`)
 
-Before an attempt starts, the engine checks that `plan.realm`, then `plan.plan_id`, names one directory component (see [Realm and plan IDs](#realm-and-plan-ids)). If one does not, `Engine.run` raises a plain `ValueError` naming that field, such as `plan.plan_id must name one directory component: ...`. No attempt starts: no execution ID is allocated or reserved, nothing is published or written, and there is no report. A coordinated request is not admitted (`admission_failed`) and stays eligible. Every other problem with a plan is found by preflight, inside an attempt, which then ends with a report.
+Before an attempt starts, the engine checks that `plan.realm`, then `plan.plan_id`, names one directory component (see [Realm and plan IDs](#realm-and-plan-ids)). If one does not, `Engine.run` raises a plain `ValueError` naming that field, such as `plan.plan_id must name one directory component: ...`. No attempt starts: no execution ID is allocated or reserved, nothing is published or written, and there is no report. A coordinated request is not admitted (`admission_failed`) and stays eligible. Step preflight still runs after an attempt starts and retains its existing rejection-report behavior.
 
 `Engine.run(plan)` runs one **attempt** at a plan. Steps run one at a time, in dependency order:
 
