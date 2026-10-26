@@ -12,18 +12,21 @@ FileSpoolEmitter wrote; the rest record events in memory. Cross-thread tests
 coordinate with Gate handshakes, never sleeps.
 """
 
+import copy
 import json
 import os
 import shutil
 import threading
 import unittest
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
-from tests.contract.support import ConformingBuilders
+from tests.contract.support import ConformingBuilders, assert_conforms
 from tests.execution_support import (
     REALM,
     SCOPE,
@@ -32,9 +35,11 @@ from tests.execution_support import (
     Gate,
     RecordingEmitter,
     ScriptedSteps,
+    directory_tree,
     make_plan,
     spec,
 )
+from yggdrasil.contract import ATTEMPT_REPORT
 from yggdrasil.core.engine import Engine
 from yggdrasil.core.execution_ids import (
     ExecutionIdAllocator,
@@ -1158,6 +1163,280 @@ class TestAttemptFileLayout(EngineEventsTestCase):
                         self.assertEqual(entry["run_id"], events[0]["run_id"])
                         run_ids.add(entry["run_id"])
                     self.assertEqual(len(run_ids), len(order))
+
+
+# How a refused realm or plan ID is described: the rule every one must meet.
+NAME_RULE = (
+    "must name one directory component: a non-empty string other than "
+    "'.' or '..', without '/', backslash or NUL"
+)
+
+
+def unusable_names(parent: Path) -> list[tuple[str, object]]:
+    """Realm and plan IDs that cannot name one directory, each with a label.
+
+    The absolute path lies inside parent, and no case goes up more than one
+    level, so an engine that did not refuse them would still write only
+    inside the test's temporary directory.
+
+    Args:
+        parent: The test's temporary directory.
+
+    Returns:
+        list[tuple[str, object]]: A label for each value, and the value.
+    """
+    return [
+        ("empty", ""),
+        ("dot", "."),
+        ("dot-dot", ".."),
+        ("nested", "a/b"),
+        ("parent", "../escape"),
+        ("absolute", str(parent / "absolute")),
+        ("backslash", "a\\b"),
+        ("NUL", "a\x00b"),
+        ("None", None),
+        ("zero", 0),
+        ("five", 5),
+        ("False", False),
+        ("list", []),
+        ("dict", {}),
+    ]
+
+
+class TestRealmAndPlanIdNames(EngineEventsTestCase):
+    """An attempt starts only at a plan whose realm and ID each name a directory.
+
+    The realm names the plan's directory in the event spool, and the plan ID
+    names its directory there and in the work root. Either one that is not a
+    single directory component is refused with a ValueError before the engine
+    allocates or reserves an execution ID, opens an attempt, publishes
+    anything or writes to the work root, so there is no attempt to report.
+    Step IDs keep their own rules, checked in preflight.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.engines = {"recording": self.engine, "spool": self.spool_engine()}
+
+    @contextmanager
+    def watching(self, engine: Engine) -> Iterator[dict[str, Mock]]:
+        """Spy on everything an attempt does before it starts, changing nothing.
+
+        Args:
+            engine: The engine under test.
+
+        Yields:
+            dict[str, Mock]: The spies, by what they watch.
+        """
+        with ExitStack() as stack:
+
+            def spy(owner: Any, name: str) -> Mock:
+                return stack.enter_context(
+                    patch.object(owner, name, wraps=getattr(owner, name))
+                )
+
+            spies = {
+                "allocate": spy(engine.execution_ids, "allocate"),
+                "for_plan": spy(AttemptContext, "for_plan"),
+                "preflight": spy(engine, "_preflight"),
+                "emit": spy(engine.emitter, "emit"),
+            }
+            if engine.execution_ids.history is not None:
+                spies["history"] = spy(
+                    engine.execution_ids.history, "recorded_execution_ids"
+                )
+            if engine.attempt_reserver is not None:
+                spies["reserve"] = spy(engine.attempt_reserver, "reserve")
+            yield spies
+
+    def assert_refused(
+        self, engine: Engine, field: str, call: Callable[[], object], value: object
+    ) -> None:
+        """Assert call is refused for field before it has any effect.
+
+        Args:
+            engine: The engine call goes to.
+            field: ``realm`` or ``plan_id``, the field holding value.
+            call: The engine call.
+            value: The unusable value.
+        """
+        before = directory_tree(self.root)
+        with self.watching(engine) as spies:
+            with self.assertRaises(ValueError) as caught:
+                call()
+        message = str(caught.exception)
+        self.assertIs(type(caught.exception), ValueError)
+        self.assertTrue(message.startswith(f"plan.{field} {NAME_RULE}"), message)
+        if not isinstance(value, str):
+            self.assertIn(type(value).__name__, message)
+        self.assertNotIn("\n", message)
+        self.assertLess(len(message), 200)
+        self.assertEqual(
+            {name: spy.call_count for name, spy in spies.items()},
+            dict.fromkeys(spies, 0),
+        )
+        self.assertEqual(self.steps.calls, [])
+        self.assertEqual(directory_tree(self.root), before)
+
+    def test_run_refuses_before_opening_an_attempt(self):
+        for field in ("realm", "plan_id"):
+            for label, value in unusable_names(self.root):
+                for policy in (FAIL_FAST, CONTINUE):
+                    for kind, engine in self.engines.items():
+                        with self.subTest(
+                            field=field, name=label, policy=policy, engine=kind
+                        ):
+                            plan = plan_of(spec("a"), policy=policy)
+                            setattr(plan, field, value)
+                            self.assert_refused(
+                                engine, field, lambda: engine.run(plan), value
+                            )
+
+    def test_a_plan_without_an_id_leaves_no_start_record_or_report(self):
+        # Its malformed steps would have been rejected in preflight, which an
+        # attempt reaches only after its start record.
+        for kind, engine in self.engines.items():
+            with self.subTest(engine=kind):
+                plan = plan_of(spec("a"), spec("b"))
+                plan.plan_id = ""
+                plan.steps[0].step_id = 3  # type: ignore[assignment]
+                plan.steps[1].step_id = None  # type: ignore[assignment]
+                self.assert_refused(engine, "plan_id", lambda: engine.run(plan), "")
+        self.assertEqual(self.emitter.events, [])
+
+    def test_the_realm_is_checked_first(self):
+        plan = plan_of(spec("a"))
+        plan.realm, plan.plan_id = "", ""
+        self.assert_refused(self.engine, "realm", lambda: self.engine.run(plan), "")
+
+    def test_reserving_an_execution_id_refuses_before_allocating(self):
+        for field in ("realm", "plan_id"):
+            for label, value in unusable_names(self.root):
+                for kind, engine in self.engines.items():
+                    with self.subTest(field=field, name=label, engine=kind):
+                        plan = plan_of(spec("a"))
+                        setattr(plan, field, value)
+                        self.assert_refused(
+                            engine,
+                            field,
+                            lambda: engine.reserve_execution_id(plan),
+                            value,
+                        )
+
+    def test_a_caller_built_context_cannot_bypass_the_check(self):
+        # An earlier reservation the caller holds stays exactly as it was.
+        held = attempt_dir(self.spool, REALM, PLAN_ID, "exec_fixed")
+        held.mkdir(parents=True)
+        (held / "sentinel").write_text("the caller's reservation")
+        for field in ("realm", "plan_id"):
+            for label, value in unusable_names(self.root):
+                for reserved in (False, True):
+                    for kind, engine in self.engines.items():
+                        with self.subTest(
+                            field=field, name=label, reserved=reserved, engine=kind
+                        ):
+                            plan = plan_of(spec("a"))
+                            setattr(plan, field, value)
+                            context = AttemptContext.for_plan(
+                                plan,
+                                execution_id="exec_fixed",
+                                execution_id_reserved=reserved,
+                            )
+                            report = copy.deepcopy(context.report)
+
+                            self.assert_refused(
+                                engine,
+                                field,
+                                lambda: engine._run_attempt(plan, context=context),
+                                value,
+                            )
+
+                            self.assertEqual(context.report, report)
+                            self.assertIs(context.execution_id_reserved, reserved)
+        self.assertEqual((held / "sentinel").read_text(), "the caller's reservation")
+
+    def test_an_execution_id_with_nul_is_refused_before_reservation(self):
+        reserver = ScriptedReserver()  # any call would fail: nothing scripted
+        engines = {
+            "recording": Engine(
+                work_root=self.work_root,
+                emitter=self.emitter,
+                attempt_reserver=reserver,
+            ),
+            "spool": self.engines["spool"],
+        }
+        for kind, engine in engines.items():
+            with self.subTest(engine=kind):
+                plan = plan_of(spec("a"))
+                context = AttemptContext.for_plan(plan, execution_id="exec\x00a")
+                before = directory_tree(self.root)
+
+                exc = self.run_attempt(plan, context, engine)
+
+                self.assertIsInstance(exc, OrchestrationError)
+                self.assertIn("cannot name spool records", str(exc))
+                self.assertFalse(context.execution_id_reserved)
+                self.assertEqual(directory_tree(self.root), before)
+        self.assertEqual(reserver.asked, [])
+        self.assertEqual(self.emitter.events, [])
+        self.assertEqual(self.steps.calls, [])
+
+    def test_valid_names_are_kept_exactly(self):
+        realm, plan_id = "lab: núcleo 1", "pln:P1 ünï two"
+        engine = self.engines["spool"]
+        for policy in (FAIL_FAST, CONTINUE):
+            with self.subTest(policy=policy):
+                plan = plan_of(spec("a", policy=policy), policy=policy, plan_id=plan_id)
+                plan.realm = realm
+                with self.watching(engine) as spies:
+                    returned = engine.run(plan)
+
+                self.assertEqual(spies["reserve"].call_count, 1)
+                ((_, _, execution_id), _) = spies["reserve"].call_args
+                self.assertEqual(spies["reserve"].call_args.args[:2], (realm, plan_id))
+                if policy == FAIL_FAST:
+                    self.assertIsNone(returned)
+                else:
+                    assert returned is not None
+                    self.assertEqual(returned.execution_id, execution_id)
+                attempt = attempt_dir(self.spool, realm, plan_id, execution_id)
+                for record in (ATTEMPT_STARTED_EVENT, ATTEMPT_REPORT_EVENT):
+                    event = self.spooled(attempt / record_filename(record))
+                    self.assertEqual(
+                        (event["realm"], event["plan_id"]), (realm, plan_id)
+                    )
+                self.assertTrue((self.work_root / plan_id / "plan.json").is_file())
+                self.assertTrue((self.work_root / plan_id / "a").is_dir())
+
+    def test_malformed_steps_under_valid_names_are_still_rejected_in_preflight(self):
+        plan = plan_of(spec("a"))
+        plan.steps[0].step_id = 3  # type: ignore[assignment]
+
+        with self.assertRaises(PreflightValidationError):
+            self.engine.run(plan)
+
+        self.assertEqual(self.types(), [ATTEMPT_STARTED_EVENT, ATTEMPT_REPORT_EVENT])
+        (event,) = self.of_type(ATTEMPT_REPORT_EVENT)
+        self.assertEqual(event["report"]["termination_reason"], "preflight_rejected")
+        assert_conforms(self, ATTEMPT_REPORT, event["report"])
+
+    def test_a_context_opened_for_another_plan_is_still_refused_as_before(self):
+        plan = plan_of(spec("a"))
+        for other in ("", "other"):
+            with self.subTest(other=other):
+                context = AttemptContext.for_plan(
+                    plan_of(spec("a"), plan_id=other), execution_id="exec_fixed"
+                )
+                report = copy.deepcopy(context.report)
+                before = directory_tree(self.root)
+
+                exc = self.run_attempt(plan, context, self.engines["spool"])
+
+                self.assertIsInstance(exc, OrchestrationError)
+                self.assertIn(f"its report was opened for plan '{other}'", str(exc))
+                self.assertEqual(context.report, report)
+                self.assertEqual(directory_tree(self.root), before)
+        self.assertEqual(self.steps.calls, [])
 
 
 if __name__ == "__main__":

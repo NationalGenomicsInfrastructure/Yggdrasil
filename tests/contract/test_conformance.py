@@ -24,6 +24,7 @@ from tests.contract.support import (
     assert_conforms,
     changed,
     problems,
+    projection_snapshot,
     stored_snapshot,
 )
 from tests.execution_support import REALM, CouchBackend, SQLiteBackend
@@ -285,6 +286,31 @@ class TestClosedAndOpenParts(ConformingBuilders):
             problems(PLAN_DOCUMENT, changed(base, "last_executed_at", ABSENT)),
             [("last_executed_at", MISSING_FIELD)],
         )
+
+
+class TestPlanIds(ConformingBuilders):
+    """Every plan ID the contract records is a nonempty string."""
+
+    def test_a_report_names_its_plan(self):
+        report = finalized()["last_finalized_execution"]["report"]
+        for value, code in (("", SCHEMA_RULE), (5, WRONG_TYPE)):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    problems(ATTEMPT_REPORT, changed(report, "plan_id", value)),
+                    [("plan_id", code)],
+                )
+
+    def test_plan_documents_and_recorded_executions_name_their_plan(self):
+        for path in ("_id", "plan.plan_id", "last_finalized_execution.plan_id"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    problems(PLAN_DOCUMENT, changed(finalized(), path, "")),
+                    [(path, SCHEMA_RULE)],
+                )
+
+    def test_a_snapshot_names_its_plan(self):
+        snapshot = changed(projection_snapshot(None, {}), "plan_id", "")
+        self.assertEqual(problems(PLAN_STATUS, snapshot), [("plan_id", SCHEMA_RULE)])
 
 
 class TestMalformedPlans(ConformingBuilders):

@@ -398,6 +398,26 @@ def _raiser(error: Exception) -> Callable[[ExecutionFinalization], None]:
     return action
 
 
+def directory_tree(root: Path) -> dict[str, bytes | None]:
+    """Everything under root: each file's bytes and each directory, by path.
+
+    Comparing two of these shows that nothing under root was created,
+    changed or removed in between.
+
+    Args:
+        root: The directory to read; it need not exist.
+
+    Returns:
+        dict[str, bytes | None]: File contents, or None for a directory,
+        keyed by path relative to root.
+    """
+    tree: dict[str, bytes | None] = {}
+    for path in sorted(root.rglob("*")):
+        relative = str(path.relative_to(root))
+        tree[relative] = None if path.is_dir() else path.read_bytes()
+    return tree
+
+
 def spec(step_id: str, *deps: str, **params: Any) -> StepSpec:
     """A scripted step with the given dependencies and params."""
     return StepSpec(

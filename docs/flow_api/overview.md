@@ -12,11 +12,15 @@ The concrete, frozen workflow to execute. Created by a handler's planner and per
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `plan_id` | `str` | Unique identifier (e.g. `"my_realm:object-123"`) |
-| `realm` | `str` | Realm that owns this plan |
+| `plan_id` | `str` | Unique identifier (e.g. `"my_realm:object-123"`). Names the plan's directories, so it must be one directory component (see [Realm and plan IDs](#realm-and-plan-ids)) |
+| `realm` | `str` | Realm that owns this plan. Names the plan's directory in the event spool, so it must be one directory component (see [Realm and plan IDs](#realm-and-plan-ids)) |
 | `scope` | `dict` | Scope dict (`{"kind": ..., "id": ...}`) |
 | `steps` | `list[StepSpec]` | The plan's steps. Dependencies decide the execution order; list order only breaks ties between steps that are ready at the same time |
 | `failure_policy` | `str` | What a step failure does to the rest of the plan: `"fail_fast"` (default) or `"continue_independent"`. See [Failure policies](#failure-policies). Any other value is rejected |
+
+#### Realm and plan IDs
+
+The plan ID names the plan's work directory, `<work_root>/<plan_id>/`, and the realm and plan ID together name its directory in the event spool, `<spool>/<realm>/<plan_id>/`. Each must therefore be one directory component: a nonempty string other than `.` or `..`, without `/`, backslash or NUL. Any other character is allowed and kept as given, as in `test_realm:P1` or `tenx:P12345`. Unlike a step ID, neither can be nested. The engine refuses a plan that breaks this rule before an attempt starts (see [Engine](#engine-yggdrasilcoreengine)).
 
 ### `StepSpec`
 
@@ -160,6 +164,8 @@ A planner is a `BaseHandler` subclass — not just any object implementing `gene
 ---
 
 ## Engine (`yggdrasil.core.engine`)
+
+Before an attempt starts, the engine checks that `plan.realm`, then `plan.plan_id`, names one directory component (see [Realm and plan IDs](#realm-and-plan-ids)). If one does not, `Engine.run` raises a plain `ValueError` naming that field, such as `plan.plan_id must name one directory component: ...`. No attempt starts: no execution ID is allocated or reserved, nothing is published or written, and there is no report. A coordinated request is not admitted (`admission_failed`) and stays eligible. Every other problem with a plan is found by preflight, inside an attempt, which then ends with a report.
 
 `Engine.run(plan)` runs one **attempt** at a plan. Steps run one at a time, in dependency order:
 

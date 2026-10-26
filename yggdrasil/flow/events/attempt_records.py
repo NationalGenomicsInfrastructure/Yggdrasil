@@ -110,23 +110,29 @@ def step_event_filename(seq: int, event_type: str) -> str:
 
 
 def is_record_key(execution_id: object) -> TypeGuard[str]:
-    """Whether an execution ID can name an attempt's directory in the spool.
+    """Whether an ID can name one directory of its own.
 
-    An ID that is empty, is a relative path component, or contains a path
-    separator would put an attempt's events somewhere other than in its own
-    directory beside the plan's other attempts.
+    An execution ID names its attempt's directory in the spool; the engine
+    holds a plan's realm and plan ID to the same rule, since they name the
+    directories above it, and the plan ID also names the plan's work
+    directory. An ID that is empty, is a relative path component, or contains
+    a path separator would put files somewhere other than in a directory of
+    its own. A NUL character is refused here too, rather than left to the
+    operating system, which refuses it only once something tries to create
+    the path.
 
     Args:
-        execution_id: The candidate execution ID.
+        execution_id: The candidate ID: an execution ID, a realm or a plan ID.
 
     Returns:
-        bool: True if the ID is a nonempty string usable as a directory name.
+        bool: True if the ID is a nonempty string usable as one directory name.
     """
     return (
         isinstance(execution_id, str)
         and execution_id not in ("", ".", "..")
         and "/" not in execution_id
         and "\\" not in execution_id
+        and "\x00" not in execution_id
     )
 
 
