@@ -1392,7 +1392,7 @@ class TestRealmAndPlanIdNames(EngineEventsTestCase):
                     returned = engine.run(plan)
 
                 self.assertEqual(spies["reserve"].call_count, 1)
-                ((_, _, execution_id), _) = spies["reserve"].call_args
+                (_, _, execution_id), _ = spies["reserve"].call_args
                 self.assertEqual(spies["reserve"].call_args.args[:2], (realm, plan_id))
                 if policy == FAIL_FAST:
                     self.assertIsNone(returned)
