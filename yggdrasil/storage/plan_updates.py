@@ -534,7 +534,8 @@ def check_finalization(
             SupersessionReason.AUTHORITY_CHANGED,
             f"execution authority/owner is now {describe_recorded(authority)}/"
             f"{describe_recorded(owner)}, captured as "
-            f"{request.execution_authority!r}/{request.execution_owner!r}",
+            f"{request.execution_authority!r}/"
+            f"{describe_recorded(request.execution_owner)}",
         )
     if executed >= request.run_token:
         recorder = record.get("execution_id") if isinstance(record, dict) else None

@@ -107,6 +107,7 @@ from yggdrasil.contract.controls import (
     failure_policy_of,
     token_pair,
 )
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.core.engine import Engine
 from yggdrasil.daemon.worker_futures import outlast_cancellation
 from yggdrasil.flow.attempt import AttemptContext
@@ -172,14 +173,20 @@ class ExecutionClaim:
 
         Returns:
             str | None: The reason the plan is not the caller's to execute, or
-            None if it is.
+            None if it is. Never raises on stored content.
         """
         authority = doc.get("execution_authority")
         if authority != self.authority:
-            return f"its execution authority is {authority!r}, not {self.authority!r}"
+            return (
+                f"its execution authority is {describe_recorded(authority)}, "
+                f"not {self.authority!r}"
+            )
         owner = doc.get("execution_owner")
         if self.owner is not None and owner != self.owner:
-            return f"its execution owner is {owner!r}, not {self.owner!r}"
+            return (
+                f"its execution owner is {describe_recorded(owner)}, "
+                f"not {self.owner!r}"
+            )
         return None
 
 
@@ -931,8 +938,9 @@ class PlanExecutionCoordinator:
             # a different document.
             raise stop(
                 ExecutionStatus.INVALID_DOCUMENT,
-                f"Plan document '{plan_doc_id}' embeds plan '{plan.plan_id}'; "
-                "cannot execute a plan stored under another ID",
+                f"Plan document '{plan_doc_id}' embeds plan "
+                f"{describe_recorded(plan.plan_id)}; cannot execute a plan stored "
+                "under another ID",
             )
         generation = plan_generation_of(doc)
         if generation is None:

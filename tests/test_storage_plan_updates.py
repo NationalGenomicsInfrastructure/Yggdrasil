@@ -31,6 +31,7 @@ from tests.plan_store_support import (
 )
 from yggdrasil.contract import PLAN_DOCUMENT
 from yggdrasil.contract.controls import MAX_TOKEN, token_pair
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY
@@ -506,6 +507,40 @@ class TestCheckFinalization(ConformingBuilders):
                 result = check_finalization(_changed(self.doc, **fields), self.request)
                 self.assertEqual(result.status, FinalizationStatus.SUPERSEDED)
                 self.assertLess(len(result.message), 600)
+
+    def test_a_hostile_captured_owner_never_makes_the_judgment_raise(self):
+        # Admission captures the owner as stored: the daemon executes a plan
+        # whoever owns it.
+        huge = 10**5000
+        long_string = "x" * 100_000
+        wide_list = list(range(100_000))
+        nested = {"names": [{"name": "x" * 10_000}] * 10}
+        # Each owner, with how a diagnostic shows it: by its type when Python
+        # cannot render it as text, and bounded otherwise.
+        cases = {
+            "a huge integer": (huge, "<unrepresentable int>"),
+            "a list holding one": ([huge], "<unrepresentable list>"),
+            "a long string": (long_string, describe_recorded(long_string)),
+            "a wide list": (wide_list, describe_recorded(wide_list)),
+            "a nested value": (nested, describe_recorded(nested)),
+        }
+        reassigned = _changed(
+            self.doc, execution_authority="run_once", execution_owner="run_once:other"
+        )
+        for case, (owner, shown) in cases.items():
+            with self.subTest(case=case):
+                captured = _changed(self.doc, execution_owner=owner)
+                request = finalization_for(captured)
+
+                result = check_finalization(reassigned, request)
+
+                self.assertEqual(result.status, FinalizationStatus.SUPERSEDED)
+                self.assertEqual(result.reason, SupersessionReason.AUTHORITY_CHANGED)
+                self.assertIn(f"captured as 'daemon'/{shown}", result.message)
+                self.assertLess(len(result.message), 600)
+                # Owners are compared, not their renderings: a plan that still
+                # carries the captured owner is written.
+                self.assertIsNone(check_finalization(captured, request))
 
     # ----- the pair the write would produce -----
 
