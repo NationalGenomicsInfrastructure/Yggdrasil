@@ -272,12 +272,13 @@ class PlanWatcher(AbstractWatcher):
 
         # Check eligibility (status + token logic)
         if is_plan_eligible(doc):
+            # Eligibility requires a valid token pair, so both tokens are present.
             self._logger.info(
                 "Eligible plan detected: %s (authority=%s, run_token=%s, executed_run_token=%s)",
                 doc_id,
                 doc_authority,
-                doc.get("run_token", 0),
-                doc.get("executed_run_token", -1),
+                doc["run_token"],
+                doc["executed_run_token"],
             )
             # Emit event for execution
             payload = {

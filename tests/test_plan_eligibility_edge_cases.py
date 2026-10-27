@@ -128,7 +128,7 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved", "executed_run_token": 0}
-        # Missing run_token should default to 0 or be ineligible
+        # A missing run_token is invalid, never defaulted
         self.assertFalse(is_plan_eligible(doc))
 
     def test_executed_run_token_missing(self):
@@ -136,17 +136,16 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved", "run_token": 1}
-        # Missing executed_run_token should default to 0, making plan eligible
-        self.assertTrue(is_plan_eligible(doc))
+        # A missing executed_run_token is invalid, never defaulted
+        self.assertFalse(is_plan_eligible(doc))
 
     def test_both_tokens_missing(self):
         """Test both tokens missing."""
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved"}
-        # Both missing: run_token defaults to 0, executed_run_token defaults to -1
-        # 0 > -1 = True, so eligible
-        self.assertTrue(is_plan_eligible(doc))
+        # Both missing: neither is defaulted, so not eligible
+        self.assertFalse(is_plan_eligible(doc))
 
     def test_run_token_none(self):
         """Test run_token is None."""
@@ -160,7 +159,7 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved", "run_token": 1, "executed_run_token": None}
-        # None fails int() conversion → TypeError caught → return False
+        # null is not a token
         self.assertFalse(is_plan_eligible(doc))
 
     def test_run_token_negative(self):
@@ -168,7 +167,7 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved", "run_token": -1, "executed_run_token": 0}
-        # -1 > 0 is False, so not eligible
+        # -1 is below run_token's minimum of 0, so not eligible
         self.assertFalse(is_plan_eligible(doc))
 
     def test_executed_run_token_negative(self):
@@ -176,7 +175,7 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved", "run_token": 0, "executed_run_token": -1}
-        # 0 > -1 is True, so technically eligible
+        # -1 means no request was executed yet, so the first one is eligible
         self.assertTrue(is_plan_eligible(doc))
 
     def test_executed_run_token_greater_than_run_token(self):
@@ -188,40 +187,44 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
         self.assertFalse(is_plan_eligible(doc))
 
     def test_tokens_as_strings(self):
-        """Test tokens as string values (type coercion)."""
+        """Test tokens as string values: never converted."""
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
-        # CouchDB might return these as strings in some scenarios
         doc = {"status": "approved", "run_token": "1", "executed_run_token": "0"}
-        # Should handle string-to-int conversion or be defensive
-        # Actual behavior depends on implementation
-        # This test documents expected behavior
-        try:
-            result = is_plan_eligible(doc)
-            # If it handles strings, it should be eligible
-            self.assertTrue(result)
-        except (TypeError, ValueError):
-            # If it doesn't handle strings, that's also acceptable
-            pass
+        # A string is not a JSON integer, whatever it spells
+        self.assertFalse(is_plan_eligible(doc))
 
     def test_tokens_as_floats(self):
-        """Test tokens as float values."""
+        """Test tokens as float values: never converted, even whole ones."""
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
         doc = {"status": "approved", "run_token": 1.0, "executed_run_token": 0.0}
-        # Float comparison should work (1.0 > 0.0)
-        self.assertTrue(is_plan_eligible(doc))
+        self.assertFalse(is_plan_eligible(doc))
+
+    def test_tokens_as_booleans(self):
+        """Test tokens as booleans: never read as 1 and 0."""
+        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+
+        doc = {"status": "approved", "run_token": True, "executed_run_token": False}
+        self.assertFalse(is_plan_eligible(doc))
 
     def test_tokens_very_large(self):
-        """Test very large token values."""
+        """Test very large token values: valid up to 2**53 - 1, invalid above."""
         from yggdrasil.storage.plan_eligibility import is_plan_eligible
+
+        doc = {
+            "status": "approved",
+            "run_token": 2**53 - 1,
+            "executed_run_token": 2**53 - 2,
+        }
+        self.assertTrue(is_plan_eligible(doc))
 
         doc = {
             "status": "approved",
             "run_token": 10**18,
             "executed_run_token": 10**18 - 1,
         }
-        self.assertTrue(is_plan_eligible(doc))
+        self.assertFalse(is_plan_eligible(doc))
 
 
 class TestPlanEligibilityDocumentEdgeCases(unittest.TestCase):
@@ -341,8 +344,8 @@ class TestPlanEligibilityTableDriven(unittest.TestCase):
             # Edge token values
             ("approved", 100, 99, True, "approved, large tokens"),
             ("approved", 100, 100, False, "approved, large tokens equal"),
-            ("approved", 0, -1, True, "approved, negative executed"),
-            ("approved", -1, -2, True, "approved, both negative"),
+            ("approved", 0, -1, True, "approved, nothing executed yet"),
+            ("approved", -1, -2, False, "approved, both below their minimum"),
         ]
 
         for status, run_token, executed_token, expected, desc in test_cases:

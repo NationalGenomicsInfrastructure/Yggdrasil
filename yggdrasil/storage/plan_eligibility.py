@@ -2,10 +2,17 @@
 Plan eligibility logic for determining execution readiness.
 
 This module provides a pure function for evaluating whether a plan
-document is eligible for execution. The logic is based on:
+document is eligible for execution. A plan is eligible when:
 
-1. Status must be 'approved'
-2. run_token must be greater than executed_run_token
+1. Its status is 'approved'
+2. Its execution tokens are a valid pair, read under the strict token rule
+   of :func:`yggdrasil.contract.controls.token_pair`
+3. Its run_token is greater than its executed_run_token
+
+No field is defaulted: an absent or unknown status is not approved, and an
+absent, null or non-integer token makes the pair invalid, so the plan is not
+eligible. Eligibility judges status and tokens only; whether the rest of the
+document describes an executable plan is decided at admission.
 
 This separation allows:
 - Easy unit testing (pure function, no I/O)
@@ -15,6 +22,11 @@ This separation allows:
 
 from typing import Any
 
+from yggdrasil.contract.controls import token_pair
+from yggdrasil.contract.diagnostics import describe_recorded
+
+APPROVED_STATUS = "approved"
+
 
 def is_plan_eligible(plan_doc: dict[str, Any]) -> bool:
     """
@@ -22,12 +34,14 @@ def is_plan_eligible(plan_doc: dict[str, Any]) -> bool:
 
     A plan is eligible iff:
     - status == "approved"
+    - run_token and executed_run_token are a valid token pair
     - run_token > executed_run_token
 
     This prevents:
     - Re-execution on restart (tokens equal)
     - Execution of unapproved plans (status != approved)
     - Duplicate execution of the same run
+    - Execution under tokens that are missing, null or not JSON integers
 
     Manual re-runs work by incrementing run_token.
 
@@ -45,43 +59,45 @@ def is_plan_eligible(plan_doc: dict[str, Any]) -> bool:
         bool: True if plan should be executed, False otherwise
 
     Examples:
+        An initial run:
+
         >>> is_plan_eligible({"status": "approved", "run_token": 0, "executed_run_token": -1})
-        True  # Initial run (default case)
+        True
+
+        A manual re-run (token incremented):
 
         >>> is_plan_eligible({"status": "approved", "run_token": 1, "executed_run_token": 0})
-        True  # Manual re-run (token incremented)
+        True
+
+        Already executed (tokens equal):
 
         >>> is_plan_eligible({"status": "approved", "run_token": 0, "executed_run_token": 0})
-        False  # Already executed (tokens equal)
+        False
+
+        Awaiting approval:
 
         >>> is_plan_eligible({"status": "draft", "run_token": 0, "executed_run_token": -1})
-        False  # Awaiting approval
+        False
+
+        A token that is not a JSON integer, or that is missing, is never read
+        as a number:
+
+        >>> is_plan_eligible({"status": "approved", "run_token": "1", "executed_run_token": 0})
+        False
+        >>> is_plan_eligible({"status": "approved", "run_token": 0})
+        False
     """
-    # Rule 1: Status must be 'approved'
-    status = plan_doc.get("status", "draft")
-    if status != "approved":
-        return False
-
-    # Rule 2: run_token > executed_run_token
-    # Missing run_token defaults to 0 (initial run)
-    # Missing executed_run_token defaults to -1 (never executed)
-    run_token = plan_doc.get("run_token", 0)
-    executed_run_token = plan_doc.get("executed_run_token", -1)
-
-    # Type safety: ensure numeric comparison
-    try:
-        run_token = int(run_token)
-        executed_run_token = int(executed_run_token)
-    except (TypeError, ValueError):
-        # Invalid token values → not eligible
-        return False
-
-    return run_token > executed_run_token
+    eligible, _ = _judge(plan_doc)
+    return eligible
 
 
 def get_eligibility_reason(plan_doc: dict[str, Any]) -> str:
     """
     Get a human-readable explanation of why a plan is or isn't eligible.
+
+    Derived from the same decision as :func:`is_plan_eligible`. Invalid tokens
+    are reported first, with every problem :func:`token_pair` found; then a
+    status other than 'approved'; then a request that was already executed.
 
     Useful for debugging and logging.
 
@@ -91,27 +107,31 @@ def get_eligibility_reason(plan_doc: dict[str, Any]) -> str:
     Returns:
         str: Explanation of eligibility status
     """
-    status = plan_doc.get("status", "draft")
-    run_token = plan_doc.get("run_token", 0)
-    executed_run_token = plan_doc.get("executed_run_token", -1)
+    _, reason = _judge(plan_doc)
+    return reason
 
-    # Validate types
-    try:
-        run_token = int(run_token)
-        executed_run_token = int(executed_run_token)
-    except (TypeError, ValueError):
-        return f"Invalid token values: run_token={run_token!r}, executed_run_token={executed_run_token!r}"
 
-    if status != "approved":
-        return f"Not eligible: status='{status}' (must be 'approved')"
-
-    if run_token <= executed_run_token:
-        return (
-            f"Not eligible: run_token={run_token} <= executed_run_token={executed_run_token} "
-            f"(already executed)"
+def _judge(plan_doc: dict[str, Any]) -> tuple[bool, str]:
+    """Decide a plan document's eligibility, and explain the decision."""
+    tokens = token_pair(plan_doc)
+    if not tokens.valid:
+        return False, f"Not eligible: invalid tokens ({'; '.join(tokens.problems)})"
+    if "status" not in plan_doc:
+        return False, f"Not eligible: status is missing (must be '{APPROVED_STATUS}')"
+    status = plan_doc["status"]
+    if status != APPROVED_STATUS:
+        return False, (
+            f"Not eligible: status {describe_recorded(status)} "
+            f"(must be '{APPROVED_STATUS}')"
         )
-
-    return (
-        f"Eligible: status='approved', run_token={run_token} > "
-        f"executed_run_token={executed_run_token}"
+    # A valid pair never has executed above run: equal tokens are the only
+    # pair whose request was already served.
+    if tokens.run == tokens.executed:
+        return False, (
+            f"Not eligible: run_token={tokens.run} was already executed "
+            f"(executed_run_token={tokens.executed})"
+        )
+    return True, (
+        f"Eligible: status='{APPROVED_STATUS}', run_token={tokens.run} > "
+        f"executed_run_token={tokens.executed}"
     )

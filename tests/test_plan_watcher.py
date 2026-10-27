@@ -207,6 +207,47 @@ class TestPlanWatcher(unittest.TestCase):
 
         self.mock_on_event.assert_called_once()
 
+    def test_evaluate_change_logs_the_stored_tokens_of_an_eligible_plan(self):
+        """Test that the eligible-plan log line shows the tokens as stored."""
+        doc = {
+            "_id": "pln_tenx_P12345_v1",
+            "status": "approved",
+            "run_token": 7,
+            "executed_run_token": 6,
+            "execution_authority": "daemon",
+        }
+        change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": doc}
+
+        with self.assertLogs(self.watcher._logger, level="INFO") as logs:
+            asyncio.run(self.watcher._evaluate_change(_raw(change)))
+
+        self.assertIn(
+            "Eligible plan detected: pln_tenx_P12345_v1 (authority=daemon, "
+            "run_token=7, executed_run_token=6)",
+            "\n".join(logs.output),
+        )
+
+    def test_evaluate_change_skips_tokens_that_are_not_a_valid_pair(self):
+        """Test that missing or non-integer tokens are never read as numbers."""
+        for case, tokens in (
+            ("both missing", {}),
+            ("executed missing", {"run_token": 1}),
+            ("strings", {"run_token": "1", "executed_run_token": "0"}),
+            ("floats", {"run_token": 1.0, "executed_run_token": 0.0}),
+        ):
+            with self.subTest(case=case):
+                doc = {
+                    "_id": "pln_tenx_P12345_v1",
+                    "status": "approved",
+                    "execution_authority": "daemon",
+                    **tokens,
+                }
+                change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": doc}
+
+                asyncio.run(self.watcher._evaluate_change(_raw(change)))
+
+                self.mock_on_event.assert_not_called()
+
     # ==========================================
     # recover_pending_plans Tests
     # ==========================================
