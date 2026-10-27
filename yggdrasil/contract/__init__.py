@@ -13,7 +13,9 @@ contract's runtime core:
 - :mod:`yggdrasil.contract.controls`: the checks on the control fields that
   decide whether and how a plan runs (the execution tokens, the failure
   policy, the execution definition);
-- :mod:`yggdrasil.contract.timestamps`: the canonical timestamp spelling.
+- :mod:`yggdrasil.contract.timestamps`: the canonical timestamp spelling;
+- :mod:`yggdrasil.contract.diagnostics`: showing a recorded value in a
+  diagnostic, bounded and never raising.
 
 It also publishes the contract itself: one handwritten JSON Schema per kind
 and family, in ``schemas/``, which :mod:`yggdrasil.contract.schema` loads and

@@ -8,17 +8,10 @@ using ``InternalStorageConfigurationError`` (``yggdrasil/errors.py``).
 
 from __future__ import annotations
 
-import reprlib
 from collections.abc import Iterable
 from typing import Any
 
-# How a recorded value is shown in a message: reprlib renders only the first
-# items of a container, levels of nesting and characters of a string, and
-# the whole representation is then cut to _RECORDED_MAX_LENGTH characters.
-_RECORDED_REPR = reprlib.Repr()
-_RECORDED_REPR.maxstring = 80
-_RECORDED_REPR.maxother = 80
-_RECORDED_MAX_LENGTH = 200
+from yggdrasil.contract.diagnostics import describe_recorded
 
 
 class RevisionConflictError(Exception):
@@ -137,8 +130,10 @@ class UnsupportedDocumentError(Exception):
     ) -> None:
         """Initialize the refusal; the message names every attribute.
 
-        The message shows recorded in a bounded representation, which cannot
-        fail whatever recorded holds; the attribute keeps the value itself.
+        The message shows recorded through
+        :func:`~yggdrasil.contract.diagnostics.describe_recorded`, a bounded
+        representation that cannot fail whatever recorded holds; the attribute
+        keeps the value itself.
 
         Args:
             doc_id: ID of the plan whose slot was not replaced.
@@ -152,33 +147,9 @@ class UnsupportedDocumentError(Exception):
         self.recorded = recorded
         self.reason = reason
         self.supported = frozenset(supported)
-        value = "" if reason == "missing" else f" {_describe_recorded(recorded)}"
+        value = "" if reason == "missing" else f" {describe_recorded(recorded)}"
         super().__init__(
             f"Planning refused to replace plan {doc_id!r}: its {field}{value} "
             f"is {reason} (supported plan-document families: "
             f"{sorted(self.supported)})"
         )
-
-
-def _describe_recorded(value: Any) -> str:
-    """Return a bounded representation of a stored value, for a message.
-
-    A stored value can hold anything, and representing some of it fails:
-    Python refuses to convert an integer with more digits than
-    ``sys.get_int_max_str_digits()`` allows (4300 by default) to text, even
-    inside a container. Such a value is shown by its type name instead, so
-    the error that reports it can still be raised.
-
-    Args:
-        value: The recorded value, of any type.
-
-    Returns:
-        str: At most _RECORDED_MAX_LENGTH characters.
-    """
-    try:
-        text = _RECORDED_REPR.repr(value)
-    except Exception:
-        return f"<unrepresentable {type(value).__name__}>"
-    if len(text) > _RECORDED_MAX_LENGTH:
-        return text[: _RECORDED_MAX_LENGTH - 3] + "..."
-    return text

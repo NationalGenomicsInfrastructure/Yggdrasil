@@ -47,9 +47,9 @@ from yggdrasil.contract import (
 from yggdrasil.contract.controls import (
     EXECUTED_RUN_TOKEN_FIELD,
     RUN_TOKEN_FIELD,
-    _shown,
     token_pair,
 )
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.contract.timestamps import is_date_time
 
 # Problem codes. They are stable, so a test or a fixture can name the reason
@@ -441,7 +441,7 @@ def _problems_of(error: Any) -> list[_Problem]:
     if keyword == "enum":
         return [_Problem(path, NOT_IN_VOCABULARY, f"is not one of {expected}", value)]
     if keyword == "const":
-        detail = f"is not {_shown(expected)}"
+        detail = f"is not {describe_recorded(expected)}"
         return [_Problem(path, NOT_IN_VOCABULARY, detail, value)]
     if keyword == "minimum":
         return [_Problem(path, OUT_OF_RANGE, f"is below the minimum {expected}", value)]
@@ -457,7 +457,7 @@ def _problems_of(error: Any) -> list[_Problem]:
         )
         return [_Problem(path, BAD_TIMESTAMP, detail, value)]
     if keyword == "pattern":
-        detail = f"does not match {_shown(expected)}"
+        detail = f"does not match {describe_recorded(expected)}"
         return [_Problem(path, NOT_IN_VOCABULARY, detail, value)]
     return [_Problem(path, SCHEMA_RULE, f"fails the schema's {keyword} rule", value)]
 
@@ -570,7 +570,9 @@ def _type_detail(value: Any, expected: Any) -> str:
     Returns:
         str: Such as ``is a number, not an integer``.
     """
-    allowed = " or ".join(_TYPE_NAMES.get(name, name) for name in _as_list(expected))
+    allowed = " or ".join(
+        _TYPE_NAMES.get(name) or str(name) for name in _as_list(expected)
+    )
     return f"is {_type_name(value)}, not {allowed}"
 
 
@@ -625,7 +627,7 @@ def _published(problem: _Problem) -> ContractProblem:
     path = _path_text(problem.path)
     subject = path or "the document"
     if problem.value is not _UNSHOWN:
-        subject = f"{subject} {_shown(problem.value)}"
+        subject = f"{subject} {describe_recorded(problem.value)}"
     return ContractProblem(path, problem.code, f"{subject} {problem.detail}")
 
 
@@ -640,7 +642,7 @@ def _path_text(path: Iterable[str | int]) -> str:
         if isinstance(part, int):
             text += f"[{part}]"
         elif not isinstance(part, str):
-            text += f"[{_shown(part)}]"
+            text += f"[{describe_recorded(part)}]"
         elif _PLAIN_KEY.fullmatch(part):
             text += f".{part}" if text else part
         else:

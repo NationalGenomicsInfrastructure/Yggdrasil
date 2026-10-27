@@ -19,10 +19,11 @@ the same rule.
 
 from __future__ import annotations
 
-import reprlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from yggdrasil.contract.diagnostics import describe_recorded
 
 RUN_TOKEN_FIELD = "run_token"
 EXECUTED_RUN_TOKEN_FIELD = "executed_run_token"
@@ -54,12 +55,6 @@ STEP_DEFINITION_FIELDS = (
     "inputs",
     "outputs",
 )
-
-# Renders recorded values inside problem descriptions, shortened, so a huge or
-# deeply nested stored value cannot flood a log line.
-_REPR = reprlib.Repr()
-_REPR.maxstring = 60
-_REPR.maxother = 60
 
 
 @dataclass(frozen=True)
@@ -156,7 +151,9 @@ def failure_policy_of(document: object) -> FailurePolicyCheck:
         return _invalid_policy(_not_expected(path, value, "a string"))
     if value not in FAILURE_POLICIES:
         known = sorted(FAILURE_POLICIES)
-        return _invalid_policy(f"{path} {_shown(value)} is not one of {known}")
+        return _invalid_policy(
+            f"{path} {describe_recorded(value)} is not one of {known}"
+        )
     return FailurePolicyCheck(valid=True, policy=value, problems=())
 
 
@@ -212,9 +209,12 @@ def _token(
     if type(value) is not int:
         return None, _not_expected(field, value, "a JSON integer")
     if value < minimum:
-        return None, f"{field} {_shown(value)} is below {minimum}"
+        return None, f"{field} {describe_recorded(value)} is below {minimum}"
     if value > MAX_TOKEN:
-        return None, f"{field} {_shown(value)} is above the maximum {MAX_TOKEN}"
+        return (
+            None,
+            f"{field} {describe_recorded(value)} is above the maximum {MAX_TOKEN}",
+        )
     return value, None
 
 
@@ -260,13 +260,4 @@ def _not_expected(path: str, value: object, expected: str) -> str:
     """Describe a recorded value of the wrong kind, with its type."""
     name = type(value).__name__
     article = "an" if name[:1].lower() in "aeiou" else "a"
-    return f"{path} {_shown(value)} is {article} {name}, not {expected}"
-
-
-def _shown(value: object) -> str:
-    """Return a short rendering of a recorded value; never raises on stored content."""
-    try:
-        return _REPR.repr(value)
-    except ValueError:
-        # Python refuses to render an integer of more than 4300 digits.
-        return f"<{type(value).__name__}>"
+    return f"{path} {describe_recorded(value)} is {article} {name}, not {expected}"

@@ -64,6 +64,7 @@ before = set(sys.modules)
 
 import yggdrasil.contract
 import yggdrasil.contract.controls
+import yggdrasil.contract.diagnostics
 import yggdrasil.contract.schema
 import yggdrasil.contract.timestamps
 import yggdrasil.contract.versions
@@ -163,6 +164,7 @@ class TestContractImport(unittest.TestCase):
 
     def test_the_probe_measured_the_contract(self):
         self.assertIn("yggdrasil.contract.versions", self.state["loaded"])
+        self.assertIn("yggdrasil.contract.diagnostics", self.state["loaded"])
         self.assertIn("yggdrasil.contract.schema", self.state["loaded"])
 
     def test_only_standard_library_modules_are_loaded(self):
