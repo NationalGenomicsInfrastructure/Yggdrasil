@@ -79,6 +79,14 @@ class PlanStoreContract:
         """Number of writes the document's revision reflects."""
         raise NotImplementedError
 
+    def raw_stored(self) -> dict[str, Any] | None:
+        """The plan document exactly as the backend holds it, ``_rev`` included."""
+        raise NotImplementedError
+
+    def plan_seq(self) -> int | None:
+        """The head of the plan-change sequence; None where there is none."""
+        raise NotImplementedError
+
     # ----- helpers -----
 
     def save(self, plan=None, **kwargs: Any) -> dict[str, Any]:
@@ -366,6 +374,60 @@ class PlanStoreContract:
         self.assertEqual(self.plans.fetch_plan(PLAN_ID), committed)
         self.assertEqual(committed["executed_run_token"], 1)
 
+    # ----- finalization: invalid control state -----
+
+    def assert_refused_without_writing(self, request):
+        """Finalize request; assert it was refused and nothing was written.
+
+        Returns:
+            FinalizationResult: The refusal.
+        """
+        before, seq = self.raw_stored(), self.plan_seq()
+
+        result = self.plans.finalize_execution(request)
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertFalse(result.recorded)
+        self.assertEqual(self.raw_stored(), before)
+        self.assertEqual(self.plan_seq(), seq)
+        return result
+
+    def test_invalid_stored_tokens_are_refused_without_writing(self):
+        request = finalization_for(self.save())
+        self.external_update(executed_run_token="soon")
+
+        result = self.assert_refused_without_writing(request)
+
+        self.assertIn("executed_run_token 'soon' is a str", result.message)
+
+    def test_a_write_that_would_leave_executed_above_run_is_not_made(self):
+        self.save()
+        self.external_update(run_token=5)
+        request = finalization_for(self.plans.fetch_plan(PLAN_ID))  # run_token 5
+        self.external_update(run_token=4)  # a valid pair, 4 / -1
+
+        result = self.assert_refused_without_writing(request)
+
+        self.assertIn("run_token 4 / executed_run_token 5", result.message)
+        stored = self.raw_stored()
+        self.assertEqual((stored["run_token"], stored["executed_run_token"]), (4, -1))
+        self.assertNotIn("last_finalized_execution", stored)
+
+    def test_tokens_lowered_between_read_and_write_are_refused_on_the_reread(self):
+        self.save()
+        self.external_update(run_token=5)
+        request = finalization_for(self.plans.fetch_plan(PLAN_ID))
+        self.after_next_read(lambda: self.external_update(run_token=4))
+
+        result = self.plans.finalize_execution(request)
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        stored = self.raw_stored()
+        self.assertEqual((stored["run_token"], stored["executed_run_token"]), (4, -1))
+        self.assertNotIn("last_finalized_execution", stored)
+        # Nothing landed after the competing write: one save and two updates.
+        self.assertEqual(self.write_count(stored), 3)
+
     def test_legacy_document_without_generation_cannot_be_finalized(self):
         doc = self.save()
         request = finalization_for(doc)
@@ -563,6 +625,12 @@ class TestSQLiteConditionalUpdates(PlanStoreContract, ConformingBuilders):
     def write_count(self, doc):
         return int(doc["_rev"])
 
+    def raw_stored(self):
+        return self.store.get_document("plans", PLAN_ID)
+
+    def plan_seq(self):
+        return self.store.current_plan_seq()
+
 
 class TestCouchConditionalUpdates(PlanStoreContract, ConformingBuilders):
     """The contract against PlanDBManager on a revision-enforcing fake client."""
@@ -595,6 +663,12 @@ class TestCouchConditionalUpdates(PlanStoreContract, ConformingBuilders):
 
     def write_count(self, doc):
         return int(doc["_rev"].split("-")[0])
+
+    def raw_stored(self):
+        return self.server.raw(PLAN_ID)
+
+    def plan_seq(self):
+        return None
 
 
 if __name__ == "__main__":

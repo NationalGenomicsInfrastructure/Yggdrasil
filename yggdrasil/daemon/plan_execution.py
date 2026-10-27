@@ -65,22 +65,29 @@ Finalization retries:
     a retryable ``PlanStoreError`` are retried, up to three attempts in all,
     0.5 s and then 1 s apart. The waiting happens on the event loop, never in a
     worker thread. A recorded result, a supersession and a non-retryable failure
-    end the retries at once. Each backend bounds its own calls: a CouchDB
-    request times out after 60 s, and SQLite waits at most 5 s for a lock.
+    end the retries at once, and so does a refusal over the plan's tokens: a
+    pair that is not valid as read, or that recording the result would make
+    invalid, can only change when the document does. Each backend bounds its
+    own calls: a CouchDB request times out after 60 s, and SQLite waits at
+    most 5 s for a lock.
 
-    When no attempt records the result, it is kept in memory as a pending
-    finalization, and that is established before the plan's guard is released.
-    While it is pending, the plan is never executed again. A change of
-    generation or authority, or the result turning out to be recorded after
-    all, is recognized by reading the plan alone, and ends the pending state
-    without writing anything. A newer run token in the same generation retries
-    the pending finalization first, with one more bounded cycle, and runs the
-    newer request only once the old result is recorded or definitively
-    rejected. Each newer run token buys one such cycle: repeated requests, for
-    the pending run token or for one that already had its cycle, change
-    nothing and retry nothing. A pending result does not survive a restart;
-    the request is then still eligible, so it may run again, and realm
-    idempotency remains the protection against repeated side effects.
+    When no attempt records the result, or recording it is refused over the
+    plan's tokens, it is kept in memory as a pending finalization, and that is
+    established before the plan's guard is released. While it is pending, the
+    plan is never executed again. Reading the plan alone recognizes a
+    regeneration, which ends the pending state whatever the tokens say. While
+    the tokens are not a valid pair, or recording the result would make them
+    invalid, the result stays pending. Once they are valid, a change of
+    authority, or the result turning out to be recorded after all, ends the
+    pending state too. None of this writes anything. A newer run token in the
+    same generation retries the pending finalization first, with one more
+    bounded cycle, and runs the newer request only once the old result is
+    recorded or definitively rejected. Each newer run token buys one such
+    cycle: repeated requests, for the pending run token or for one that
+    already had its cycle, change nothing and retry nothing. A pending result
+    does not survive a restart; the request is then still eligible, so it may
+    run again, and realm idempotency remains the protection against repeated
+    side effects.
 """
 
 from __future__ import annotations
@@ -95,6 +102,11 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, TypeVar
 
+from yggdrasil.contract.controls import (
+    execution_definition_problems,
+    failure_policy_of,
+    token_pair,
+)
 from yggdrasil.core.engine import Engine
 from yggdrasil.daemon.worker_futures import outlast_cancellation
 from yggdrasil.flow.attempt import AttemptContext
@@ -182,14 +194,18 @@ class ExecutionStatus(str, Enum):
         NOT_FOUND: The plan document does not exist.
         NOT_AUTHORIZED: The plan is not the caller's to execute: its execution
             authority or owner differs from the caller's claim.
-        NOT_ELIGIBLE: The plan is not approved, or its current request was
-            already served.
+        NOT_ELIGIBLE: The plan is not approved, its execution tokens are not
+            a valid pair, or its current request was already served.
         DUPLICATE: The request is the one the plan's previous attempt ran; it
             arrived while that attempt was in flight. It is not run a second
             time: that attempt's result stands for it. An unfinished request
             stays eligible, so a later event still retries it.
         INVALID_DOCUMENT: The plan document is eligible but does not describe
-            an executable request. Nothing ran; the plan stays eligible.
+            an executable request: a field of the plan or of one of its steps
+            is missing or null, the failure policy is not a known one, the
+            plan cannot be deserialized, it embeds another plan's ID, or the
+            document has no generation. Nothing ran and nothing was written;
+            the plan stays eligible.
         ADMISSION_FAILED: The plan store could not provide the snapshot to
             admit the request from, or no execution ID could be allocated and
             reserved for it. Nothing ran; the plan stays eligible.
@@ -206,8 +222,10 @@ class ExecutionStatus(str, Enum):
             started, because cancellation came first. Nothing was recorded;
             the plan stays eligible.
         FINALIZATION_PENDING: The attempt finished its request but its result
-            could not be recorded. It is retained in memory, and the plan is
-            not executed again while it is.
+            could not be recorded: the plan store failed, or the plan's tokens
+            are not a valid pair, or would not be once the result is recorded.
+            It is retained in memory, and the plan is not executed again while
+            it is.
         SUPERSEDED: The attempt finished its request but recording it was
             refused for good: the plan was regenerated or deleted, its
             authority changed, or another execution recorded the request first.
@@ -846,6 +864,15 @@ class PlanExecutionCoordinator:
     ) -> _Admission:
         """Capture an execution request from one plan-document snapshot.
 
+        The checks run in this order: the plan exists; it is the caller's to
+        execute; it is eligible, which includes a valid token pair; the plan
+        and each of its steps carry every execution field, and its failure
+        policy is a known one; it deserializes; it embeds its own ID; it has a
+        generation. No default ever stands in for a missing execution or
+        control field: those are checked before deserialization could supply
+        one. A refused request is not allocated an execution ID, and nothing
+        is written.
+
         Args:
             plan_doc_id: The plan document.
             doc: The snapshot, or None if the plan does not exist.
@@ -879,6 +906,19 @@ class PlanExecutionCoordinator:
                 f"Plan '{plan_doc_id}' is not eligible; skipping execution "
                 f"({get_eligibility_reason(doc)})",
             )
+        problems = (
+            *execution_definition_problems(doc),
+            *failure_policy_of(doc).problems,
+        )
+        if problems:
+            # Both checks report a missing or null plan.failure_policy (and a
+            # missing plan); each problem is named once.
+            named = "; ".join(dict.fromkeys(problems))
+            raise stop(
+                ExecutionStatus.INVALID_DOCUMENT,
+                f"Plan '{plan_doc_id}' does not describe an executable request "
+                f"({named}); cannot execute",
+            )
 
         plan = plan_model_from_document(doc, self._logger)
         if plan is None:
@@ -901,11 +941,12 @@ class PlanExecutionCoordinator:
                 f"Plan '{plan_doc_id}' has no plan_generation to capture; "
                 "cannot execute",
             )
+        run_token = token_pair(doc).run
+        assert run_token is not None  # an eligible plan's tokens are a valid pair
         return _Admission(
             plan=plan,
             plan_generation=generation,
-            # is_plan_eligible has already checked that the token is an integer.
-            run_token=int(doc.get("run_token", 0)),
+            run_token=run_token,
             execution_authority=str(doc["execution_authority"]),
             execution_owner=doc.get("execution_owner"),
         )
@@ -1036,17 +1077,20 @@ class PlanExecutionCoordinator:
 
         request = ExecutionFinalization.from_attempt(context)
         final = await self._finalize(request, cancel_event)
-        if final is None:
+        if final is None or final.status is FinalizationStatus.INVALID_CONTROL_STATE:
             # Established before _coordinate releases the plan, so no request
             # can slip in between and run the plan again.
             self._pending[plan_doc_id] = _PendingFinalization(request, report)
+            refusal = "" if final is None else f" ({final.message})"
             return ExecutionResult(
                 plan_doc_id,
                 ExecutionStatus.FINALIZATION_PENDING,
                 f"Plan '{plan_doc_id}' {_describe_attempt(report)} finished, but "
-                "its result could not be recorded; keeping it pending, and not "
-                "executing the plan again until it is recorded or superseded",
+                f"its result could not be recorded{refusal}; keeping it pending, "
+                "and not executing the plan again until it is recorded or "
+                "superseded",
                 report=report,
+                finalization=final,
             )
         if final.status is FinalizationStatus.SUPERSEDED:
             return ExecutionResult(
@@ -1080,14 +1124,22 @@ class PlanExecutionCoordinator:
     ) -> None:
         """Resolve a plan's pending finalization before admitting anything new.
 
-        Reading the plan is enough to settle it when the plan was deleted or
-        regenerated, its authority changed, or the result turns out to be
-        recorded after all. A newer run token in the same generation retries
-        the pending finalization first: that newer request is the explicit
-        action that pending results wait for, and it buys exactly one bounded
-        retry cycle. Any other request, for the pending run token or for one
-        that already had its cycle, leaves the pending result untouched and
-        retries nothing, however often it is repeated.
+        The plan is judged the way the finalizer judges it
+        (``check_finalization``), so reading it is enough to settle the
+        pending result when the plan was deleted or regenerated, its authority
+        changed, or the result turns out to be recorded after all. Tokens that
+        are not a valid pair, or that recording the result would make invalid,
+        keep it pending and retry nothing: the document has to change first.
+        A regeneration is judged before the tokens, and the authority after
+        them, so a regenerated plan settles the result whatever its tokens
+        say, and a changed authority settles it only once they are valid.
+
+        A newer run token in the same generation retries the pending
+        finalization first: that newer request is the explicit action that
+        pending results wait for, and it buys exactly one bounded retry cycle.
+        Any other request, for the pending run token or for one that already
+        had its cycle, leaves the pending result untouched and retries
+        nothing, however often it is repeated.
 
         Args:
             plan_doc_id: The plan document.
@@ -1122,11 +1174,15 @@ class PlanExecutionCoordinator:
                 plan_doc_id,
             )
             return
-        try:
-            verdict = check_finalization(doc, request)
-            requested_token = int(doc.get("run_token", 0))
-        except (TypeError, ValueError) as exc:
-            raise still_pending(f"the plan cannot be judged ({exc})") from exc
+        verdict = check_finalization(doc, request)
+        if (
+            verdict is not None
+            and verdict.status is FinalizationStatus.INVALID_CONTROL_STATE
+        ):
+            raise still_pending(
+                f"recording it is refused ({verdict.message}); not executing the "
+                "plan until it is recorded or superseded"
+            )
         if verdict is not None:
             del self._pending[plan_doc_id]
             self._logger.warning(
@@ -1135,6 +1191,8 @@ class PlanExecutionCoordinator:
                 verdict.message,
             )
             return
+        requested_token = token_pair(doc).run
+        assert requested_token is not None  # judged above: the pair is valid
         if requested_token <= request.run_token:
             raise still_pending(
                 "not executing the plan again; a newer run request retries the "
@@ -1162,6 +1220,12 @@ class PlanExecutionCoordinator:
                 f"recording it failed again, so run_token {requested_token} "
                 "waits; only a newer run request retries it again"
             )
+        if final.status is FinalizationStatus.INVALID_CONTROL_STATE:
+            raise still_pending(
+                f"recording it was refused ({final.message}), so run_token "
+                f"{requested_token} waits; only a newer run request retries it "
+                "again"
+            )
         del self._pending[plan_doc_id]
 
     async def _finalize(
@@ -1169,13 +1233,17 @@ class PlanExecutionCoordinator:
     ) -> FinalizationResult | None:
         """Record a finished request, retrying within the bound.
 
+        Only a lost race and a retryable store failure are retried. Every
+        other result is returned at once, including INVALID_CONTROL_STATE:
+        retrying cannot succeed until the plan's tokens change.
+
         Args:
             request: The finalization to record.
             cancel_event: The slot's cooperative cancellation signal.
 
         Returns:
-            FinalizationResult | None: The recorded or SUPERSEDED result; None
-            if no attempt resolved it.
+            FinalizationResult | None: The recorded, SUPERSEDED or
+            INVALID_CONTROL_STATE result; None if no attempt resolved it.
         """
         what = (
             f"finalizing execution '{request.execution_id}' of plan "

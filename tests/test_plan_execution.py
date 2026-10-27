@@ -194,10 +194,13 @@ class ConsumptionScenarios:
         # A stored document can carry anything as a step ID, and reading the
         # plan keeps it. Its rejection must still be reported and, for a
         # continuation request, recorded like any other preflight rejection.
+        # A null step ID is a missing execution field instead, which
+        # admission refuses before deserializing; see
+        # tests/test_plan_execution_controls.py.
         cases = [
             (policy, step_id)
             for policy in POLICIES
-            for step_id in (["bad"], {"bad": 1}, None)
+            for step_id in (["bad"], {"bad": 1})
         ]
         for index, (policy, step_id) in enumerate(cases):
             plan_id = f"{PLAN_ID}_malformed_{index}"

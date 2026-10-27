@@ -30,6 +30,7 @@ from tests.plan_store_support import (
     make_plan,
 )
 from yggdrasil.contract import PLAN_DOCUMENT
+from yggdrasil.contract.controls import MAX_TOKEN, token_pair
 from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY
@@ -68,6 +69,21 @@ def _document(**overrides: Any) -> dict[str, Any]:
     doc["_rev"] = "1"
     doc.update(overrides)
     return doc
+
+
+# Stands for a field removed from a document.
+ABSENT = object()
+
+
+def _changed(doc: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    """A copy of doc with fields replaced; ABSENT removes one."""
+    changed = copy.deepcopy(doc)
+    for key, value in fields.items():
+        if value is ABSENT:
+            del changed[key]
+        else:
+            changed[key] = value
+    return changed
 
 
 class TestPlanGeneration(ConformingBuilders):
@@ -361,6 +377,7 @@ class TestFinalizationResult(ConformingBuilders):
             FinalizationStatus.COMMITTED,
             FinalizationStatus.ALREADY_COMMITTED,
             FinalizationStatus.CONFLICT,
+            FinalizationStatus.INVALID_CONTROL_STATE,
         ):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 FinalizationResult(
@@ -389,8 +406,16 @@ class TestFinalizationResult(ConformingBuilders):
                 FinalizationStatus.ALREADY_COMMITTED: True,
                 FinalizationStatus.CONFLICT: False,
                 FinalizationStatus.SUPERSEDED: False,
+                FinalizationStatus.INVALID_CONTROL_STATE: False,
             },
         )
+
+    def test_invalid_control_state_is_neither_recorded_nor_superseded(self):
+        result = FinalizationResult(
+            status=FinalizationStatus.INVALID_CONTROL_STATE, message="x"
+        )
+        self.assertFalse(result.recorded)
+        self.assertIsNone(result.reason)
 
 
 class TestCheckFinalization(ConformingBuilders):
@@ -433,9 +458,109 @@ class TestCheckFinalization(ConformingBuilders):
         result = check_finalization(doc, self.request)
         self.assertEqual(result.reason, SupersessionReason.GENERATION_CHANGED)
 
-    def test_unreadable_executed_token_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "unreadable executed_run_token"):
-            check_finalization(_document(executed_run_token="soon"), self.request)
+    def test_unreadable_executed_token_is_invalid_control_state(self):
+        result = check_finalization(_document(executed_run_token="soon"), self.request)
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertIn(
+            "executed_run_token 'soon' is a str, not a JSON integer", result.message
+        )
+
+    def test_every_invalid_stored_pair_is_invalid_control_state(self):
+        cases = {
+            "run_token missing": {"run_token": ABSENT},
+            "executed_run_token missing": {"executed_run_token": ABSENT},
+            "run_token null": {"run_token": None},
+            "run_token a string": {"run_token": "0"},
+            "run_token a float": {"run_token": 0.0},
+            "run_token a boolean": {"run_token": False},
+            "executed_run_token a boolean": {"executed_run_token": False},
+            "executed_run_token below -1": {"executed_run_token": -2},
+            "run_token above the maximum": {"run_token": MAX_TOKEN + 1},
+            "run_token too long to show": {"run_token": 10**5000},
+            "executed above run": {"run_token": 0, "executed_run_token": 1},
+        }
+        for case, fields in cases.items():
+            with self.subTest(case=case):
+                result = check_finalization(_changed(self.doc, **fields), self.request)
+                self.assertEqual(
+                    result.status, FinalizationStatus.INVALID_CONTROL_STATE
+                )
+                self.assertIsNone(result.reason)
+                self.assertFalse(result.recorded)
+                for problem in token_pair(_changed(self.doc, **fields)).problems:
+                    self.assertIn(problem, result.message)
+
+    def test_hostile_stored_values_never_make_the_judgment_raise(self):
+        huge = 10**5000
+        cases = {
+            "authority": {"execution_authority": huge},
+            "owner": {"execution_owner": [huge]},
+            "generation": {"plan_generation": huge},
+            "recorder": {
+                "executed_run_token": 0,
+                "last_finalized_execution": {"execution_id": huge},
+            },
+        }
+        for case, fields in cases.items():
+            with self.subTest(case=case):
+                result = check_finalization(_changed(self.doc, **fields), self.request)
+                self.assertEqual(result.status, FinalizationStatus.SUPERSEDED)
+                self.assertLess(len(result.message), 600)
+
+    # ----- the pair the write would produce -----
+
+    def admitted_at(self, run_token: int) -> ExecutionFinalization:
+        """A request admitted from this plan at run_token."""
+        return finalization_for(_document(run_token=run_token))
+
+    def test_a_write_that_would_leave_executed_above_run_is_refused(self):
+        request = self.admitted_at(5)
+        lowered = _document(run_token=4, executed_run_token=-1)
+
+        result = check_finalization(lowered, request)
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertIsNone(result.reason)
+        self.assertIn("run_token 4 / executed_run_token -1", result.message)
+        self.assertIn("recording run_token 5 as executed", result.message)
+        self.assertIn("run_token 4 / executed_run_token 5", result.message)
+        self.assertIn("executed_run_token 5 is above run_token 4", result.message)
+
+    def test_a_lowered_run_token_already_executed_is_refused_too(self):
+        request = self.admitted_at(5)
+        result = check_finalization(
+            _document(run_token=4, executed_run_token=4), request
+        )
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertIn("run_token 4 / executed_run_token 5", result.message)
+
+    def test_the_admitted_pair_is_written(self):
+        request = self.admitted_at(5)
+        for run_token in (5, 6):
+            with self.subTest(run_token=run_token):
+                doc = _document(run_token=run_token, executed_run_token=-1)
+                self.assertIsNone(check_finalization(doc, request))
+
+    # ----- precedence -----
+
+    def test_a_regeneration_is_judged_before_broken_tokens(self):
+        doc = _document(plan_generation="g2", run_token="soon")
+        result = check_finalization(doc, self.request)
+        self.assertEqual(result.reason, SupersessionReason.GENERATION_CHANGED)
+
+    def test_broken_tokens_are_judged_before_a_changed_authority(self):
+        broken = _document(executed_run_token="soon", execution_authority="run_once")
+        result = check_finalization(broken, self.request)
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+
+        repaired = _document(executed_run_token=-1, execution_authority="run_once")
+        result = check_finalization(repaired, self.request)
+        self.assertEqual(result.reason, SupersessionReason.AUTHORITY_CHANGED)
+
+    def test_broken_tokens_are_judged_before_a_recorded_completion(self):
+        doc = self.committed(self.request, run_token="0")
+        result = check_finalization(doc, self.request)
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
 
 
 class _InMemoryPlans:
@@ -529,6 +654,54 @@ class TestFinalizeExecutionDriver(ConformingBuilders):
         for field, value in written.items():
             with self.subTest(field=field):
                 self.assertTrue(is_canonical(value), value)
+
+    def test_invalid_stored_tokens_are_refused_without_writing(self):
+        stored = _document(executed_run_token="soon")
+        plans = _InMemoryPlans(stored)
+
+        with self.assertLogs(LOGGER, level="ERROR") as logs:
+            result = finalize_execution(
+                self.request, fetch=plans.fetch, replace=plans.replace, logger=LOGGER
+            )
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertEqual((plans.fetches, plans.replaces), (1, 0))
+        self.assertEqual(plans.doc, stored)
+        self.assertIn(result.message, "\n".join(logs.output))
+
+    def test_a_write_that_would_leave_executed_above_run_is_not_made(self):
+        request = finalization_for(_document(run_token=5))
+        lowered = _document(run_token=4)
+        plans = _InMemoryPlans(lowered)
+
+        result = finalize_execution(
+            request, fetch=plans.fetch, replace=plans.replace, logger=LOGGER
+        )
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertEqual((plans.fetches, plans.replaces), (1, 0))
+        self.assertEqual(plans.doc, lowered)
+
+    def test_tokens_lowered_between_read_and_write_are_refused_on_the_reread(self):
+        admitted = _document(run_token=5)
+        request = finalization_for(admitted)
+        plans = _InMemoryPlans(admitted)
+
+        def lower_the_run_token(p: _InMemoryPlans) -> None:
+            assert p.doc is not None
+            p.doc = {**p.doc, "run_token": 4, "executed_run_token": -1, "_rev": "2"}
+
+        plans.before_replace.append(lower_the_run_token)
+
+        result = finalize_execution(
+            request, fetch=plans.fetch, replace=plans.replace, logger=LOGGER
+        )
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertIn("run_token 4 / executed_run_token 5", result.message)
+        # The one replace was the write the conflict rejected; nothing landed.
+        self.assertEqual((plans.fetches, plans.replaces), (2, 1))
+        self.assertEqual(plans.doc, {**admitted, "run_token": 4, "_rev": "2"})
 
     def test_storage_failure_propagates(self):
         plans = _InMemoryPlans(self.doc)

@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from yggdrasil.contract.controls import EXECUTED_RUN_TOKEN_FIELD, token_pair
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY
 from yggdrasil.flow.outcomes import ExecutionOutcome, TerminationReason
@@ -158,12 +160,18 @@ class FinalizationStatus(str, Enum):
             state.
         SUPERSEDED: The request can never be finalized, for the reason given.
             Nothing was written; retrying cannot succeed.
+        INVALID_CONTROL_STATE: The plan's execution tokens are not a valid
+            pair as read, or recording this completion would make them
+            invalid: an executed token above the run token it leaves in
+            place. Nothing was written; retrying cannot succeed until the
+            document changes. The request is neither recorded nor superseded.
     """
 
     COMMITTED = "committed"
     ALREADY_COMMITTED = "already_committed"
     CONFLICT = "conflict"
     SUPERSEDED = "superseded"
+    INVALID_CONTROL_STATE = "invalid_control_state"
 
 
 class SupersessionReason(str, Enum):
@@ -421,28 +429,6 @@ class ExecutionFinalization:
         return {**self.identity(), "finalized_at": finalized_at, "report": self.report}
 
 
-def _executed_token(doc: dict[str, Any]) -> int:
-    """Read a plan document's executed token, defaulting to never executed.
-
-    Args:
-        doc: A persisted plan document.
-
-    Returns:
-        int: The executed run token, or -1 if the document has none.
-
-    Raises:
-        ValueError: If the stored value is not an integer.
-    """
-    value = doc.get("executed_run_token", -1)
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"Plan '{doc.get('_id', '<unknown>')}' has an unreadable "
-            f"executed_run_token {value!r}; refusing to finalize over it"
-        ) from exc
-
-
 def _describe(request: ExecutionFinalization) -> str:
     """Name a finalization request for log and result messages."""
     return (
@@ -462,6 +448,20 @@ def _superseded(
     )
 
 
+def _invalid_control_state(
+    request: ExecutionFinalization, detail: str
+) -> FinalizationResult:
+    """Build an INVALID_CONTROL_STATE result for request."""
+    return FinalizationResult(
+        status=FinalizationStatus.INVALID_CONTROL_STATE,
+        message=(
+            f"Cannot finalize {_describe(request)}: {detail}; nothing was "
+            "written, and the result cannot be recorded until the plan's "
+            "tokens change"
+        ),
+    )
+
+
 def check_finalization(
     doc: dict[str, Any], request: ExecutionFinalization
 ) -> FinalizationResult | None:
@@ -469,16 +469,26 @@ def check_finalization(
 
     The checks run in this order:
 
-    1. The document records this exact completion (every field of
-       :meth:`ExecutionFinalization.identity`) under the captured generation,
-       and its executed token equals the captured token: ALREADY_COMMITTED.
-       This comes first because a recorded result stays true even if the
-       plan's authority changed after it was written.
-    2. The generation differs from the captured one: SUPERSEDED.
-    3. The authority or owner differs from the captured one: SUPERSEDED.
-    4. The executed token already reaches the captured token: SUPERSEDED.
+    1. The generation differs from the captured one: SUPERSEDED. This comes
+       first so that a regenerated plan always settles the request, whatever
+       its tokens say.
+    2. The stored execution tokens are not a valid pair under the strict
+       token rule (:func:`~yggdrasil.contract.controls.token_pair`):
+       INVALID_CONTROL_STATE. Nothing else is concluded from tokens that
+       cannot be read.
+    3. The document records this exact completion (every field of
+       :meth:`ExecutionFinalization.identity`), and its executed token equals
+       the captured token: ALREADY_COMMITTED. This comes before the authority
+       because a recorded result stays true even if the plan's authority
+       changed after it was written.
+    4. The authority or owner differs from the captured one: SUPERSEDED.
+    5. The executed token already reaches the captured token: SUPERSEDED.
        Another execution, or another result, finalized this request or a
        newer one.
+    6. The pair the write would produce, the stored run token with the
+       captured token as executed, is not a valid pair:
+       INVALID_CONTROL_STATE. Writing would leave an executed token above
+       the run token, as when the run token was lowered after admission.
 
     Args:
         doc: The plan document as just read.
@@ -487,17 +497,28 @@ def check_finalization(
     Returns:
         FinalizationResult | None: The resolution when the completion must not
         be written; None when the request is valid and not yet recorded.
-
-    Raises:
-        ValueError: If the document's executed_run_token is not an integer.
+        Never raises on stored content.
     """
     generation = plan_generation_of(doc)
-    executed = _executed_token(doc)
-    record = doc.get(LAST_FINALIZED_EXECUTION_FIELD)
+    if generation != request.plan_generation:
+        return _superseded(
+            request,
+            SupersessionReason.GENERATION_CHANGED,
+            f"the plan's generation is now {describe_recorded(generation)}",
+        )
 
+    tokens = token_pair(doc)
+    if not tokens.valid:
+        return _invalid_control_state(
+            request,
+            f"the plan's tokens are not a valid pair ({'; '.join(tokens.problems)})",
+        )
+    executed = tokens.executed
+    assert executed is not None  # a valid pair has both tokens
+
+    record = doc.get(LAST_FINALIZED_EXECUTION_FIELD)
     if (
-        generation == request.plan_generation
-        and executed == request.run_token
+        executed == request.run_token
         and isinstance(record, dict)
         and all(record.get(key) == value for key, value in request.identity().items())
     ):
@@ -505,27 +526,34 @@ def check_finalization(
             status=FinalizationStatus.ALREADY_COMMITTED,
             message=f"{_describe(request)} is already finalized",
         )
-    if generation != request.plan_generation:
-        return _superseded(
-            request,
-            SupersessionReason.GENERATION_CHANGED,
-            f"the plan's generation is now {generation!r}",
-        )
     authority = doc.get("execution_authority")
     owner = doc.get("execution_owner")
     if (authority, owner) != (request.execution_authority, request.execution_owner):
         return _superseded(
             request,
             SupersessionReason.AUTHORITY_CHANGED,
-            f"execution authority/owner is now {authority!r}/{owner!r}, captured "
-            f"as {request.execution_authority!r}/{request.execution_owner!r}",
+            f"execution authority/owner is now {describe_recorded(authority)}/"
+            f"{describe_recorded(owner)}, captured as "
+            f"{request.execution_authority!r}/{request.execution_owner!r}",
         )
     if executed >= request.run_token:
+        recorder = record.get("execution_id") if isinstance(record, dict) else None
         return _superseded(
             request,
             SupersessionReason.REQUEST_ALREADY_FINALIZED,
             f"executed_run_token is already {executed}, recorded by "
-            f"{record.get('execution_id') if isinstance(record, dict) else None!r}",
+            f"{describe_recorded(recorder)}",
+        )
+
+    produced = token_pair({**doc, EXECUTED_RUN_TOKEN_FIELD: request.run_token})
+    if not produced.valid:
+        return _invalid_control_state(
+            request,
+            f"the plan's tokens are run_token {tokens.run} / executed_run_token "
+            f"{executed}, and recording run_token {request.run_token} as executed "
+            f"would leave run_token {tokens.run} / executed_run_token "
+            f"{request.run_token}, which is not a valid pair "
+            f"({'; '.join(produced.problems)})",
         )
     return None
 
@@ -559,8 +587,18 @@ def build_finalized_document(
 
 
 def _logged(logger: logging.Logger, result: FinalizationResult) -> FinalizationResult:
-    """Log a finalization result at a level matching its status, and return it."""
-    level = logging.INFO if result.recorded else logging.WARNING
+    """Log a finalization result at a level matching its status, and return it.
+
+    A recorded result is INFO. Invalid control state is ERROR: a finished
+    request cannot be recorded until someone changes the plan's tokens. Any
+    other result is WARNING.
+    """
+    if result.recorded:
+        level = logging.INFO
+    elif result.status is FinalizationStatus.INVALID_CONTROL_STATE:
+        level = logging.ERROR
+    else:
+        level = logging.WARNING
     logger.log(level, "%s", result.message)
     return result
 
@@ -582,9 +620,11 @@ def finalize_execution(
 
     If the write loses a race, the document is read and judged again, so the
     result reports what the newer state means: a supersession, a completion
-    that already landed, or a CONFLICT for a request that is still valid.
-    Nothing is retried here. A caller that retries CONFLICT or PlanStoreError
-    owns the retry bound and backoff, so retries never multiply across layers.
+    that already landed, tokens that are no longer a valid pair or would be
+    made invalid by the write, or a CONFLICT for a request that is still
+    valid. Nothing is retried here. A caller that retries CONFLICT or
+    PlanStoreError owns the retry bound and backoff, so retries never multiply
+    across layers.
 
     Args:
         request: The finished request to record.
@@ -594,12 +634,12 @@ def finalize_execution(
         now: ISO-8601 UTC finalization time; defaults to the current time.
 
     Returns:
-        FinalizationResult: COMMITTED, ALREADY_COMMITTED, CONFLICT or SUPERSEDED.
+        FinalizationResult: COMMITTED, ALREADY_COMMITTED, CONFLICT, SUPERSEDED
+        or INVALID_CONTROL_STATE.
 
     Raises:
         PlanStoreError: If the backend fails. A failed write may still have
             landed; calling again reports that as ALREADY_COMMITTED.
-        ValueError: If the document's executed_run_token is not an integer.
     """
     doc = fetch(request.plan_id)
     if doc is None:
