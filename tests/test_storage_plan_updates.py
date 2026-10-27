@@ -538,8 +538,8 @@ class TestCheckFinalization(ConformingBuilders):
                 self.assertEqual(result.reason, SupersessionReason.AUTHORITY_CHANGED)
                 self.assertIn(f"captured as 'daemon'/{shown}", result.message)
                 self.assertLess(len(result.message), 600)
-                # Owners are compared, not their renderings: a plan that still
-                # carries the captured owner is written.
+                # Owners are compared, not their renderings: against a plan
+                # that still carries the captured owner, finalization is allowed.
                 self.assertIsNone(check_finalization(captured, request))
 
     # ----- the pair the write would produce -----
