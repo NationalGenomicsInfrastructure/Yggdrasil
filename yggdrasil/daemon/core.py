@@ -782,7 +782,7 @@ class YggdrasilCore:
             "│ Status:     %s\n"
             "│ Origin:     %s\n"
             "│ Updated:    %s\n"
-            "│ Run Token:  %d (executed: %d)\n"
+            "│ Run Token:  %s (executed: %s)\n"
             "╰───────────────────────────────────────────────────────────╯",
             plan_doc_id,
             summary["status"],

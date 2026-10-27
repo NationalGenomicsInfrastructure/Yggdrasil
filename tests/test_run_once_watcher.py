@@ -178,6 +178,54 @@ class TestCheckPlanOverwrite(unittest.TestCase):
         self.assertTrue(should_continue)
 
 
+class TestCheckPlanOverwriteDisplay(unittest.TestCase):
+    """The existing plan's summary is shown as stored, never converted."""
+
+    def setUp(self):
+        """Set up a fresh core with a mocked plan store."""
+        SingletonMeta._instances.clear()
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
+        self.storage_patcher.start()
+        self.mock_plan_dbm = MagicMock()
+
+    def tearDown(self):
+        """Clean up singleton."""
+        self.storage_patcher.stop()
+        SingletonMeta._instances.clear()
+
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
+    def test_tokens_that_are_not_integers_are_shown_as_recorded(
+        self, mock_init_db, mock_engine, mock_emitter, mock_ops
+    ):
+        """A string, float or boolean token is shown verbatim, not converted."""
+        core = YggdrasilCore({"work_root": "/tmp/ygg_test"})
+        core.plan_dbm = self.mock_plan_dbm
+        for run_token, executed_run_token, shown in (
+            ("5", -1, "Run Token:  5 (executed: -1)"),
+            (5.7, 4.0, "Run Token:  5.7 (executed: 4.0)"),
+            (True, False, "Run Token:  True (executed: False)"),
+        ):
+            with self.subTest(shown=shown):
+                self.mock_plan_dbm.get_plan_summary.return_value = {
+                    "status": "approved",
+                    "execution_authority": "daemon",
+                    "updated_at": "2026-10-26T12:00:00Z",
+                    "run_token": run_token,
+                    "executed_run_token": executed_run_token,
+                }
+
+                with self.assertLogs(core._logger, level="WARNING") as logs:
+                    _, should_continue = core._check_plan_overwrite(
+                        "pln_test_123", force=False
+                    )
+
+                self.assertFalse(should_continue)
+                self.assertIn(shown, logs.records[0].getMessage())
+
+
 class TestRunOnceWithWatcher(unittest.TestCase):
     """Tests for run_once_with_watcher() method."""
 
