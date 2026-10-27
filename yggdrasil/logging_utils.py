@@ -103,6 +103,8 @@ class DeduplicatingHandler(logging.Handler):
     - Duplicates: suppressed (only for console handlers)
     - On new message: emits summary "↑ message repeated N times" if N > 1
     - File handlers: always emit all messages (no suppression)
+    - A record whose message cannot be built goes to handleError() and is
+      dropped, instead of raising into the logging caller
 
     Important: this wrapper MUST NOT bypass the wrapped handler's formatter.
     We forward via wrapped_handler.handle(record), not .emit(record).
@@ -130,11 +132,28 @@ class DeduplicatingHandler(logging.Handler):
         return logging.makeLogRecord(d)
 
     def emit(self, record: logging.LogRecord) -> None:
-        # Expand %-formatting safely, then truncate.
-        original_msg = record.getMessage()
-        truncated_msg = _truncate_long_sequences(original_msg)
+        """Forward record to the wrapped handler, suppressing repeats if enabled.
 
-        out_record = self._clone_record_with_message(record, truncated_msg)
+        Building the message can fail: the arguments may not fit the format,
+        or one may not convert to text. Instead of raising into the code that
+        logged, the record then goes to :meth:`handleError`, logging's own
+        error policy. That reports the failure on stderr while
+        ``logging.raiseExceptions`` is true, and may stay silent otherwise.
+        The record is not forwarded, and the suppression state is left as it
+        was.
+
+        Args:
+            record: The record to forward.
+        """
+        # Expand %-formatting, then truncate.
+        try:
+            original_msg = record.getMessage()
+            truncated_msg = _truncate_long_sequences(original_msg)
+
+            out_record = self._clone_record_with_message(record, truncated_msg)
+        except Exception:
+            self.handleError(record)
+            return
 
         # New message: optionally flush summary, then emit new record
         if truncated_msg != self.last_message:
