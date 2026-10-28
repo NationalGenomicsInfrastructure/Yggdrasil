@@ -138,7 +138,6 @@ configurations
 yggdrasil_workspace
 implementation_plans
 docs/design/plans
-docs/design/*/plans
 
 # Local developer-only utilities (not part of the distributed project)
 tools/
