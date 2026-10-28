@@ -53,6 +53,7 @@ from typing import Any, Final, Literal
 
 from yggdrasil.errors import InternalStorageConfigurationError
 from yggdrasil.flow.model import Plan
+from yggdrasil.flow.utils.ygg_time import utcnow_iso
 from yggdrasil.logging_utils import custom_logger
 from yggdrasil.storage.config import SQLiteInternalStorageConfig
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
@@ -62,7 +63,6 @@ from yggdrasil.storage.plan_documents import (
     json_safe,
     plan_model_from_document,
     plan_summary_from_document,
-    utc_now_iso,
     validate_execution_authority,
 )
 from yggdrasil.storage.plan_eligibility import is_plan_eligible
@@ -237,7 +237,7 @@ class SQLiteInternalStore:
                     conn.execute(
                         "INSERT OR IGNORE INTO store_metadata (key, value) "
                         "VALUES (?, ?)",
-                        ("created_at", utc_now_iso()),
+                        ("created_at", utcnow_iso()),
                     )
                     conn.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
                     conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -439,7 +439,7 @@ class SQLiteInternalStore:
         payload.pop("_rev", None)
         payload.setdefault("_id", doc_id)
         body_json = json.dumps(json_safe(payload), sort_keys=True)
-        now = utc_now_iso()
+        now = utcnow_iso()
 
         conn = self._connect()
         try:
@@ -495,7 +495,7 @@ class SQLiteInternalStore:
         bump_plan_seq: bool = False,
     ) -> bool:
         """Tombstone a document. Returns False if it does not exist."""
-        now = utc_now_iso()
+        now = utcnow_iso()
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -541,7 +541,7 @@ class SQLiteInternalStore:
         Returns:
             False if the document is missing or tombstoned; otherwise True.
         """
-        now = utc_now_iso()
+        now = utcnow_iso()
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")

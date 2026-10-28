@@ -48,7 +48,6 @@ from yggdrasil.storage.plan_documents import (
     new_plan_generation,
     plan_generation_of,
     plan_summary_from_document,
-    utc_now_iso,
 )
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
@@ -181,9 +180,6 @@ class TestBuiltDocumentContract(ConformingBuilders):
         doc = build_plan_document(make_plan(), "test_realm", dict(SCOPE))
         self.assertTrue(is_canonical(doc["created_at"]), doc["created_at"])
         self.assertEqual(doc["updated_at"], doc["created_at"])
-
-    def test_the_formatter_is_canonical(self):
-        self.assertTrue(is_canonical(utc_now_iso()))
 
 
 class TestFinishesRequest(ConformingBuilders):

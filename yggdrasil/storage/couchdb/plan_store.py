@@ -27,7 +27,6 @@ from yggdrasil.storage.plan_documents import (
     json_safe,
     plan_model_from_document,
     plan_summary_from_document,
-    utc_now_iso,
     validate_execution_authority,
 )
 from yggdrasil.storage.plan_updates import (
@@ -46,12 +45,6 @@ __all__ = ["PlanDBManager", "VALID_EXECUTION_AUTHORITIES"]
 # transient, so disabling its retries does not change which failures are
 # considered worth another attempt — only who decides to make one.
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-
-# Backwards-compatible aliases; canonical definitions live in
-# yggdrasil/storage/plan_documents.py, shared with the SQLite backend.
-_json_safe = json_safe
-_validate_execution_authority = validate_execution_authority
-_utc_now_iso = utc_now_iso
 
 
 class PlanDBManager(CouchDBHandler):

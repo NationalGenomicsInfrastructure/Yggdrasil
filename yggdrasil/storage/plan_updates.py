@@ -42,11 +42,11 @@ from yggdrasil.contract.versions import SUPPORTED, UNVERSIONED, VersionInfo, ver
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY
 from yggdrasil.flow.outcomes import ExecutionOutcome, TerminationReason
+from yggdrasil.flow.utils.ygg_time import utcnow_iso
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
 from yggdrasil.storage.plan_documents import (
     LAST_FINALIZED_EXECUTION_FIELD,
     plan_generation_of,
-    utc_now_iso,
     validate_execution_authority,
 )
 
@@ -672,7 +672,7 @@ def finalize_execution(
     if verdict is not None:
         return _logged(logger, verdict)
 
-    finalized = build_finalized_document(doc, request, now=now or utc_now_iso())
+    finalized = build_finalized_document(doc, request, now=now or utcnow_iso())
     try:
         replace(request.plan_id, finalized, str(doc["_rev"]))
     except RevisionConflictError:

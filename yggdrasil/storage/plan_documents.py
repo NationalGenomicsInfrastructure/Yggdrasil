@@ -89,20 +89,6 @@ def validate_execution_authority(authority: str) -> None:
         )
 
 
-def utc_now_iso() -> str:
-    """Return the current UTC time in the canonical contract spelling.
-
-    The spelling is RFC 3339 to the whole second, ending in ``Z``
-    (``2026-10-22T10:00:00Z``; see ``yggdrasil/contract/timestamps.py``). It
-    delegates to ``ygg_time.utcnow_iso``, so plan documents, events and
-    snapshots share one formatter.
-
-    Returns:
-        str: The current time, such as ``2026-10-22T10:00:00Z``.
-    """
-    return utcnow_iso()
-
-
 def new_plan_generation() -> str:
     """Return a fresh, globally unique plan generation ID.
 
@@ -240,7 +226,7 @@ def build_plan_document(
             there is one.
         now: Timestamp override for ``updated_at``, and for ``created_at``
             when there is no existing document, written as given; defaults
-            to utc_now_iso().
+            to utcnow_iso().
         plan_generation: Generation ID override; defaults to a fresh one from
             new_plan_generation().
 
@@ -257,7 +243,7 @@ def build_plan_document(
     if not doc_id:
         raise ValueError("plan.plan_id is required for persistence")
 
-    timestamp = now or utc_now_iso()
+    timestamp = now or utcnow_iso()
     created_at = timestamp if existing is None else check_replaceable(doc_id, existing)
 
     plan_doc: dict[str, Any] = {
