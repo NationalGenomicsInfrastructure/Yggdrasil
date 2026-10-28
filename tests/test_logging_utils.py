@@ -646,11 +646,12 @@ def _record(msg: str, *args: Any, **attributes: Any) -> logging.LogRecord:
 
 
 class TestDeduplicatingHandler(unittest.TestCase):
-    """A record whose message cannot be built goes to handleError(), not the caller.
+    """A record whose message cannot be built is passed to handleError().
 
-    handleError() follows logging's own error policy. Every other record
-    reaches the wrapped handler as before. Each test covers both modes: the
-    console's, which suppresses repeats, and the file's, which does not.
+    handleError() follows logging's own error policy, and the record is not
+    forwarded. Every other record reaches the wrapped handler as before.
+    Each test covers both modes: the console's, which suppresses repeats,
+    and the file's, which does not.
     """
 
     def setUp(self):

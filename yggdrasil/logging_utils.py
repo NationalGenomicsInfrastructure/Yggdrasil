@@ -103,8 +103,8 @@ class DeduplicatingHandler(logging.Handler):
     - Duplicates: suppressed (only for console handlers)
     - On new message: emits summary "↑ message repeated N times" if N > 1
     - File handlers: always emit all messages (no suppression)
-    - A record whose message cannot be built goes to handleError() and is
-      dropped, instead of raising into the logging caller
+    - A record whose message cannot be built is passed to handleError(),
+      following logging's error policy, and is not forwarded
 
     Important: this wrapper MUST NOT bypass the wrapped handler's formatter.
     We forward via wrapped_handler.handle(record), not .emit(record).
@@ -135,12 +135,14 @@ class DeduplicatingHandler(logging.Handler):
         """Forward record to the wrapped handler, suppressing repeats if enabled.
 
         Building the message can fail: the arguments may not fit the format,
-        or one may not convert to text. Instead of raising into the code that
-        logged, the record then goes to :meth:`handleError`, logging's own
-        error policy. That reports the failure on stderr while
-        ``logging.raiseExceptions`` is true, and may stay silent otherwise.
-        The record is not forwarded, and the suppression state is left as it
-        was.
+        or one may not convert to text. The record is then passed to
+        :meth:`handleError`, which follows logging's error policy: it reports
+        the failure on stderr while ``logging.raiseExceptions`` is true, and
+        may stay silent otherwise. The record is not forwarded, and the
+        duplicate-suppression state is left unchanged. While
+        ``logging.raiseExceptions`` is true, :meth:`handleError` may itself
+        raise ``RecursionError``, as it does for an argument nested too
+        deeply to print.
 
         Args:
             record: The record to forward.
