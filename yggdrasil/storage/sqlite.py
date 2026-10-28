@@ -70,7 +70,7 @@ from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     FinalizationResult,
     finalize_execution,
-    initialize_plan_generation,
+    require_storage_envelope,
 )
 from yggdrasil.storage.protocols import InternalStorageBundle
 from yggdrasil.watchers.backends.base import Checkpoint, CheckpointStore, RawWatchEvent
@@ -659,7 +659,7 @@ class SQLitePlanStore:
 
     Document shapes, eligibility, regeneration, and token semantics are
     shared with the CouchDB backend via ``yggdrasil/storage/plan_documents.py``,
-    and generation initialization and finalization via
+    and the strict read's storage envelope and finalization via
     ``yggdrasil/storage/plan_updates.py``. Every write that replaces a plan
     document's content is conditioned on the state it was derived from.
     """
@@ -757,85 +757,23 @@ class SQLitePlanStore:
             return None
         return plan_model_from_document(doc, self._logger)
 
-    def update_executed_token(
-        self,
-        doc_id: str,
-        run_token: int,
-        *,
-        max_retries: int = 3,
-    ) -> bool:
-        """Record a successful execution of ``run_token``.
+    def read_plan_document(self, doc_id: str) -> dict[str, Any] | None:
+        """Read a plan document as stored, to decide an execution from.
 
-        Each attempt rereads the plan and writes the token conditioned on the
-        revision it read. A lost race rereads and reapplies the token to the
-        newer state, never resending the stale document, up to
-        ``max_retries`` attempts in total, matching the CouchDB backend.
-
-        This update does not check the plan generation or record an outcome;
-        :meth:`finalize_execution` does both.
-
-        Returns:
-            bool: True if the token was written; False if the plan does not
-            exist or every attempt lost a race.
-        """
-        for attempt in range(1, max_retries + 1):
-            doc = self._store.get_document(_NS_PLANS, doc_id)
-            if not doc:
-                self._logger.error("Cannot update token: plan '%s' not found", doc_id)
-                return False
-            now = utc_now_iso()
-            doc["executed_run_token"] = run_token
-            doc["last_executed_at"] = now
-            doc["updated_at"] = now
-            try:
-                self._store.put_document(
-                    _NS_PLANS,
-                    doc_id,
-                    doc,
-                    bump_plan_seq=True,
-                    expected_rev=doc["_rev"],
-                )
-            except RevisionConflictError:
-                self._logger.warning(
-                    "Conflict updating plan '%s'; retry %d/%d",
-                    doc_id,
-                    attempt,
-                    max_retries,
-                )
-                continue
-            self._logger.debug(
-                "Updated executed_run_token=%d for plan '%s'", run_token, doc_id
-            )
-            return True
-
-        self._logger.error(
-            "Failed to update plan '%s' after %d retries", doc_id, max_retries
-        )
-        return False
-
-    def ensure_plan_generation(self, doc_id: str) -> dict[str, Any] | None:
-        """Return the current plan document, giving a legacy one a generation.
-
-        See :func:`yggdrasil.storage.plan_updates.initialize_plan_generation`.
+        A plain read that writes nothing, through the same strict fetch as
+        the finalizer's reads (:meth:`_fetch_plan_document`).
 
         Args:
             doc_id: The plan document ID.
 
         Returns:
-            dict | None: The current document with its ``plan_generation``, or
-            None if the plan does not exist.
+            dict | None: The document with ``_rev``, or None if absent.
 
         Raises:
-            RevisionConflictError: If the document kept changing without
-                gaining a generation.
-            PlanStoreError: If the SQLite database fails.
+            PlanStoreError: If the SQLite database fails, or the stored body
+                is not the plan's document.
         """
-        return initialize_plan_generation(
-            doc_id,
-            fetch=self._fetch_plan_document,
-            replace=self._replace_plan_document,
-            logger=self._logger,
-        )
+        return self._fetch_plan_document(doc_id)
 
     def finalize_execution(self, request: ExecutionFinalization) -> FinalizationResult:
         """Record a finished execution request in its plan document.
@@ -849,7 +787,8 @@ class SQLitePlanStore:
             FinalizationResult: How this one attempt resolved.
 
         Raises:
-            PlanStoreError: If the SQLite database fails.
+            PlanStoreError: If the SQLite database fails, or a read finds a
+                stored body that is not the plan's document.
         """
         return finalize_execution(
             request,
@@ -859,7 +798,14 @@ class SQLitePlanStore:
         )
 
     def _fetch_plan_document(self, doc_id: str) -> dict[str, Any] | None:
-        """Fetch a live plan document for a conditional update.
+        """Fetch a live plan document strictly, for an execution decision or update.
+
+        The stored body counts as the document only when its storage envelope
+        is intact (see
+        :func:`yggdrasil.storage.plan_updates.require_storage_envelope`). The
+        read supplies ``_rev`` from the row, but a body written under this
+        key with another ``_id`` keeps that ``_id``: it is a failure, never
+        the plan's document.
 
         Args:
             doc_id: The plan document ID.
@@ -868,12 +814,14 @@ class SQLitePlanStore:
             dict | None: The document with ``_rev``, or None if absent.
 
         Raises:
-            PlanStoreError: If the SQLite database fails.
+            PlanStoreError: If the SQLite database fails, or the stored body
+                is not the plan's document.
         """
         try:
-            return self._store.get_document(_NS_PLANS, doc_id)
+            body = self._store.get_document(_NS_PLANS, doc_id)
         except sqlite3.Error as exc:
             raise _plan_store_error(doc_id, "read", exc) from exc
+        return None if body is None else require_storage_envelope(doc_id, body)
 
     def _replace_plan_document(
         self, doc_id: str, body: dict[str, Any], expected_rev: str

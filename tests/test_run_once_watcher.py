@@ -21,12 +21,13 @@ from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.outcomes import AttemptReport, StepOutcome, TerminationReason
+from yggdrasil.storage.plan_documents import build_plan_document
 from yggdrasil.storage.plan_updates import FinalizationResult, FinalizationStatus
 from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 def _run_once_plan_doc(plan_id: str, execution_owner: str) -> dict:
-    """An approved, eligible plan document owned by a run-once session."""
+    """An approved, eligible plan document owned by a run-once session, as stored."""
     plan = Plan(
         plan_id=plan_id,
         realm="test_realm",
@@ -35,17 +36,17 @@ def _run_once_plan_doc(plan_id: str, execution_owner: str) -> dict:
             StepSpec(step_id="s1", name="s1", fn_ref="tests.run_once:s1", params={})
         ],
     )
-    return {
-        "_id": plan_id,
-        "_rev": "1-test",
-        "status": "approved",
-        "run_token": 1,
-        "executed_run_token": 0,
-        "execution_authority": "run_once",
-        "execution_owner": execution_owner,
-        "plan_generation": f"generation-of-{plan_id}",
-        "plan": plan.to_dict(),
-    }
+    doc = build_plan_document(
+        plan,
+        "test_realm",
+        {"kind": "project", "id": "P1"},
+        auto_run=True,
+        execution_authority="run_once",
+        execution_owner=execution_owner,
+        plan_generation=f"generation-of-{plan_id}",
+    )
+    doc["_rev"] = "1-test"
+    return doc
 
 
 def _complete_attempt(plan: Plan, *, context: AttemptContext) -> AttemptReport:
@@ -609,7 +610,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
 
         core = YggdrasilCore(self.mock_config)
         core.engine.reserve_execution_id.return_value = _RESERVED
-        self.mock_storage.plans.ensure_plan_generation.side_effect = docs.get
+        self.mock_storage.plans.read_plan_document.side_effect = docs.get
         self.mock_storage.plans.finalize_execution.return_value = _COMMITTED
 
         # The first executed plan raises SIGINT (delivered to the loop's own
@@ -685,7 +686,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
             signal.raise_signal(signal.SIGINT)
             return plan_doc
 
-        self.mock_storage.plans.ensure_plan_generation.side_effect = _load_plan
+        self.mock_storage.plans.read_plan_document.side_effect = _load_plan
 
         original = signal.getsignal(signal.SIGINT)
         try:

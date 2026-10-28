@@ -154,8 +154,9 @@ def finalization_for(
 ) -> ExecutionFinalization:
     """Build the finalization of an attempt admitted from doc.
 
-    The generation, token, authority, owner and plan are captured from doc,
-    the way a caller captures an execution request from one plan snapshot.
+    The family, generation, token, authority, owner and plan are captured from
+    doc, the way a caller captures an execution request from one plan
+    snapshot.
 
     Args:
         doc: The plan document the request was admitted from.
@@ -175,7 +176,9 @@ def finalization_for(
         execution_authority=doc["execution_authority"],
         execution_owner=doc["execution_owner"],
     )
-    return ExecutionFinalization.from_attempt(context)
+    return ExecutionFinalization.from_attempt(
+        context, schema_version=doc["schema_version"]
+    )
 
 
 def continuation_plan(plan_id: str = "pln_test_P1_v1", **kwargs: Any) -> Plan:
@@ -228,10 +231,10 @@ def patch_api_exception(test: unittest.TestCase) -> None:
 class _Result:
     """Mimics the SDK's DetailedResponse: only get_result() is used."""
 
-    def __init__(self, result: dict[str, Any]) -> None:
+    def __init__(self, result: Any) -> None:
         self._result = result
 
-    def get_result(self) -> dict[str, Any]:
+    def get_result(self) -> Any:
         return self._result
 
 
@@ -250,6 +253,10 @@ class FakeCouchServer:
         fail_after_next_write: If set, the next successful write is applied
             and then this exception is raised, like a lost response.
         fail_next_read: If set, the next read raises this exception.
+        read_responses: One-shot bodies that the next reads answer with, one
+            each and in order, with a success status, in place of the stored
+            document: what a proxy or a misrouted request might return. Such a
+            read runs no after_read action.
     """
 
     def __init__(self) -> None:
@@ -258,6 +265,7 @@ class FakeCouchServer:
         self.after_read: list[Callable[[], None]] = []
         self.fail_after_next_write: Exception | None = None
         self.fail_next_read: Exception | None = None
+        self.read_responses: list[Any] = []
 
     def get_database_information(self, *, db: str) -> _Result:
         return _Result({"db_name": db})
@@ -266,6 +274,8 @@ class FakeCouchServer:
         if self.fail_next_read is not None:
             exc, self.fail_next_read = self.fail_next_read, None
             raise exc
+        if self.read_responses:
+            return _Result(copy.deepcopy(self.read_responses.pop(0)))
         doc = copy.deepcopy(self._docs.get(doc_id))
         actions, self.after_read = self.after_read, []
         for action in actions:

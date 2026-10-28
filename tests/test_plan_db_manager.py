@@ -316,107 +316,6 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertIsNone(result)
 
     # ==========================================
-    # update_executed_token Tests
-    # ==========================================
-
-    def test_update_executed_token_success(self):
-        """Test successful token update."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "_rev": "1-abc",
-            "run_token": 0,
-            "executed_run_token": -1,
-        }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
-        mock_result = Mock()
-        mock_result.get_result.return_value = {"ok": True}
-        self.manager.server.put_document.return_value = mock_result
-
-        result = self.manager.update_executed_token("pln_tenx_P12345_v1", run_token=0)
-
-        self.assertTrue(result)
-        call_kwargs = self.manager.server.put_document.call_args[1]
-        doc = call_kwargs["document"]
-        self.assertEqual(doc["executed_run_token"], 0)
-        self.assertIn("last_executed_at", doc)
-
-    def test_update_executed_token_not_found(self):
-        """Test token update when plan not found."""
-        self.manager.fetch_document_by_id = Mock(return_value=None)
-
-        result = self.manager.update_executed_token("pln_nonexistent_v1", run_token=0)
-
-        self.assertFalse(result)
-        self.manager.server.put_document.assert_not_called()
-
-    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
-    def test_update_executed_token_conflict_retry(self):
-        """Test token update retries on 409 conflict."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "_rev": "1-abc",
-            "run_token": 0,
-            "executed_run_token": -1,
-        }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
-
-        # First call: conflict, second call: success
-        mock_result_fail = Mock()
-        mock_result_fail.get_result.side_effect = MockApiException(409, "Conflict")
-        mock_result_success = Mock()
-        mock_result_success.get_result.return_value = {"ok": True}
-        self.manager.server.put_document.side_effect = [
-            mock_result_fail,
-            mock_result_success,
-        ]
-
-        result = self.manager.update_executed_token(
-            "pln_tenx_P12345_v1", run_token=0, max_retries=2
-        )
-
-        self.assertTrue(result)
-        self.assertEqual(self.manager.server.put_document.call_count, 2)
-
-    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
-    def test_update_executed_token_max_retries_exceeded(self):
-        """Test token update fails after max retries."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "_rev": "1-abc",
-            "run_token": 0,
-        }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
-        mock_result = Mock()
-        mock_result.get_result.side_effect = MockApiException(409, "Conflict")
-        self.manager.server.put_document.return_value = mock_result
-
-        result = self.manager.update_executed_token(
-            "pln_tenx_P12345_v1", run_token=0, max_retries=2
-        )
-
-        self.assertFalse(result)
-        self.assertEqual(self.manager.server.put_document.call_count, 2)
-
-    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
-    def test_update_executed_token_other_error(self):
-        """Test token update fails on non-409 error."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "_rev": "1-abc",
-            "run_token": 0,
-        }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
-        mock_result = Mock()
-        mock_result.get_result.side_effect = MockApiException(500, "Server error")
-        self.manager.server.put_document.return_value = mock_result
-
-        result = self.manager.update_executed_token("pln_tenx_P12345_v1", run_token=0)
-
-        self.assertFalse(result)
-        # Should not retry on 500
-        self.assertEqual(self.manager.server.put_document.call_count, 1)
-
-    # ==========================================
     # query_approved_pending Tests
     # ==========================================
 
@@ -743,7 +642,9 @@ class TestPlanDBManager(unittest.TestCase):
         )
         context.report.record_outcome("step_1", StepOutcome.SUCCEEDED)
         context.report.finish(TerminationReason.COMPLETED)
-        return ExecutionFinalization.from_attempt(context)
+        return ExecutionFinalization.from_attempt(
+            context, schema_version=doc["schema_version"]
+        )
 
     def _get_returns(self, *documents):
         """Queue the plan store's document reads.
@@ -969,16 +870,6 @@ class TestPlanDBManager(unittest.TestCase):
         with self.assertRaises(PlanStoreError):
             self.manager.finalize_execution(request)
 
-    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
-    def test_ensure_plan_generation_refuses_a_malformed_response(self):
-        """A generation is never assigned on top of an unreadable answer."""
-        self._get_returns(["not", "a", "document"])
-
-        with self.assertRaises(PlanStoreError):
-            self.manager.ensure_plan_generation("pln_tenx_P12345_v1")
-
-        self.manager.server.put_document.assert_not_called()
-
     def test_finalize_response_without_a_revision_is_a_plan_store_error(self):
         """A write whose new revision is unknown is not reported as committed."""
         doc = self._stored_doc()
@@ -988,43 +879,73 @@ class TestPlanDBManager(unittest.TestCase):
         with self.assertRaises(PlanStoreError):
             self.manager.finalize_execution(self._finalization(doc))
 
-    def test_ensure_plan_generation_writes_only_the_generation(self):
-        """A legacy document gains a generation at the fetched revision."""
+    # ==========================================
+    # The strict read
+    # ==========================================
+
+    def test_read_plan_document_returns_the_stored_document_without_writing(self):
+        """A plain read: the document as CouchDB returned it, and no write."""
+        doc = self._stored_doc()
+        self._get_returns(doc)
+
+        self.assertEqual(self.manager.read_plan_document(doc["_id"]), doc)
+        self.manager.server.put_document.assert_not_called()
+
+    def test_read_plan_document_reads_without_a_generation_as_stored(self):
+        """No generation is assigned to a document that has none."""
         legacy = self._stored_doc()
         del legacy["plan_generation"]
         self._get_returns(legacy)
-        self._put_returns({"ok": True, "rev": "2-def"})
 
-        doc = self.manager.ensure_plan_generation(legacy["_id"])
-
-        written = self.manager.server.put_document.call_args[1]["document"]
-        self.assertEqual(written["_rev"], "1-abc")
-        self.assertEqual(
-            {k: v for k, v in written.items() if k != "plan_generation"}, legacy
-        )
-        self.assertEqual(doc["plan_generation"], written["plan_generation"])
-        self.assertEqual(doc["_rev"], "2-def")
+        self.assertEqual(self.manager.read_plan_document(legacy["_id"]), legacy)
+        self.manager.server.put_document.assert_not_called()
 
     @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
-    def test_ensure_plan_generation_adopts_the_winner_after_409(self):
-        """Losing the race to another initializer adopts its generation."""
-        legacy = self._stored_doc()
-        del legacy["plan_generation"]
-        winner = self._stored_doc(_rev="2-xyz", plan_generation="gen-winner")
-        self._get_returns(legacy, winner)
-        self._put_returns(error=MockApiException(409, "Conflict"))
+    def test_read_plan_document_reports_only_a_404_as_missing(self):
+        """Only CouchDB's own 404 means the plan is gone."""
+        self._get_returns(MockApiException(404, "missing"))
 
-        doc = self.manager.ensure_plan_generation(legacy["_id"])
-
-        self.assertEqual(doc, winner)
-        self.manager.server.put_document.assert_called_once()
+        self.assertIsNone(self.manager.read_plan_document("pln_tenx_P12345_v1"))
 
     @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
-    def test_ensure_plan_generation_read_failure_is_a_plan_store_error(self):
-        """A failed read is a backend failure, not a missing plan."""
-        self._get_returns(MockApiException(500, "Server error"))
-        with self.assertRaises(PlanStoreError):
-            self.manager.ensure_plan_generation("pln_tenx_P12345_v1")
+    def test_read_plan_document_failures_are_classified_plan_store_errors(self):
+        """A failed read says whether another attempt could get past it."""
+        for label, (error, retryable) in self._failure_cases().items():
+            with self.subTest(label):
+                self._get_returns(error)
+
+                with self.assertRaises(PlanStoreError) as ctx:
+                    self.manager.read_plan_document("pln_tenx_P12345_v1")
+
+                self.assertIs(ctx.exception.__cause__, error)
+                self.assertEqual(ctx.exception.retryable, retryable)
+
+    def test_read_plan_document_refuses_what_is_not_the_stored_document(self):
+        """A success answer counts only with the plan's own ID and a revision.
+
+        An object-shaped error would otherwise read as an unversioned
+        document, and another document's body as this plan's.
+        """
+        doc = self._stored_doc()
+        unrevised = {k: v for k, v in doc.items() if k != "_rev"}
+        cases = {
+            "not an object": [doc],
+            "an object-shaped error": {"error": "proxy failure"},
+            "another document's body": {**doc, "_id": "pln_tenx_P99999_v1"},
+            "no revision": unrevised,
+            "an empty revision": {**doc, "_rev": ""},
+            "a revision that is not a string": {**doc, "_rev": 1},
+        }
+        for label, body in cases.items():
+            with self.subTest(label):
+                self._get_returns(body)
+
+                with self.assertRaises(PlanStoreError) as ctx:
+                    self.manager.read_plan_document(doc["_id"])
+
+                self.assertFalse(ctx.exception.retryable)
+                self.assertIn("not the plan's stored document", str(ctx.exception))
+                self.manager.server.put_document.assert_not_called()
 
 
 if __name__ == "__main__":

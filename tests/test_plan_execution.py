@@ -273,23 +273,6 @@ class ConsumptionScenarios:
                     self.assertEqual(result.status, ExecutionStatus.UNFINISHED)
                     self.assert_unconsumed(plan_id)
 
-    def test_legacy_plan_is_finalized_against_the_generation_it_is_given(self):
-        legacy = build_plan_document(
-            chain_plan(), REALM, dict(SCOPE), auto_run=True, execution_owner=None
-        )
-        del legacy["plan_generation"]
-        self.backend.raw_put(legacy)
-
-        result = self.execute()
-
-        self.assertEqual(result.status, ExecutionStatus.FINALIZED)
-        generation = self.stored()["plan_generation"]
-        self.assertTrue(generation)
-        self.assertEqual(result.report.plan_generation, generation)
-        self.assertEqual(
-            self.stored()["last_finalized_execution"]["plan_generation"], generation
-        )
-
 
 class TestConsumptionSQLite(ConsumptionScenarios, ExecutionTestCase):
     """The consumption rule against the SQLite plan store."""

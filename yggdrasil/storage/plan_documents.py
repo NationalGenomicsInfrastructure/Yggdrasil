@@ -10,8 +10,9 @@ Plan generation:
     approval changes and run-token increments keep it, while regenerating the
     plan replaces it. It is never a stable default, so a plan that is deleted
     and later recreated under the same ID cannot be mistaken for its earlier
-    version. A document written before the field existed gets one lazily, the
-    first time it is needed (see ``yggdrasil/storage/plan_updates.py``).
+    version. A document of a supported family always carries a generation,
+    and one without a usable generation is refused for execution: nothing
+    adds a generation to an existing document.
 
 Replacing a plan:
     Planning replaces the whole document in a plan's slot. Whether it may,

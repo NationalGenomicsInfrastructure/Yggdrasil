@@ -5,9 +5,12 @@ which owns everything between "this plan may be eligible" and "its result is
 recorded":
 
 1. **Admission from one snapshot.** The current plan document is read once,
-   under the plan's in-flight guard; a legacy document gets its first
-   ``plan_generation`` in that same read. Eligibility, execution authority and
-   owner, the executable plan, its failure policy, generation and run token all
+   under the plan's in-flight guard, with a plain fetch that writes nothing and
+   returns a document only when its storage envelope is intact. Its family is
+   checked before anything else: a document whose ``schema_version`` is absent,
+   invalid or names a family this release does not support is not executed
+   (``UNSUPPORTED_DOCUMENT``). Eligibility, execution authority and owner, the
+   executable plan, its failure policy, family, generation and run token all
    come from that one read, never from the watcher event that prompted it, so a
    stale event cannot combine an old approval or token with a newer plan.
 2. **Execution.** The attempt runs in a worker thread through
@@ -60,34 +63,38 @@ Cancellation:
 
 Finalization retries:
     Each attempt is one call to ``PlanStore.finalize_execution``, which rereads
-    the plan and rechecks generation, token, execution and authority before it
-    writes, so retrying never resends a stale document. A revision conflict and
-    a retryable ``PlanStoreError`` are retried, up to three attempts in all,
-    0.5 s and then 1 s apart. The waiting happens on the event loop, never in a
-    worker thread. A recorded result, a supersession and a non-retryable failure
-    end the retries at once, and so does a refusal over the plan's tokens: a
-    pair that is not valid as read, or that recording the result would make
-    invalid, can only change when the document does. Each backend bounds its
-    own calls: a CouchDB request times out after 60 s, and SQLite waits at
-    most 5 s for a lock.
+    the plan and rechecks family, generation, token, execution and authority
+    before it writes, so retrying never resends a stale document. A revision
+    conflict and a retryable ``PlanStoreError`` are retried, up to three
+    attempts in all, 0.5 s and then 1 s apart. The waiting happens on the event
+    loop, never in a worker thread. A recorded result, a supersession and a
+    non-retryable failure end the retries at once, and so does a refusal over
+    the plan's tokens: a pair that is not valid as read, or that recording the
+    result would make invalid, can only change when the document does. Each
+    backend bounds its own calls: a CouchDB request times out after 60 s, and
+    SQLite waits at most 5 s for a lock.
 
     When no attempt records the result, or recording it is refused over the
     plan's tokens, it is kept in memory as a pending finalization, and that is
     established before the plan's guard is released. While it is pending, the
-    plan is never executed again. Reading the plan alone recognizes a
-    regeneration, which ends the pending state whatever the tokens say. While
-    the tokens are not a valid pair, or recording the result would make them
-    invalid, the result stays pending. Once they are valid, a change of
-    authority, or the result turning out to be recorded after all, ends the
-    pending state too. None of this writes anything. A newer run token in the
-    same generation retries the pending finalization first, with one more
-    bounded cycle, and runs the newer request only once the old result is
-    recorded or definitively rejected. Each newer run token buys one such
-    cycle: repeated requests, for the pending run token or for one that
-    already had its cycle, change nothing and retry nothing. A pending result
-    does not survive a restart; the request is then still eligible, so it may
-    run again, and realm idempotency remains the protection against repeated
-    side effects.
+    plan is never executed again. Reading the plan alone recognizes a document
+    that is no longer of a supported family, which drops the pending result
+    with a warning: it is never recorded and never retried, and its report
+    remains in the event spool. A read whose answer is not the plan's stored
+    document says nothing about the plan and keeps the result pending. Reading
+    the plan also recognizes a regeneration, which ends the pending state
+    whatever the tokens say. While the tokens are not a valid pair, or
+    recording the result would make them invalid, the result stays pending.
+    Once they are valid, a change of authority, or the result turning out to
+    be recorded after all, ends the pending state too. None of this writes
+    anything. A newer run token in the same generation retries the pending
+    finalization first, with one more bounded cycle, and runs the newer
+    request only once the old result is recorded or definitively rejected.
+    Each newer run token buys one such cycle: repeated requests, for the
+    pending run token or for one that already had its cycle, change nothing
+    and retry nothing. A pending result does not survive a restart; the
+    request is then still eligible, so it may run again, and realm
+    idempotency remains the protection against repeated side effects.
 """
 
 from __future__ import annotations
@@ -102,12 +109,14 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, TypeVar
 
+from yggdrasil.contract import PLAN_DOCUMENT, SUPPORTED_FAMILIES
 from yggdrasil.contract.controls import (
     execution_definition_problems,
     failure_policy_of,
     token_pair,
 )
 from yggdrasil.contract.diagnostics import describe_recorded
+from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.core.engine import Engine
 from yggdrasil.daemon.worker_futures import outlast_cancellation
 from yggdrasil.flow.attempt import AttemptContext
@@ -126,6 +135,7 @@ from yggdrasil.storage.plan_updates import (
     FinalizationResult,
     FinalizationStatus,
     check_finalization,
+    describe_schema_version,
     finishes_request,
 )
 from yggdrasil.storage.protocols import PlanStore
@@ -199,6 +209,11 @@ class ExecutionStatus(str, Enum):
 
     Attributes:
         NOT_FOUND: The plan document does not exist.
+        UNSUPPORTED_DOCUMENT: The plan document's ``schema_version`` is
+            absent, invalid, or a family this process does not support. It
+            is checked before anything else the document says. Nothing ran
+            and nothing was written. A pending finalization of the plan, if
+            there was one, was dropped: it is never recorded.
         NOT_AUTHORIZED: The plan is not the caller's to execute: its execution
             authority or owner differs from the caller's claim.
         NOT_ELIGIBLE: The plan is not approved, its execution tokens are not
@@ -234,11 +249,13 @@ class ExecutionStatus(str, Enum):
             It is retained in memory, and the plan is not executed again while
             it is.
         SUPERSEDED: The attempt finished its request but recording it was
-            refused for good: the plan was regenerated or deleted, its
-            authority changed, or another execution recorded the request first.
+            refused for good: the plan was regenerated or deleted, it is no
+            longer of the family it was admitted under, its authority
+            changed, or another execution recorded the request first.
     """
 
     NOT_FOUND = "not_found"
+    UNSUPPORTED_DOCUMENT = "unsupported_document"
     NOT_AUTHORIZED = "not_authorized"
     NOT_ELIGIBLE = "not_eligible"
     DUPLICATE = "duplicate"
@@ -290,6 +307,8 @@ class _Admission:
 
     Attributes:
         plan: The executable plan.
+        schema_version: The plan document's family in that snapshot, a
+            supported one.
         plan_generation: The plan's generation in that snapshot.
         run_token: The request's run token in that snapshot.
         execution_authority: The plan's execution authority in that snapshot.
@@ -297,6 +316,7 @@ class _Admission:
     """
 
     plan: Plan
+    schema_version: int
     plan_generation: str
     run_token: int
     execution_authority: str
@@ -393,6 +413,9 @@ def _describe_attempt(report: AttemptReport) -> str:
 # Log level for each resolution; FINALIZED depends on the attempt's outcome.
 _LOG_LEVELS: dict[ExecutionStatus, int] = {
     ExecutionStatus.NOT_FOUND: logging.ERROR,
+    # Every pre-contract plan resolves this way until it is regenerated: an
+    # operator's task, not a malfunction.
+    ExecutionStatus.UNSUPPORTED_DOCUMENT: logging.WARNING,
     ExecutionStatus.NOT_AUTHORIZED: logging.INFO,
     ExecutionStatus.NOT_ELIGIBLE: logging.INFO,
     ExecutionStatus.DUPLICATE: logging.INFO,
@@ -745,10 +768,12 @@ class PlanExecutionCoordinator:
         cancel_event = slot.cancel_event
         try:
             doc = await self._read_snapshot(plan_doc_id, cancel_event)
+            self._require_supported_family(plan_doc_id, doc)
             if plan_doc_id in self._pending:
                 await self._settle_pending(plan_doc_id, doc, cancel_event)
                 # Settling may have written the plan; admit from a fresh read.
                 doc = await self._read_snapshot(plan_doc_id, cancel_event)
+                self._require_supported_family(plan_doc_id, doc)
             admission = self._admit(plan_doc_id, doc, slot.claim)
             request = (admission.plan_generation, admission.run_token)
             if request == slot.attempted:
@@ -785,16 +810,18 @@ class PlanExecutionCoordinator:
     ) -> dict[str, Any] | None:
         """Read the plan document every admission decision is taken from.
 
-        A legacy document gets its first generation in the same read, under the
-        plan's guard, so the snapshot always carries the generation it will be
-        finalized against.
+        A plain read, which writes nothing (``PlanStore.read_plan_document``).
+        A body whose storage envelope is not intact is a store failure, never
+        a document: nothing is concluded from it, so a pending finalization
+        stays pending.
 
         Args:
             plan_doc_id: The plan document.
             cancel_event: The slot's cooperative cancellation signal.
 
         Returns:
-            dict | None: The current document, or None if there is none.
+            dict | None: The current document, or None if the store confirms
+            there is none.
 
         Raises:
             _CycleStopped: ADMISSION_FAILED, if the store cannot provide it.
@@ -802,7 +829,7 @@ class PlanExecutionCoordinator:
         try:
             return await self._call_store(
                 f"reading plan '{plan_doc_id}'",
-                self._store.ensure_plan_generation,
+                self._store.read_plan_document,
                 plan_doc_id,
                 cancel_event=cancel_event,
             )
@@ -817,6 +844,60 @@ class PlanExecutionCoordinator:
                     f"execution ({type(exc).__name__}: {exc}); it stays eligible",
                 )
             ) from exc
+
+    def _require_supported_family(
+        self, plan_doc_id: str, doc: dict[str, Any] | None
+    ) -> None:
+        """Stop the cycle unless the plan document is of a supported family.
+
+        Called after every read a cycle decides from, before anything else is
+        concluded from the document: before a pending finalization is settled
+        and before admission. A missing document passes; settling and
+        admission handle it.
+
+        A document whose ``schema_version`` is absent, invalid or names a
+        family this process does not support is not executed. A pending
+        finalization of the plan is dropped with a warning: recording it would
+        write into a document this process cannot interpret, so it is never
+        recorded and never retried. Nothing is written either way.
+
+        Args:
+            plan_doc_id: The plan document.
+            doc: The document as just read, or None if there is none.
+
+        Raises:
+            _CycleStopped: UNSUPPORTED_DOCUMENT, if the document is not of a
+                supported family.
+        """
+        if doc is None:
+            return
+        version = version_of(PLAN_DOCUMENT, doc)
+        if version.state == SUPPORTED:
+            return
+        recorded = describe_schema_version(version)
+        supported = sorted(SUPPORTED_FAMILIES[PLAN_DOCUMENT])
+        pending = self._pending.pop(plan_doc_id, None)
+        if pending is not None:
+            self._logger.warning(
+                "Dropping the pending finalization of execution '%s': the "
+                "schema_version of plan '%s' is now %s, so it is %s (supported "
+                "plan-document families: %s). The result is not recorded and is "
+                "not retried; its report remains in the event spool",
+                pending.request.execution_id,
+                plan_doc_id,
+                recorded,
+                version.state,
+                supported,
+            )
+        raise _CycleStopped(
+            ExecutionResult(
+                plan_doc_id,
+                ExecutionStatus.UNSUPPORTED_DOCUMENT,
+                f"Plan '{plan_doc_id}' is not executed: its schema_version is "
+                f"{recorded}, so it is {version.state} (supported plan-document "
+                f"families: {supported}); nothing ran and nothing was written",
+            )
+        )
 
     async def _allocate_execution_id(
         self, plan_doc_id: str, plan: Plan, cancel_event: threading.Event
@@ -871,18 +952,21 @@ class PlanExecutionCoordinator:
     ) -> _Admission:
         """Capture an execution request from one plan-document snapshot.
 
-        The checks run in this order: the plan exists; it is the caller's to
-        execute; it is eligible, which includes a valid token pair; the plan
-        and each of its steps carry every execution field, and its failure
-        policy is a known one; it deserializes; it embeds its own ID; it has a
-        generation. No default ever stands in for a missing execution or
-        control field: those are checked before deserialization could supply
-        one. A refused request is not allocated an execution ID, and nothing
-        is written.
+        The snapshot's family has already been checked
+        (:meth:`_require_supported_family`) and is captured with the request.
+        The other checks run in this order: the plan exists; it is the
+        caller's to execute; it is eligible, which includes a valid token
+        pair; the plan and each of its steps carry every execution field, and
+        its failure policy is a known one; it deserializes; it embeds its own
+        ID; it has a generation. No default ever stands in for a missing
+        execution or control field: those are checked before deserialization
+        could supply one. A refused request is not allocated an execution ID,
+        and nothing is written.
 
         Args:
             plan_doc_id: The plan document.
-            doc: The snapshot, or None if the plan does not exist.
+            doc: The snapshot, of a supported family, or None if the plan does
+                not exist.
             claim: Which plans the caller may execute.
 
         Returns:
@@ -951,8 +1035,11 @@ class PlanExecutionCoordinator:
             )
         run_token = token_pair(doc).run
         assert run_token is not None  # an eligible plan's tokens are a valid pair
+        family = version_of(PLAN_DOCUMENT, doc).family
+        assert family is not None  # the family gate admits supported documents only
         return _Admission(
             plan=plan,
+            schema_version=family,
             plan_generation=generation,
             run_token=run_token,
             execution_authority=str(doc["execution_authority"]),
@@ -1042,7 +1129,13 @@ class PlanExecutionCoordinator:
                 f"{context.execution_id!r}; not recording the attempt",
                 report=report,
             )
-        return await self._resolve_attempt(plan_doc_id, context, raised, cancel_event)
+        return await self._resolve_attempt(
+            plan_doc_id,
+            context,
+            raised,
+            cancel_event,
+            schema_version=admission.schema_version,
+        )
 
     async def _resolve_attempt(
         self,
@@ -1050,6 +1143,8 @@ class PlanExecutionCoordinator:
         context: AttemptContext,
         raised: BaseException | None,
         cancel_event: threading.Event,
+        *,
+        schema_version: int,
     ) -> ExecutionResult:
         """Record a finished request, or explain why the request is not finished.
 
@@ -1058,6 +1153,8 @@ class PlanExecutionCoordinator:
             context: The ended attempt's context; its report is closed.
             raised: The exception the attempt ended with, if any.
             cancel_event: The slot's cooperative cancellation signal.
+            schema_version: The plan document's family captured at admission,
+                which the finalizer requires the document to still have.
 
         Returns:
             ExecutionResult: How the request was resolved.
@@ -1083,7 +1180,9 @@ class PlanExecutionCoordinator:
                 report=report,
             )
 
-        request = ExecutionFinalization.from_attempt(context)
+        request = ExecutionFinalization.from_attempt(
+            context, schema_version=schema_version
+        )
         final = await self._finalize(request, cancel_event)
         if final is None or final.status is FinalizationStatus.INVALID_CONTROL_STATE:
             # Established before _coordinate releases the plan, so no request
@@ -1132,12 +1231,16 @@ class PlanExecutionCoordinator:
     ) -> None:
         """Resolve a plan's pending finalization before admitting anything new.
 
-        The plan is judged the way the finalizer judges it
+        The family gate has already dropped the result if the document is no
+        longer of a supported family (:meth:`_require_supported_family`).
+        Otherwise the plan is judged the way the finalizer judges it
         (``check_finalization``), so reading it is enough to settle the
-        pending result when the plan was deleted or regenerated, its authority
-        changed, or the result turns out to be recorded after all. Tokens that
-        are not a valid pair, or that recording the result would make invalid,
-        keep it pending and retry nothing: the document has to change first.
+        pending result when the plan was deleted or regenerated, is of a
+        family other than the one the result was captured under, its
+        authority changed, or the result turns out to be recorded after all.
+        Tokens that are not a valid pair, or that recording the result would
+        make invalid, keep it pending and retry nothing: the document has to
+        change first.
         A regeneration is judged before the tokens, and the authority after
         them, so a regenerated plan settles the result whatever its tokens
         say, and a changed authority settles it only once they are valid.
