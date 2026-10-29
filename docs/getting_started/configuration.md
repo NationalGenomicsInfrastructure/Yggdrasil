@@ -191,19 +191,33 @@ required in a future release).
 `status="draft"` until an external actor approves them. Yggdrasil does not
 currently ship an approval UI or command. Operators who need manual
 approval must provide their own integration with the configured plan
-store.
+store, following
+[Approving or rerunning by hand](../reference/document_contract.md#approving-or-rerunning-by-hand).
 
 Approval changes `status` to `"approved"`. Requesting another execution
-increments `run_token`; a plan is eligible only while `run_token` is
-greater than `executed_run_token`. Neither field says whether a run
+increments `run_token`. Both tokens are JSON integers, and
+`executed_run_token` is never above `run_token`:
+
+- `run_token` runs from 0 to 2^53 − 1;
+- `executed_run_token` runs from −1 to 2^53 − 1.
+
+A missing token, a string, a float or a boolean makes the plan
+ineligible: nothing is defaulted or converted. Within that rule, a plan is
+eligible only while `run_token` is greater than `executed_run_token`.
+Neither field says whether a run
 succeeded: `executed_run_token` marks the latest *finished* request, and
 the outcome is recorded separately (see
-[Plan Execution](../reference/plan_execution.md)). A SQLite integration must also advance
+[Plan Execution](../reference/plan_execution.md)).
+
+An integration keeps every field it does not change exactly as read,
+`schema_version` included: it never adds, changes or removes it. A plan
+document without `schema_version`, or with a value other than `1`, is
+not executed, and an integration does not approve it. A SQLite integration must also advance
 the plan change sequence transactionally so PlanWatcher observes the
 update, and must write only if the plan is still at the revision it read
-(`SQLiteInternalStore.put_document(..., expected_rev=...)`), so it never
+(`SQLiteInternalStore.put_document(..., bump_plan_seq=True, expected_rev=...)`), so it never
 overwrites a plan that Yggdrasil updated in the meantime. On a conflict,
-reread the plan and decide again. Editing only the stored JSON is
+reread the plan and check it again before retrying. Editing only the stored JSON is
 insufficient, and SQLite tooling must be kept compatible with Yggdrasil's
 internal schema.
 

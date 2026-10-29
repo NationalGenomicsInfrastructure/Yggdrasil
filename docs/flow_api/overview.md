@@ -192,7 +192,7 @@ A plan's `failure_policy` decides what an ordinary step failure does to the rest
 | `fail_fast` (default) | The attempt stops. Steps not run yet are never reached. | `None` if every step succeeded. The failure propagates; a `TransientStepError` surfaces as a `PermanentStepError`. |
 | `continue_independent` | The failure is recorded, and every step that depends on it, directly or through other steps, is **blocked**. Everything else keeps running until no step is ready. | The finished `AttemptReport`. Its `outcome` is `"failed"` if any step failed or was blocked. A returned report is **not** a success. |
 
-A plan without `failure_policy` runs under `fail_fast`, exactly as it did before failure policies existed.
+A plan without `failure_policy` runs under `fail_fast`, exactly as it did before failure policies existed. This default applies to `Plan` models passed directly to `Engine.run`; daemon and run-once admission require an explicit, supported `plan.failure_policy` in the stored document, otherwise admission is refused with `INVALID_DOCUMENT` (see [Plan Execution](../reference/plan_execution.md#the-plan-document)).
 
 Whichever the policy, some failures stop the whole attempt rather than one step: infrastructure failures (`OrchestrationError`), such as failing to publish an event, to maintain a cache marker or to import a step's module, and cancellation. `Engine.run` then raises under either policy. The attempt's report still records what was established before it stopped, but it is not always published: see [Attempt reports](#attempt-reports).
 

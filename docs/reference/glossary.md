@@ -83,7 +83,7 @@ Watches `yggdrasil_plans`. When a plan transitions to `status="approved"` with a
 Plan executor. Validates the plan, then runs its steps one at a time in dependency order. For each step it creates a workdir, computes a fingerprint, reuses a still-valid earlier success, or else calls the `@step`-decorated function. It publishes step lifecycle events and the attempt's report. See [Flow API](../flow_api/overview.md#engine-yggdrasilcoreengine).
 
 ### Failure policy
-A plan's `failure_policy`. `fail_fast` (the default) stops the attempt at the first step failure. `continue_independent` blocks the steps that depend on a failure, runs everything else, and ends the attempt failed.
+A plan's `failure_policy`. `fail_fast` stops the attempt at the first step failure. `continue_independent` blocks the steps that depend on a failure, runs everything else, and ends the attempt failed. `fail_fast` is the default for a `Plan` model passed directly to `Engine.run`. A stored plan document must name its policy explicitly: daemon and run-once admission refuse one without a known policy (`INVALID_DOCUMENT`).
 
 ### Step outcome
 How a step ended in one attempt: `succeeded`, `reused` (an earlier success was reused), `failed` (its evaluation failed, possibly before its function was called), or `blocked` (never invoked, because a prerequisite failed or was blocked). If the attempt ends before a step establishes an outcome, the snapshot shows it as `interrupted` if it had started and `unreached` otherwise. Neither state implies success or satisfies dependencies.
@@ -142,6 +142,22 @@ Realm code interacts with the emitter only via `ctx.emitter` (typed as `EventEmi
 
 ### Operational snapshot (`plan_status`)
 The execution status of a plan's latest observed attempt, which the ops consumer derives from the event spool and writes to the operations store: the attempt that has published a start record or report and whose ID orders highest, with every planned step's state and outcome. Plans with no observed attempt, whose spool holds only events published before attempts were correlated, get a labelled legacy projection instead. See [Plan Execution](plan_execution.md#operational-snapshots-plan_status).
+
+---
+
+## Document contract
+
+### Compatibility family (`schema_version`)
+A positive integer on every plan document and `plan_status` snapshot, per document kind. Documents with the same number can be read by the same reader; an incompatible change to a document's format raises it. It is not a software version. This release writes and supports family 1. See [Document Contract](document_contract.md#versions-and-compatibility).
+
+### Unversioned document
+A plan document or snapshot without `schema_version`, such as one written before the contract existed. It is never read as family 1: Yggdrasil never executes or updates it, though planning may replace it with a new generation. A `schema_version` that is not a positive integer, such as `"1"` or `1.0`, is invalid, a separate state.
+
+### Inspect-only
+How a program treats a document outside the families it supports: unversioned, invalid or unsupported. It shows what it can, labelled with the document's version state, and withholds the answers and actions that depend on the document's meaning, such as whether a plan is approved, or approving it.
+
+### Extension field
+A top-level plan-document field named `x_<writer>_<name>`, such as `x_ops_ticket`, which a writer outside the contract adds. The contract never defines a field starting with `x_`, so such a field cannot collide with a later contract field. Update writers keep it; regeneration drops it. See [Extension fields](document_contract.md#extension-fields).
 
 ---
 

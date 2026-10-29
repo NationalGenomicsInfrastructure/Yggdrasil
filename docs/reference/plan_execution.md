@@ -6,10 +6,11 @@ What happens between an approved plan and its recorded result, and how to read a
 
 ## The plan document
 
-Each persisted plan is one document in the plan store (`yggdrasil_plans` on CouchDB, or the dev SQLite file). The fields that govern execution:
+Each persisted plan is one document in the plan store (`yggdrasil_plans` on CouchDB, or the dev SQLite file). Its full format, and who may write which field, are described in [Document Contract](document_contract.md). The fields that govern execution:
 
 | Field | Meaning |
 |---|---|
+| `schema_version` | The document's compatibility family: `1` in this release. A document without it, or with any other value, is never executed (see [Versions and compatibility](document_contract.md#versions-and-compatibility)) |
 | `status` | Approval only: `"draft"` or `"approved"`. Never changed by executing the plan |
 | `run_token` | The latest execution request. Raise it to request another run |
 | `executed_run_token` | The latest request that was *finished*. Starts at `-1` |
@@ -18,9 +19,9 @@ Each persisted plan is one document in the plan store (`yggdrasil_plans` on Couc
 | `plan.failure_policy` | `"fail_fast"` or `"continue_independent"` (see [Failure policies](../flow_api/overview.md#failure-policies)) |
 | `last_finalized_execution` | The result of the latest finished request: `execution_id`, `plan_generation`, `run_token`, `failure_policy`, `outcome`, `termination_reason`, `finalized_at`, and the full attempt `report` |
 
-A plan is **eligible** to run when `status == "approved"` and `run_token > executed_run_token`. The caller must also hold its execution authority: the daemon runs `"daemon"` plans, and a `run-doc --run-once` session runs only the plans it created.
+A plan is **eligible** to run when `status == "approved"`, its tokens are a valid pair, and `run_token > executed_run_token`. The tokens are a valid pair when both are JSON integers, not booleans, `run_token` is from 0 to 2^53 − 1, `executed_run_token` is from −1 to 2^53 − 1, and `executed_run_token` is not above `run_token`. Anything else makes the plan ineligible, such as a missing token, `"5"`, `5.0` or `true`: nothing is defaulted or converted. The caller must also hold its execution authority: the daemon runs `"daemon"` plans, and a `run-doc --run-once` session runs only the plans it created.
 
-When a plan becomes eligible, the executing process reads the plan document afresh. The plan, its policy, generation, run token and authority all come from that one read, never from the change event that prompted it. Within one process, a plan has at most one attempt in flight. A request that arrives while it runs is checked again once that attempt is done.
+When a plan becomes eligible, the executing process reads the plan document afresh, with one plain read that writes nothing. The plan, its policy, family, generation, run token and authority all come from that one read, never from the change event that prompted it. The read counts only when it returns the plan's stored document, whose `_id` is the plan ID and whose `_rev` is a non-empty string; anything else is a storage failure (`admission_failed`), and the plan stays eligible. The document's `schema_version` is checked first: a document without one, or of a family this release does not support, is not executed (`unsupported_document`). The plan and each of its steps must then carry every execution field, and `plan.failure_policy` must be a known policy; otherwise the request is refused (`invalid_document`). A refused request runs nothing and writes nothing; see [What Yggdrasil refuses](document_contract.md#when-a-plan-is-admitted-for-execution) for the whole order of checks. Within one process, a plan has at most one attempt in flight. A request that arrives while it runs is checked again once that attempt is done.
 
 ---
 
@@ -53,7 +54,7 @@ Every attempt closes a report when it ends, but only some endings finish the req
 | Cancelled (daemon shutdown, Ctrl+C) before every step had run | Not finished: stays eligible | Not finished: stays eligible |
 | Aborted by an infrastructure failure, such as the event spool being unwritable, or a step module that exists but fails to import | Not finished: stays eligible | Not finished: stays eligible |
 
-A plan whose `failure_policy` is unknown is rejected by preflight too, but belongs to neither column: it is not a valid `continue_independent` request, so its request stays eligible, like a rejected `fail_fast` one.
+A plan document whose `failure_policy` is missing or unknown belongs to neither column. Daemon and run-once execution refuse it at admission (`invalid_document`), so no attempt starts and there is no report. Its request stays eligible. A direct `Engine.run` call with such a plan is rejected by preflight instead.
 
 A request that is not finished stays eligible. Nothing retries it on a timer: the daemon runs it again the next time it observes a change to the plan document. A `fail_fast` plan therefore keeps its established behavior: after a failure, it runs again on its next change.
 
@@ -67,7 +68,7 @@ The log line that resolves each request follows the same distinction. A finished
 
 ## Requesting a rerun
 
-To run a plan again, raise `run_token` by one and leave `status` as `"approved"`. This is the only way to rerun a finished `continue_independent` request, and it works for any plan. Write the change conditionally on the document's revision (`_rev`), as an approval actor does: if the plan changed since it was read, reread it and decide again. On the dev SQLite backend, the write must also advance the plan-change sequence in the same transaction, or PlanWatcher never observes it (see **Manual plan approval** in [Configuration](../getting_started/configuration.md)).
+To run a plan again, raise `run_token` by one from the value you read, and leave `status` as `"approved"`. This is the only way to rerun a finished `continue_independent` request, and it works for any plan. Follow [Approving or rerunning by hand](document_contract.md#approving-or-rerunning-by-hand): check that the document is of a supported family and of the generation you reviewed, write the change conditionally on its revision (`_rev`), and if the plan changed since it was read, read it again and check it again. If a retry finds `run_token` already moved, stop rather than raise it again. On the dev SQLite backend, the write must also advance the plan-change sequence in the same transaction, or PlanWatcher never observes it (see **Manual plan approval** in [Configuration](../getting_started/configuration.md)).
 
 The new attempt runs in the same work directories as the previous one:
 
@@ -81,20 +82,27 @@ Regenerating the plan, when a realm handler saves a new version of it, starts a 
 
 ## When a result cannot be recorded
 
-A finished request is recorded by a conditional write that commits the outcome and the executed token together. It refuses to overwrite a newer generation, a newer result or a changed authority. A write that loses a race or hits a transient storage error is tried again, up to three tries in all, 0.5 s and then 1 s apart. Those retries only record the result. A failed step is never retried.
+A finished request is recorded by a conditional write that commits the outcome and the executed token together. It refuses to write into a document that is no longer of the family the request was admitted under, and to overwrite a newer generation, a newer result or a changed authority. It also refuses while the plan's tokens are not a valid pair, or when recording the result would make them invalid by leaving `executed_run_token` above `run_token`. A write that loses a race or hits a transient storage error is tried again, up to three tries in all, 0.5 s and then 1 s apart. Those retries only record the result. A failed step is never retried.
 
-If the result still cannot be recorded, after three failed tries or one non-retryable storage error, it is kept in memory as a **pending finalization**. What that looks like:
+If the result still cannot be recorded, after three failed tries or one non-retryable storage error, or because the plan's tokens are not a valid pair or recording would make them invalid, it is kept in memory as a **pending finalization**. A read that does not return the plan's stored document counts as a non-retryable storage error. What that looks like:
 
-- The log reports `Plan '<plan_id>' execution '<execution_id>' ... finished, but its result could not be recorded; keeping it pending, and not executing the plan again until it is recorded or superseded`.
+- The log reports `Plan '<plan_id>' execution '<execution_id>' ... finished, but its result could not be recorded; keeping it pending, and not executing the plan again until it is recorded or superseded`. When the plan's tokens are the reason, the finalizer's refusal follows `could not be recorded` in parentheses: `(Cannot finalize execution ...: the plan's tokens are not a valid pair (...) ...)`.
 - The ops snapshot shows the attempt as `finished`, but the plan document still has the previous `executed_run_token`, and no `last_finalized_execution` for that `run_token`.
 - `run-doc --run-once` exits with code 1.
 - Other plans keep running.
 
-While the result is pending, this process does not execute the plan again, and further change events for it retry nothing. To recover once the plan store is healthy again, raise `run_token`. The process then tries once more to record the pending result, with the same bounded tries, and runs the new request only once the old result is recorded or definitively refused. If recording fails again, the new request waits too: raise `run_token` again to try again. Each newer `run_token` buys one round of tries. A pending result is also dropped, without anything being written, when the plan is regenerated, its authority changes, or its result turns out to have been recorded after all.
+While the result is pending, this process does not execute the plan again, and further change events for it retry nothing. To recover once the plan store is healthy again, raise `run_token`. The process then tries once more to record the pending result, with the same bounded tries, and runs the new request only once the old result is recorded or definitively refused. If recording fails again, the new request waits too: raise `run_token` again to try again. Each newer `run_token` buys one round of tries. If the plan's tokens are what keeps the result pending, first make them a valid pair again, with `run_token` above the pending request's token.
+
+A pending result stays pending while the plan's tokens are not a valid pair, or recording it would make them invalid, and through a failed storage read or one that does not return the plan's stored document. It is dropped, without anything being written:
+
+- when the plan's document is no longer of the family the request was admitted under. This is logged at WARNING; the result is never recorded and never retried, and its report stays in the event spool;
+- when the plan is regenerated or deleted, whatever its tokens say;
+- when its authority changes, once its tokens are a valid pair;
+- when its result turns out to have been recorded after all.
 
 A pending result lives only in memory. If the process restarts, it is lost, and the old request is still eligible, so it may run again. Realm steps must therefore tolerate running again over their own earlier work.
 
-If recording is refused for good, because the plan was regenerated, deleted or reassigned while it ran, the result is dropped (`superseded`). Run-once exits with code 1.
+If recording is refused for good, because the plan was regenerated, deleted or reassigned while it ran, or its document changed family, the result is dropped (`superseded`). Run-once exits with code 1.
 
 ---
 
@@ -108,6 +116,7 @@ An attempt shows as `running` until its report is published. An attempt that end
 
 | Field | Content |
 |---|---|
+| `schema_version` | The snapshot's compatibility family: `1` in this release (see [The `plan_status` snapshot](document_contract.md#the-plan_status-snapshot)) |
 | `type`, `realm`, `plan_id`, `scope`, `updated_at` | Identity of the plan, and when the snapshot was last written |
 | `projection` | `"attempt"`, or `"legacy"` for a plan with no observed attempt, whose spool holds only events published before attempts were correlated. A legacy projection shows each step's latest run, which need not belong to one attempt |
 | `attempt` | The attempt shown: `execution_id`, the `plan_generation` and `run_token` it captured, `failure_policy`, `execution_authority`, `execution_owner`, `started_at`, and `state` (`"running"` or `"finished"`). Once finished: `ended_at`, `termination_reason`, `outcome`, `is_drained`, `counts` per outcome plus `unreached` (every step without an outcome, interrupted ones included), and any attempt-level `diagnostic`, such as a preflight rejection. `null` for a legacy projection |
