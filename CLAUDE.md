@@ -17,6 +17,8 @@ mypy .                                        # type checking (config in pyproje
 
 Tests are unittest-style with `unittest.mock`; async code is tested via `asyncio.run(...)` inside sync test methods (pytest-asyncio is installed but tests don't use `@pytest.mark.asyncio`).
 
+Plan documents in tests come from the builders (`build_plan_document`, `save_plan`). A hand-built plan document that reaches the execution coordinator must carry `schema_version: 1` and every required field, or it is refused like any other document outside the contract (`docs/reference/document_contract.md`).
+
 Pre-commit hooks: ruff/black/mypy at commit time, full mypy + full pytest at push time (`pre-commit install` and `pre-commit install --hook-type pre-push`). Locked deps are regenerated with `pip-compile --strip-extras -o requirements/lock.txt`.
 
 PRs go against the `dev` branch. Version comes from git tags via setuptools-scm.
@@ -34,7 +36,7 @@ Event flow, end to end:
 5. **Handlers** (subclass `yggdrasil.flow.base_handler.BaseHandler`) declare `event_type: ClassVar[EventType]`, implement `derive_scope()` and async `generate_plan_drafts()`. Handlers generate plan *intent* (`PlanDraft`), never execute work directly.
 6. Core persists plans through the injected `InternalStorageBundle` (CouchDB in production; SQLite only when explicitly configured and running in dev mode or tests). **PlanWatcher** consumes the bundle's backend-neutral change source, and the **Engine** (`yggdrasil.flow`) runs plans with per-step workdirs, fingerprint-based caching, `@step`-decorated functions receiving a `StepContext`, and event emission to `$YGG_EVENT_SPOOL`.
 
-Namespacing: Yggdrasil is one package, `yggdrasil`. The realm-facing API is `yggdrasil.flow`, `yggdrasil.watchers` (`EventType`, `WatchSpec`) and `yggdrasil.core.realm`; the rest (`daemon`, `storage`, `couchdb`, `ops`, `config`, `toolkit`) is internal implementation. Layering, bottom to top: `config`, `logging_utils`, `errors`; `flow`, `watchers`, `couchdb`; `storage`, `ops`; `daemon`, `cli`. Importing `yggdrasil.flow` or `yggdrasil.watchers` must not import the CouchDB client or `logging_utils` (`tests/test_import_lightness.py`).
+Namespacing: Yggdrasil is one package, `yggdrasil`. The realm-facing API is `yggdrasil.flow`, `yggdrasil.watchers` (`EventType`, `WatchSpec`) and `yggdrasil.core.realm`. `yggdrasil.contract` is the published document contract (families, version and control checks, JSON Schemas, `validate`), used by the programs that read or write plan documents and snapshots; it is neither the realm-facing API nor internal. The rest (`daemon`, `storage`, `couchdb`, `ops`, `config`, `toolkit`) is internal implementation. Layering, bottom to top: `config`, `logging_utils`, `errors`, `contract`; `flow`, `watchers`, `couchdb`; `storage`, `ops`; `daemon`, `cli`. `contract` imports only the standard library; `jsonschema` (a `dev` extra, never a runtime dependency) is imported only when `contract.schema.validate` runs. Importing `yggdrasil.flow` or `yggdrasil.watchers` must not import the CouchDB client or `logging_utils`, and importing `yggdrasil.contract` loads nothing beyond the standard library (`tests/test_import_lightness.py`).
 
 ### Configuration
 
