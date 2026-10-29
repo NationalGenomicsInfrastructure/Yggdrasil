@@ -14,32 +14,30 @@ PRDs; companion draft status clarified. Requirements are unchanged from v0.7.
 
 Existing-behavior claims were verified against Yggdrasil `v0.5.0`
 (000d596) and `dev` 418c96d, and Bifrost `main` (38c09cd). That `dev`
-revision differs from `v0.5.0` only in the ops consumer (PR #110).
-Implementation starts from `dev`; verify any later source changes when
-planning the implementation.
+revision differs from `v0.5.0` only in the ops consumer (PR #110). The
+implementation started from that revision, on `feature/document_contract`.
 
 ## Status
 **Implemented and reviewed (2026-10-29).** Accepted by the owner
 (2026-10-21). Every decision in section 14 is taken. All requirements for
 this release are stated here; historical design notes and reviews are not
-required inputs. Section 9.0 lists the verification work that happens while
-the schemas are written. Other PRD titles identify follow-on or deferred
-work, not additional requirements for this release.
+required inputs. Section 9.0 lists the verification work done while the
+schemas were written. Other PRD titles identify follow-on or deferred work,
+not additional requirements for this release.
 
-This is the only document-contract PRD currently approved for implementation.
-Two companion drafts propose follow-on capabilities: **Document Contract:
-Shared Reader** builds on this foundation, and **Document Contract: Approve
-and Rerun Helpers** builds on both. Each draft requires thorough owner review
-and separate explicit approval before implementation. Completing a
-dependency does not approve the next PRD. The dependency order is not a
-numbering scheme or a global roadmap order; release grouping remains a
-later decision if the companion drafts are approved.
+This PRD approves the foundation and does not approve its companion
+capabilities. **Document Contract: Shared Reader** proposes one that builds
+on this foundation, and **Document Contract: Approve and Rerun Helpers** one
+that builds on both. Each needs its own owner review and explicit approval
+before implementation, and completing a dependency does not approve the
+next. The dependency order is not a numbering scheme or a global roadmap
+order.
 
 | PRD | Delivers | Needed by |
 | --- | --- | --- |
 | **Document Contract: Schemas, Versioning and Compatibility (this PRD)** | Schemas, `schema_version`, compatibility and reading policy, field ownership, the version boundary for every Yggdrasil writer and the executor, the executor's control checks (one strict token rule), the reference page | everything below; any future incompatible document |
-| [Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md) **(draft; owner review pending)** | Proposed shared reader `yggdrasil.contract.read`: one set of reading rules for Yggdrasil and Bifrost, reusing this PRD's control checks | Bifrost adapter swap |
-| [Document Contract: Approve and Rerun Helpers](../upcoming_features/document_contract/document_contract_approve_and_rerun.md) **(draft; owner review pending)** | Proposed approve and rerun helpers `yggdrasil.contract.actions`: pure functions that prepare a safe conditional write | **Bifrost: Write Actions and Authentication** |
+| **Document Contract: Shared Reader** | Proposed shared reader `yggdrasil.contract.read`: one set of reading rules for Yggdrasil and Bifrost, reusing this PRD's control checks | Bifrost adapter swap |
+| **Document Contract: Approve and Rerun Helpers** | Proposed approve and rerun helpers `yggdrasil.contract.actions`: pure functions that prepare a safe conditional write | **Bifrost: Write Actions and Authentication** |
 
 ## 1. Overview
 
@@ -47,7 +45,7 @@ Yggdrasil's plan document is its API. Realms create it, operators approve
 and rerun by changing it, the daemon executes what it says and writes the
 result back, and Bifrost displays it. The programs on each side are released
 and deployed separately, so the document format is the contract between
-them. This draft makes that contract explicit and versioned, and makes every
+them. This PRD makes that contract explicit and versioned, and makes every
 Yggdrasil writer refuse to act on a document it does not understand.
 
 This first release:
@@ -81,7 +79,8 @@ Verified at `v0.5.0`:
   is eligible to Yggdrasil, which calls `int(value)` in five places, and
   unreadable to Bifrost, which accepts only JSON integers. The same holds for
   `true` (Yggdrasil reads 1) and `4.7` (Yggdrasil reads 4). This release makes
-  Yggdrasil strict (section 7.2); [Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md) gives Bifrost the same function.
+  Yggdrasil strict (section 7.2); **Document Contract: Shared Reader** gives
+  Bifrost the same function.
 - **The only written protocol for changing plan documents is unsafe.**
   `docs/GENSTAT_PLAN_CONTRACT.md` (v1.1, 2026-01-28) describes fields that do
   not exist, gives two different rerun rules ("set `run_token` to
@@ -131,7 +130,7 @@ Not in the contract: watcher checkpoints and `store_metadata`, external
 source documents (`projects`, flowcell documents), work directories and
 `success.fingerprint` markers, the SQLite table layout. The plan summary
 (`plan_summary_from_document`) is a return value; it moves into the shared
-reader with [Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md).
+reader with **Document Contract: Shared Reader**.
 
 ### 3.1 Plan document, family 1
 
@@ -451,7 +450,7 @@ Yggdrasil has two kinds of plan-document writers, with one rule each.
 
 | Writer | Writes over | Rule |
 | --- | --- | --- |
-| **Update writers**: finalization (including a pending finalization); approval and rerun ([Document Contract: Approve and Rerun Helpers](../upcoming_features/document_contract/document_contract_approve_and_rerun.md)) | an existing document whose other fields it keeps | On every read it may write over, including the reread after a conflict, the document's family must be supported **and** equal to the family captured with the request (at admission, or in the review context). Otherwise it writes nothing and returns a distinct refusal. |
+| **Update writers**: finalization (including a pending finalization); approval and rerun (**Document Contract: Approve and Rerun Helpers**) | an existing document whose other fields it keeps | On every read it may write over, including the reread after a conflict, the document's family must be supported **and** equal to the family captured with the request (at admission, or in the review context). Otherwise it writes nothing and returns a distinct refusal. |
 | **Replace writers**: planning (`save_plan`, both stores, including run-once) | the whole document in a slot | It may replace an empty slot, an unversioned (pre-contract) document or a document of a supported family. It refuses a malformed marker or an unsupported family: nothing is written, the refusal names the plan and the recorded value, and other plans continue. It refuses, in the same way, a slot whose `created_at` cannot be kept (section 4, rule 2). Ordinary planning is never an implicit downgrade. |
 
 Example of the replace rule: a daemon that supports only family 1 re-plans a
@@ -556,10 +555,10 @@ yggdrasil/contract/
 
 `VersionInfo` keeps the raw recorded value for diagnostics. Field-name
 constants and reading functions (`fields.py`, `read.py`) arrive with
-[Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md),
-which reuses `controls.py`; the action helpers (`actions.py`) arrive with
-[Document Contract: Approve and Rerun Helpers](../upcoming_features/document_contract/document_contract_approve_and_rerun.md).
-The package never reads the clock: callers pass every timestamp in.
+**Document Contract: Shared Reader**, which reuses `controls.py`; the action
+helpers (`actions.py`) arrive with
+**Document Contract: Approve and Rerun Helpers**. The package never reads
+the clock: callers pass every timestamp in.
 
 Layering: `yggdrasil.contract` joins the bottom layer (`config`,
 `logging_utils`, `errors`), imports only the standard library, and is added
@@ -690,8 +689,8 @@ release itself deletes nothing.
 | Bifrost shows live CouchDB data | while pinned to `v0.5.0`: nothing new; from the pin move to this release: the adapter's marker rule (9.4) | **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints** |
 | Bifrost checks its fixtures against Yggdrasil's schemas | this release | this PRD |
 | Yggdrasil's executor applies the strict control checks | this release | this PRD |
-| Bifrost applies Yggdrasil's reading rules, tokens included | the shared reader; Bifrost depends on `yggdrasil` at the tag | [Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md) |
-| Bifrost approves and requests reruns safely | the action helpers; the live reader; authentication | [Document Contract: Approve and Rerun Helpers](../upcoming_features/document_contract/document_contract_approve_and_rerun.md); **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints**; **Bifrost: Write Actions and Authentication** |
+| Bifrost applies Yggdrasil's reading rules, tokens included | the shared reader; Bifrost depends on `yggdrasil` at the tag | **Document Contract: Shared Reader** |
+| Bifrost approves and requests reruns safely | the action helpers; the live reader; authentication | **Document Contract: Approve and Rerun Helpers**; **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints**; **Bifrost: Write Actions and Authentication** |
 | Yggdrasil writes plan documents of family 2 | this release's boundary on every daemon and run-once host; family-2 documents written as new generations; Bifrost reading family 2 or showing it inspect-only | this PRD and the PRD introducing family 2 |
 | Bifrost shows the daemon heartbeat | the lease document | **Daemon Lease, Heartbeat and Recovery Sweep** |
 
@@ -727,8 +726,8 @@ release itself deletes nothing.
 
 | Topic | Where |
 | --- | --- |
-| Reading rules (reusing this release's control checks), Bifrost's adapter swap | [Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md) |
-| Approve and rerun helpers | [Document Contract: Approve and Rerun Helpers](../upcoming_features/document_contract/document_contract_approve_and_rerun.md) |
+| Reading rules (reusing this release's control checks), Bifrost's adapter swap | **Document Contract: Shared Reader** |
+| Approve and rerun helpers | **Document Contract: Approve and Rerun Helpers** |
 | Live reading, refresh hints, missed-update recovery | **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints** |
 | Authentication, carrying the review from page to click, retry policy, wording | **Bifrost: Write Actions and Authentication** |
 | Recovery sweep, heartbeat display, lease fencing | **Daemon Lease, Heartbeat and Recovery Sweep** |
@@ -783,7 +782,7 @@ and rationale are stated in this PRD.
 | D15 | Family within a generation | Never changes; a new family means a new generation and a new approval. | engineering |
 | D16 | Extension names | Fields of writers we control are contract fields in the schema; foreign writers use the `x_<writer>_` prefix, which the contract never defines; the schema flags unprefixed foreign fields, it cannot prevent them (section 4, rule 7). | **owner** (2026-10-21), with the enforcement clarified |
 | D17 | Rollback and spool | As in section 11. | agreed |
-| D18 | Executor control checks | The strict token rule at all five sites and the failure-policy check at admission ship with this PRD, not [Document Contract: Shared Reader](../upcoming_features/document_contract/document_contract_shared_reader.md), so that this PRD's "never a default" holds from its first release (sections 6, 7.2). | agreed |
+| D18 | Executor control checks | The strict token rule at all five sites and the failure-policy check at admission ship with this PRD, not **Document Contract: Shared Reader**, so that this PRD's "never a default" holds from its first release (sections 6, 7.2). | agreed |
 | D19 | Updates versus conformance | Builders' output conforms; update writers conform in the fields they own and do not certify what they keep; fixtures declare positive or negative expectations (section 5 rule 9, 9.2, 9.4). | agreed |
 
 ## 15. Open Questions
@@ -1131,10 +1130,11 @@ The tests check that:
 `released/<tag>/` holds a released version's positive examples, frozen:
 never regenerated or edited, and each must keep validating against its
 family's current schema (section 5 rule 11). Negative examples stay in
-`current/`. No release with the contract has been tagged yet, so these
-checks run on an edition released into a temporary directory. The first
-baseline is added when this release is tagged, by the step that the
-directory's README describes.
+`current/`. Released-baseline behavior was tested on editions released
+from `current/` into a temporary directory: such an edition contains
+exactly the positive examples and passes the released checks, an edition
+that fails them is reported, and rebuilding `current/` leaves released
+editions untouched.
 
 Accepted choices (owner, 2026-10-28; review, 2026-10-29):
 
@@ -1169,13 +1169,12 @@ each step keeps a real DataAccess with the engine's trace context. A test
 makes loading the configuration raise and checks that the rebuild is
 unchanged. No engine code changed.
 
-Correction of the release order (2026-10-29), added to this entry: "the
-first baseline is added when this release is tagged" does not give the
-order. The baseline
-is prepared before the release is tagged, under the release's intended tag
-name, and is part of the tagged source: the tag goes on a commit that
-contains the edition, and a published tag is not moved to add one later.
-The corpus README now describes the release step in that order.
+Correction of the release order (2026-10-29), added to this entry: a
+release's baseline is prepared before the release is tagged, under the
+release's intended tag name, and is part of the tagged source. The tag goes
+on a commit that contains the edition, and a published tag is not moved to
+add one later. The corpus README's release step, which had the baseline
+added when a version was tagged, now follows that order.
 
 **Documentation (2026-10-29).** `docs/reference/document_contract.md` is
 published, in the navigation after Plan execution (section 9.3). It covers
@@ -1235,20 +1234,6 @@ A clean clone runs 50 fewer.
 
 The documentation adds no tests. `mkdocs build --strict` passes, and every
 link with an anchor resolves.
-
-Remaining release actions:
-
-- **The first baseline.** Whoever prepares the release chooses the tag
-  name and follows the corpus README: check that `python -m
-  tests.contract.corpus` reports no differences, copy the valid documents of
-  `current/` with their manifest entries into `released/<tag>/`, run
-  `pytest tests/contract/test_corpus.py`, commit the edition with the
-  release, and tag a commit that contains it.
-- **Rollout** as section 11 orders it: upgrade every daemon and run-once
-  host, then regenerate the wanted plans or reset development state
-  (section 9.5).
-- The reference page links to repository files on `main`, the branch the
-  site is built from. The links resolve once this work reaches `main`.
 
 Bifrost's adoption of the published contract (section 9.4) stays separate
 work.
@@ -1325,6 +1310,3 @@ the documentation was committed, on the working tree over d1bac76. The
 documentation changes no code and no test, and the rerun at 41d1cc7 gives
 the same counts. This document is committed after 41d1cc7: the
 documentation build excludes it, and no test reads it.
-
-The release actions that the Documentation entry lists remain to be done
-when the release is prepared.
