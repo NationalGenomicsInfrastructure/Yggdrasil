@@ -101,9 +101,14 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 
 **Explanation:** Planning replaces the whole document stored under a plan's ID, and first checks what that document is. It refuses a document whose `schema_version` is invalid (`"1"`, `1.0`, `null`, ...) or names a family this release does not support, such as a family-2 plan written by a newer release. It also refuses a document whose `created_at` it cannot keep: missing, not a real date-time, or spelled in a way it may not re-spell, such as with a fraction of a second. Nothing is written, and planning goes on with its other drafts. `run-doc --force` does not bypass the check. See [When planning replaces a plan](document_contract.md#when-planning-replaces-a-plan).
 
-**Resolution:** It depends on the field:
+**Resolution:** It depends on the field. Never choose a value just to make the check pass: the marker states which contract the whole document follows, and `created_at` records when the document was created.
+
 - `schema_version ... is unsupported`: the plan belongs to a newer release. Plan it with software that supports that family; do not change the marker.
-- `schema_version ... is invalid`, or any `created_at` reason: the stored document was damaged or edited by hand. Correct that field in the stored document, or delete the document, and let the realm plan again.
+- `schema_version ... is invalid`: the marker was damaged, or written outside the contract. A value such as `"1"` does not show that the document follows family 1, so do not replace it with a valid-looking one. Restore the marker only when you know what it was, for instance from a backup or from the record of the edit that damaged it; if the document had no marker before, restoring it means removing the field. Otherwise, keep a copy of the document, delete it, and let the realm plan again.
+- `created_at is missing`, or `created_at ... is malformed`: the creation instant is unknown. Restore it only from a known source, spelled canonically (`2026-10-22T10:00:00Z`). Otherwise, keep a copy of the document, delete it, and let the realm plan again: the new document records a new creation time.
+- `created_at ... is unsupported`: the value is a real date-time that planning may not re-spell. A whole second with another offset, or with `+00:00` in a family-1 document, can be written as the same instant in `Z`: `2026-10-22T12:00:00+02:00` becomes `2026-10-22T10:00:00Z`. A fraction of a second has no canonical spelling: dropping it changes the recorded instant, so do that only when the change is acceptable, and otherwise delete the document as above.
+
+Write a repair conditionally on the `_rev` you read, changing only that field, as in step 3 of [Approving or rerunning by hand](document_contract.md#approving-or-rerunning-by-hand). Deleting the document discards its approval and its recorded results: the realm's new plan is a new document, which needs approving again unless its realm runs it automatically.
 
 ---
 
@@ -178,7 +183,7 @@ If a step was blocked by a step it should not need, the dependency is in the pla
 
 **Explanation:** The engine validates the whole plan before running anything, and rejects it without side effects. A rejected `fail_fast` plan stays eligible. A rejected `continue_independent` request is finished with a failed outcome, since the same plan would be rejected again.
 
-A plan document whose `failure_policy` is missing or unknown never gets this far. Daemon and run-once execution refuse it at admission, so no attempt starts and there is no report: the log says, at ERROR, `Plan '<plan_id>' does not describe an executable request (...)`, and the plan stays eligible. Only a direct `Engine.run` call still reaches preflight with such a policy.
+A plan document whose `failure_policy` is missing or unknown never gets this far. Daemon and run-once execution refuse it at admission, so no attempt starts and there is no report: the log says, at ERROR, `Plan '<plan_id>' does not describe an executable request (...)`, and the plan stays eligible. Only a `Plan` passed directly to `Engine.run` reaches preflight with an explicitly unknown policy; there, an omitted policy defaults to `fail_fast`.
 
 Only confirmed defects of the plan are rejected. A step module that exists but cannot be imported is a different case (see [`fn_ref` cannot be resolved or imported](#fn_ref-cannot-be-resolved-or-imported)).
 

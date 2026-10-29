@@ -54,7 +54,7 @@ Every attempt closes a report when it ends, but only some endings finish the req
 | Cancelled (daemon shutdown, Ctrl+C) before every step had run | Not finished: stays eligible | Not finished: stays eligible |
 | Aborted by an infrastructure failure, such as the event spool being unwritable, or a step module that exists but fails to import | Not finished: stays eligible | Not finished: stays eligible |
 
-A plan document whose `failure_policy` is missing or unknown belongs to neither column. Daemon and run-once execution refuse it at admission (`invalid_document`), so no attempt starts and there is no report. Its request stays eligible. A direct `Engine.run` call with such a plan is rejected by preflight instead.
+A plan document whose `failure_policy` is missing or unknown belongs to neither column. Daemon and run-once execution refuse it at admission (`invalid_document`), so no attempt starts and there is no report. Its request stays eligible. A `Plan` passed directly to `Engine.run` is treated differently: an omitted policy defaults to `fail_fast`, and only an explicitly unknown one is rejected, by preflight.
 
 A request that is not finished stays eligible. Nothing retries it on a timer: the daemon runs it again the next time it observes a change to the plan document. A `fail_fast` plan therefore keeps its established behavior: after a failure, it runs again on its next change.
 

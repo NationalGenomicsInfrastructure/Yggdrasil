@@ -180,7 +180,7 @@ A `null` says something about its own field only. Depending on the field, it mea
 | Report `publication_failure` | No failure to publish the report was recorded |
 | `error_type` of a failure or diagnostic | It did not come from an exception, such as a required output the step did not produce |
 | Snapshot `attempt` | A legacy projection: no attempt was observed |
-| Snapshot `attempt.plan_generation`, `run_token`, `failure_policy`, `started_at` | The record they are copied from lacks them: the attempt's start record, or its report when there is no start record |
+| Snapshot `attempt.plan_generation`, `run_token`, `failure_policy`, `started_at` | The value is unavailable or was not captured, including an explicit `null` in the record it is copied from: the attempt's start record, or its report when there is no start record. A direct `Engine.run` call, for example, captures no generation or token, and its start record holds `null` for both |
 | Snapshot `attempt.execution_authority` | The attempt's start record is missing |
 | Snapshot `attempt.execution_owner` | The attempt has no run-once owner, or its start record is missing |
 | Snapshot `attempt.ended_at`, `termination_reason`, `outcome`, `is_drained`, `counts` | No report is published yet: as far as the spool shows, the attempt is running |
@@ -326,7 +326,7 @@ A refusal is logged at ERROR, once, and planning goes on with its other drafts:
 Planning refused to replace plan '<plan_id>': its schema_version 2 is unsupported (supported plan-document families: [1]). The draft was not persisted; the stored plan is unchanged.
 ```
 
-The field is `schema_version` (`invalid`, `unsupported`) or `created_at` (`missing`, `malformed`, `unsupported`). `run-doc --force` overwrites an existing plan without asking, but it does not bypass this check. The slot stays as it is until an operator corrects or deletes the stored document (see [Plan not replaced: planning refused](troubleshooting.md#plan-not-replaced-planning-refused)).
+The field is `schema_version` (`invalid`, `unsupported`) or `created_at` (`missing`, `malformed`, `unsupported`). `run-doc --force` overwrites an existing plan without asking, but it does not bypass this check. The slot stays as it is until an operator repairs or deletes the stored document (see [Plan not replaced: planning refused](troubleshooting.md#plan-not-replaced-planning-refused)).
 
 ### When a plan is admitted for execution
 
@@ -471,7 +471,10 @@ def request_rerun(store, plan_id, reviewed, actor):
         version = version_of("plan_document", doc)
         if version.state != SUPPORTED or version.family != reviewed["schema_version"]:
             return "the document is not of the reviewed family"
-        if doc.get("plan_generation") != reviewed["plan_generation"]:
+        generation = doc.get("plan_generation")
+        if not isinstance(generation, str) or not generation:
+            return "the document has no usable plan_generation"
+        if generation != reviewed["plan_generation"]:
             return "the plan was regenerated: review the new generation"
         tokens = token_pair(doc)
         if not tokens.valid:
