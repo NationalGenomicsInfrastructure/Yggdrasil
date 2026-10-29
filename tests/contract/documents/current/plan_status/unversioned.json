@@ -1,0 +1,75 @@
+{
+  "_id": "proj-P1:plan_status:test_realm:pln_lifecycle",
+  "_rev": "2-corpus",
+  "attempt": {
+    "counts": {
+      "blocked": 0,
+      "failed": 0,
+      "reused": 0,
+      "succeeded": 2,
+      "unreached": 0
+    },
+    "diagnostic": null,
+    "ended_at": "2026-10-22T10:00:00Z",
+    "execution_authority": "daemon",
+    "execution_id": "20261022T100000000000Z_0001",
+    "execution_owner": null,
+    "failure_policy": "fail_fast",
+    "is_drained": true,
+    "outcome": "succeeded",
+    "plan_generation": "19ba8ec8e02efe85c36b6a8b3f8c39fe",
+    "run_token": 0,
+    "started_at": "2026-10-22T10:00:00Z",
+    "state": "finished",
+    "termination_reason": "completed"
+  },
+  "plan_id": "pln_lifecycle",
+  "projection": "attempt",
+  "realm": "test_realm",
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "steps": {
+    "demux": {
+      "artifacts": [
+        {
+          "digest": "sha256:3566cf23ecb6f832d67d1439e0cb3d05eb7f4ad702c6f478aa96f19812f18e8c",
+          "key": "reads",
+          "path": "/data/P1/demux/reads"
+        }
+      ],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:def7944391643a5d78f105e1a0ee2190c4c48c622babffde428b46e7de2f9bcd",
+      "job": null,
+      "metrics": {
+        "reads": 1200
+      },
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000001",
+      "state": "step.succeeded",
+      "step_name": "demux",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "qc": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:004e946eea297c094b47e23c8c29197b456602ca1fcdd2c8a85482e957b7ead8",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000002",
+      "state": "step.succeeded",
+      "step_name": "qc",
+      "ts": "2026-10-22T10:00:00Z"
+    }
+  },
+  "type": "plan_status",
+  "updated_at": "2026-10-22T10:00:00Z"
+}
