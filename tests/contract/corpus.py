@@ -22,7 +22,9 @@ The build is deterministic. Every producer reads one frozen clock, set to the
 scenario's instant. Run and execution IDs are numbered per scenario,
 generations and owners derive from fixed labels, and storage revisions are
 fixed. Each scenario has its own scratch spool and work directory, and no path
-from them reaches a document.
+from them reaches a document. The build reads no configuration: each step's
+DataAccess is configured with no external systems, instead of loading the
+building machine's ``main.json``.
 
 Regenerate from the repository root with::
 
@@ -61,6 +63,7 @@ from yggdrasil.contract.controls import (
 from yggdrasil.contract.versions import SCHEMA_VERSION_FIELD, SUPPORTED, version_of
 from yggdrasil.core.engine import Engine
 from yggdrasil.flow.attempt import AttemptContext
+from yggdrasil.flow.data_access import DataAccess
 from yggdrasil.flow.errors import PermanentStepError
 from yggdrasil.flow.events.attempt_records import (
     ATTEMPT_REPORT_EVENT,
@@ -544,7 +547,8 @@ class _Workspace:
 
     Every step of every plan resolves to one scripted ``@step`` function,
     whatever its ``fn_ref`` names: what a step does is the scenario's choice.
-    Run IDs and execution IDs are numbered within the workspace.
+    Run IDs and execution IDs are numbered within the workspace, and each
+    step's DataAccess knows no external systems.
 
     Attributes:
         root: The workspace's directory.
@@ -670,7 +674,11 @@ class _Workspace:
 
     @contextmanager
     def _scripted(self, steps: Mapping[str, StepBody]) -> Iterator[None]:
-        """Resolve every step to the scripted function, and number run IDs."""
+        """Resolve every step to the scripted function, and number run IDs.
+
+        Each step's DataAccess is the real one, configured with no external
+        systems, so an attempt never loads the building machine's configuration.
+        """
 
         @step
         def scripted(ctx: StepContext, **params: Any) -> StepResult | None:
@@ -686,12 +694,37 @@ class _Workspace:
             patches.enter_context(
                 patch.object(yggdrasil.core.engine, "_new_run_id", self._new_run_id)
             )
+            patches.enter_context(
+                patch.object(
+                    yggdrasil.core.engine,
+                    "DataAccess",
+                    _data_access_without_external_systems,
+                )
+            )
             yield
 
     def _new_run_id(self) -> str:
         """Return the next run ID, shaped as the engine shapes them."""
         self._runs += 1
         return f"run_{ygg_time.utcnow_compact()}_{self._runs:06x}"
+
+
+def _data_access_without_external_systems(realm_id: str, **kwargs: Any) -> DataAccess:
+    """Build a step's DataAccess as the engine does, with no external systems.
+
+    The engine passes no configuration, so DataAccess would load the one in
+    the building machine's ``main.json``. This is the real constructor, called
+    with the engine's arguments, trace context included, and with an empty
+    configuration instead.
+
+    Args:
+        realm_id: The step's realm.
+        **kwargs: The engine's other arguments, such as ``trace_context``.
+
+    Returns:
+        DataAccess: The step's DataAccess, which knows no connections.
+    """
+    return DataAccess(realm_id, cfg={"endpoints": {}, "connections": {}}, **kwargs)
 
 
 def _admitted(document: Mapping[str, Any]) -> tuple[Plan, int]:

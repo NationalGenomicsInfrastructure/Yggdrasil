@@ -19,7 +19,8 @@ release's writers and producers:
   those attempts published.
 
 Clocks, generations, owners, run and execution IDs, and storage revisions
-(`<n>-corpus`) are fixed, so a rebuild reproduces every file byte for byte.
+(`<n>-corpus`) are fixed, and the build reads no configuration, so a rebuild
+reproduces every file byte for byte.
 Files are JSON indented by two, with sorted keys, UTF-8 and a final newline.
 
 To regenerate, from the repository root, in the `ygg` environment:

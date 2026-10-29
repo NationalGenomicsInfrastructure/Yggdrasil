@@ -43,6 +43,7 @@ from tests.contract.corpus import (
 )
 from tests.contract.support import problems
 from tests.execution_support import directory_tree
+from yggdrasil.config.loader import ConfigLoader
 from yggdrasil.contract import PLAN_STATUS
 from yggdrasil.contract.controls import token_pair
 from yggdrasil.contract.schema import ContractError, validate
@@ -238,6 +239,15 @@ class TestCurrentEdition(unittest.TestCase):
             elsewhere = build(link)
 
         self.assertEqual(differing_files(elsewhere, rebuilt()), [])
+
+    def test_a_rebuild_does_not_depend_on_the_configuration(self):
+        # Loading the configuration fails, as on a machine whose main.json
+        # cannot be read.
+        unreadable = OSError("main.json cannot be read")
+        with patch.object(ConfigLoader, "load_config", side_effect=unreadable):
+            unconfigured = build()
+
+        self.assertEqual(differing_files(unconfigured, rebuilt()), [])
 
     def test_a_document_changed_by_hand_differs_only_where_declared(self):
         entries = {entry["file"]: entry for entry in self.entries}
