@@ -67,19 +67,24 @@ Negative examples stay in `current/` only. A released entry may name a
 `derived_from` file or a `sequence` whose other steps were not released:
 those fields describe `current/` and are not checked in a released edition.
 
-`released/` does not exist until the first release with the contract is
-tagged.
+`released/` does not exist until the first baseline is prepared, while
+preparing the first release with the contract.
 
 ## Releasing a baseline
 
-When a version is tagged, whoever tags it adds that version's baseline:
+A release's baseline is prepared before the release is tagged, so that the
+tagged source contains its own frozen baseline. Whoever prepares the
+release:
 
-1. Check that `current/` is up to date: `python -m tests.contract.corpus`
+1. Chooses the release's tag name. The tag need not exist yet.
+2. Checks that `current/` is up to date: `python -m tests.contract.corpus`
    reports no differences.
-2. Create `released/<tag>/`, named exactly as the tag.
-3. Copy into it every file of `current/` whose manifest entry has
+3. Creates `released/<tag>/`, named exactly as the tag.
+4. Copies into it every file of `current/` whose manifest entry has
    `"expectation": "valid"`, at the same path.
-4. Write `released/<tag>/manifest.json` holding exactly those entries,
+5. Writes `released/<tag>/manifest.json` holding exactly those entries,
    unchanged, in their order, serialized like every corpus file.
-5. Run `pytest tests/contract/test_corpus.py`. Then commit the edition with
-   the release.
+6. Runs `pytest tests/contract/test_corpus.py`, then commits the edition
+   with the release's changes.
+7. Tags a commit that contains the edition: that commit, or a merge that
+   includes it. A published tag is never moved to add a baseline later.
