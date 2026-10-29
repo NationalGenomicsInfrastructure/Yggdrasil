@@ -1,0 +1,62 @@
+{
+  "_id": "proj-P1:plan_status:test_realm:pln_start_without_report",
+  "_rev": "1-corpus",
+  "attempt": {
+    "counts": null,
+    "diagnostic": null,
+    "ended_at": null,
+    "execution_authority": "daemon",
+    "execution_id": "20261022T100000000000Z_0001",
+    "execution_owner": null,
+    "failure_policy": "fail_fast",
+    "is_drained": null,
+    "outcome": null,
+    "plan_generation": "a671bdde1b64f76181438132129b209a",
+    "run_token": 0,
+    "started_at": "2026-10-22T10:00:00Z",
+    "state": "running",
+    "termination_reason": null
+  },
+  "plan_id": "pln_start_without_report",
+  "projection": "attempt",
+  "realm": "test_realm",
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "steps": {
+    "demux": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000001",
+      "state": "step.succeeded",
+      "step_name": "demux",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "qc": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000002",
+      "state": "step.succeeded",
+      "step_name": "qc",
+      "ts": "2026-10-22T10:00:00Z"
+    }
+  },
+  "type": "plan_status",
+  "updated_at": "2026-10-22T10:00:00Z"
+}

@@ -1,0 +1,68 @@
+{
+  "_id": "proj-P1:plan_status:test_realm:pln_report_without_start",
+  "_rev": "1-corpus",
+  "attempt": {
+    "counts": {
+      "blocked": 0,
+      "failed": 0,
+      "reused": 0,
+      "succeeded": 2,
+      "unreached": 0
+    },
+    "diagnostic": null,
+    "ended_at": "2026-10-22T10:00:00Z",
+    "execution_authority": null,
+    "execution_id": "20261022T100000000000Z_0001",
+    "execution_owner": null,
+    "failure_policy": "fail_fast",
+    "is_drained": true,
+    "outcome": "succeeded",
+    "plan_generation": "73fad59f0224c43e64a51b79d3acc5db",
+    "run_token": 0,
+    "started_at": "2026-10-22T10:00:00Z",
+    "state": "finished",
+    "termination_reason": "completed"
+  },
+  "plan_id": "pln_report_without_start",
+  "projection": "attempt",
+  "realm": "test_realm",
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "steps": {
+    "demux": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000001",
+      "state": "step.succeeded",
+      "step_name": "demux",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "qc": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000002",
+      "state": "step.succeeded",
+      "step_name": "qc",
+      "ts": "2026-10-22T10:00:00Z"
+    }
+  },
+  "type": "plan_status",
+  "updated_at": "2026-10-22T10:00:00Z"
+}

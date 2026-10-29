@@ -1,7 +1,13 @@
+import contextlib
+import io
 import logging
 import os
+import subprocess
+import sys
+import textwrap
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from yggdrasil.config.session import YggSession
@@ -585,6 +591,274 @@ class TestLoggingUtils(unittest.TestCase):
                 self.assertIn("handlers", call_args)
                 self.assertEqual(len(call_args["handlers"]), 2)
                 mock_stream.assert_called_once()
+
+
+class _Unprintable:
+    """A logging argument whose conversion to text fails."""
+
+    def __str__(self) -> str:
+        raise ValueError("cannot be shown")
+
+
+class _Interrupting:
+    """A logging argument whose conversion to text interrupts the program."""
+
+    def __init__(self, interruption: BaseException) -> None:
+        self.interruption = interruption
+
+    def __str__(self) -> str:
+        raise self.interruption
+
+
+class _Recording(logging.Handler):
+    """Keeps the attributes and the formatted text of every record it handles.
+
+    Attributes:
+        attributes: Each record's attributes, as the record arrived.
+        lines: Each record formatted as its message, with any traceback.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFormatter(logging.Formatter("%(message)s"))
+        self.attributes: list[dict[str, Any]] = []
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Keep record's attributes, then its formatted text."""
+        self.attributes.append(dict(record.__dict__))
+        self.lines.append(self.format(record))
+
+
+# Messages that cannot be built from their arguments, with the error building
+# one raises.
+MALFORMED: dict[str, tuple[str, tuple[Any, ...], type[Exception]]] = {
+    "a number format given a string": ("%d plans", ("many",), TypeError),
+    "an argument that cannot be shown": ("plan %s", (_Unprintable(),), ValueError),
+}
+
+
+def _record(msg: str, *args: Any, **attributes: Any) -> logging.LogRecord:
+    """Make a record the way a logger does, with attributes added."""
+    record = logging.LogRecord(__name__, logging.WARNING, __file__, 1, msg, args, None)
+    record.__dict__.update(attributes)
+    return record
+
+
+class TestDeduplicatingHandler(unittest.TestCase):
+    """A record whose message cannot be built is passed to handleError().
+
+    handleError() follows logging's own error policy, and the record is not
+    forwarded. Every other record reaches the wrapped handler as before.
+    Each test covers both modes: the console's, which suppresses repeats,
+    and the file's, which does not.
+    """
+
+    def setUp(self):
+        raise_exceptions = logging.raiseExceptions
+        self.addCleanup(setattr, logging, "raiseExceptions", raise_exceptions)
+
+    def deduplicating(
+        self, suppress_duplicates: bool
+    ) -> tuple[DeduplicatingHandler, io.StringIO]:
+        """Wrap a handler that writes each message, bare, to a buffer.
+
+        Args:
+            suppress_duplicates: The mode of the wrapping handler.
+
+        Returns:
+            tuple: The wrapping handler, and the buffer the messages reach.
+        """
+        stream = io.StringIO()
+        target = logging.StreamHandler(stream)
+        target.setFormatter(logging.Formatter("%(message)s"))
+        handler = DeduplicatingHandler(target, suppress_duplicates=suppress_duplicates)
+        return handler, stream
+
+    def logger_for(self, handler: logging.Handler) -> logging.Logger:
+        """Return a logger whose records reach handler alone, until cleanup.
+
+        Args:
+            handler: The only handler the logger uses.
+
+        Returns:
+            logging.Logger: The logger; its handlers, level and propagation are
+            restored after the test.
+        """
+        logger = logging.getLogger(self.id())
+        handlers, level, propagate = logger.handlers, logger.level, logger.propagate
+
+        def restore() -> None:
+            logger.handlers = handlers
+            logger.setLevel(level)
+            logger.propagate = propagate
+
+        self.addCleanup(restore)
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        return logger
+
+    def test_a_record_that_cannot_be_prepared_does_not_interrupt_the_caller(self):
+        for suppress in (True, False):
+            for case, (msg, args, _error) in MALFORMED.items():
+                with self.subTest(suppress_duplicates=suppress, case=case):
+                    handler, stream = self.deduplicating(suppress)
+                    logger = self.logger_for(handler)
+
+                    with patch.object(handler, "handleError") as handle_error:
+                        logger.warning(msg, *args)
+
+                    handle_error.assert_called_once()
+                    (record,) = handle_error.call_args.args
+                    self.assertEqual((record.msg, record.args), (msg, args))
+                    self.assertEqual(stream.getvalue(), "")
+
+    def test_the_failure_is_reported_on_stderr_while_logging_raises_exceptions(self):
+        logging.raiseExceptions = True
+        for suppress in (True, False):
+            for case, (msg, args, error) in MALFORMED.items():
+                with self.subTest(suppress_duplicates=suppress, case=case):
+                    handler, stream = self.deduplicating(suppress)
+                    logger = self.logger_for(handler)
+                    errors = io.StringIO()
+
+                    with contextlib.redirect_stderr(errors):
+                        logger.warning(msg, *args)
+
+                    report = errors.getvalue()
+                    self.assertIn("--- Logging error ---", report)
+                    self.assertIn(f"{error.__name__}: ", report)
+                    self.assertIn(f"Message: {msg!r}", report)
+                    self.assertEqual(stream.getvalue(), "")
+
+    def test_the_failure_is_not_reported_while_logging_ignores_exceptions(self):
+        logging.raiseExceptions = False
+        for suppress in (True, False):
+            for case, (msg, args, _error) in MALFORMED.items():
+                with self.subTest(suppress_duplicates=suppress, case=case):
+                    handler, stream = self.deduplicating(suppress)
+                    logger = self.logger_for(handler)
+                    errors = io.StringIO()
+
+                    with contextlib.redirect_stderr(errors):
+                        logger.warning(msg, *args)
+
+                    self.assertEqual(errors.getvalue(), "")
+                    self.assertEqual(stream.getvalue(), "")
+
+    def test_a_failed_record_leaves_the_record_and_the_repeat_count_alone(self):
+        logging.raiseExceptions = False
+        # What reaches the stream for A, A, a failed record, A, then B.
+        written = {
+            True: ["A", "↑ message repeated 3 times", "B"],
+            False: ["A", "A", "A", "B"],
+        }
+        for suppress, lines in written.items():
+            with self.subTest(suppress_duplicates=suppress):
+                handler, stream = self.deduplicating(suppress)
+                handler.handle(_record("A"))
+                handler.handle(_record("A"))
+                state = (handler.last_message, handler.repeat_count)
+                failed = _record("%d plans", "many")
+                attributes = dict(failed.__dict__)
+
+                handler.handle(failed)
+
+                self.assertEqual(failed.__dict__, attributes)
+                self.assertEqual((handler.last_message, handler.repeat_count), state)
+                handler.handle(_record("A"))
+                handler.handle(_record("B"))
+                self.assertEqual(stream.getvalue().splitlines(), lines)
+
+    def test_a_forwarded_record_keeps_its_metadata_and_exception(self):
+        try:
+            raise RuntimeError("step failed")
+        except RuntimeError:
+            exc_info = sys.exc_info()
+        for suppress in (True, False):
+            with self.subTest(suppress_duplicates=suppress):
+                target = _Recording()
+                handler = DeduplicatingHandler(target, suppress_duplicates=suppress)
+                record = _record(
+                    "Resuming from seq='%s'",
+                    "1234567890abcdefghijKLMNOPQRST",
+                    exc_info=exc_info,
+                    plan_id="pln_P1_v1",
+                )
+
+                handler.handle(record)
+
+                (forwarded,) = target.attributes
+                # Expanded and truncated as before, and nothing else changed.
+                self.assertEqual(
+                    forwarded.pop("msg"), "Resuming from seq='1234567890abcdefghij...'"
+                )
+                self.assertEqual(forwarded.pop("args"), ())
+                kept = {
+                    key: value
+                    for key, value in record.__dict__.items()
+                    if key not in ("msg", "args")
+                }
+                self.assertEqual(forwarded, kept)
+                self.assertIs(forwarded["exc_info"], exc_info)
+                self.assertIn("RuntimeError: step failed", target.lines[0])
+
+    def test_an_interruption_while_preparing_still_propagates(self):
+        for suppress in (True, False):
+            for interruption in (KeyboardInterrupt, SystemExit):
+                with self.subTest(
+                    suppress_duplicates=suppress, interruption=interruption.__name__
+                ):
+                    handler, stream = self.deduplicating(suppress)
+                    logger = self.logger_for(handler)
+
+                    with (
+                        patch.object(handler, "handleError") as handle_error,
+                        self.assertRaises(interruption),
+                    ):
+                        logger.warning("plan %s", _Interrupting(interruption()))
+
+                    handle_error.assert_not_called()
+                    self.assertEqual(
+                        (handler.last_message, handler.repeat_count), (None, 0)
+                    )
+                    self.assertEqual(stream.getvalue(), "")
+
+    def test_an_integer_too_long_to_show_does_not_interrupt_the_caller(self):
+        # Python refuses to convert an integer longer than its conversion limit
+        # to text. The limit is set explicitly, in a process of its own.
+        script = textwrap.dedent("""
+            import logging
+            import sys
+
+            sys.set_int_max_str_digits(4300)
+            logging.raiseExceptions = True
+
+            from yggdrasil.logging_utils import DeduplicatingHandler
+
+            for suppress in (True, False):
+                target = logging.StreamHandler(sys.stdout)
+                target.setFormatter(logging.Formatter("%(message)s"))
+                logger = logging.getLogger(f"probe.{suppress}")
+                handler = DeduplicatingHandler(target, suppress_duplicates=suppress)
+                logger.addHandler(handler)
+                logger.propagate = False
+                logger.warning("executed_run_token %s", 10**5000)
+                logger.warning("still logging")
+            print("returned")
+            """)
+
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(), ["still logging", "still logging", "returned"]
+        )
+        self.assertEqual(result.stderr.count("--- Logging error ---"), 2)
+        self.assertIn("integer string conversion", result.stderr)
 
 
 if __name__ == "__main__":

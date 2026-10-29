@@ -324,24 +324,6 @@ class TestManualReRunE2E(unittest.TestCase):
 
         self.assertTrue(is_plan_eligible(rerun_plan))
 
-    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
-    def test_token_updated_after_rerun_execution(self, mock_plan_db_cls):
-        """Test that executed_run_token is updated after re-run execution."""
-        mock_plan_db = mock_plan_db_cls.return_value
-        mock_plan_db.update_executed_token.return_value = True
-
-        # Simulate successful re-run
-        plan_doc_id = "pln_rerun_001"
-        new_run_token = 2
-
-        # After execution, update token
-        success = mock_plan_db.update_executed_token(plan_doc_id, new_run_token)
-
-        self.assertTrue(success)
-        mock_plan_db.update_executed_token.assert_called_once_with(
-            plan_doc_id, new_run_token
-        )
-
 
 class TestStartupRecoveryE2E(unittest.TestCase):
     """

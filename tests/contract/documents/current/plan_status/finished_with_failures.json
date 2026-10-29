@@ -1,0 +1,109 @@
+{
+  "_id": "proj-P1:plan_status:test_realm:pln_lanes",
+  "_rev": "1-corpus",
+  "attempt": {
+    "counts": {
+      "blocked": 1,
+      "failed": 1,
+      "reused": 0,
+      "succeeded": 2,
+      "unreached": 0
+    },
+    "diagnostic": null,
+    "ended_at": "2026-10-22T10:00:00Z",
+    "execution_authority": "daemon",
+    "execution_id": "20261022T100000000000Z_0001",
+    "execution_owner": null,
+    "failure_policy": "continue_independent",
+    "is_drained": true,
+    "outcome": "failed",
+    "plan_generation": "6f41ef9b55dd15f40e1b25f536e6661b",
+    "run_token": 0,
+    "started_at": "2026-10-22T10:00:00Z",
+    "state": "finished",
+    "termination_reason": "completed"
+  },
+  "plan_id": "pln_lanes",
+  "projection": "attempt",
+  "realm": "test_realm",
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "steps": {
+    "lane1_demux": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": {
+        "advice": "Correct the sample sheet, then regenerate the plan.",
+        "code": "SAMPLESHEET_DUPLICATE_LANE",
+        "error": "lane 1 is listed twice in the sample sheet",
+        "error_type": "PermanentStepError",
+        "kind": "permanent",
+        "step_id": "lane1_demux"
+      },
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "failed",
+      "progress": 0,
+      "run_id": "run_20261022T100000000000Z_000001",
+      "state": "step.failed",
+      "step_name": "lane1_demux",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "lane1_upload": {
+      "artifacts": [],
+      "direct_blockers": [
+        "lane1_demux"
+      ],
+      "error": null,
+      "failed_ancestors": [
+        "lane1_demux"
+      ],
+      "fingerprint": null,
+      "job": null,
+      "metrics": {},
+      "outcome": "blocked",
+      "progress": 0,
+      "run_id": null,
+      "state": "step.blocked",
+      "step_name": "lane1_upload",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "lane2_demux": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000002",
+      "state": "step.succeeded",
+      "step_name": "lane2_demux",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "lane2_upload": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000003",
+      "state": "step.succeeded",
+      "step_name": "lane2_upload",
+      "ts": "2026-10-22T10:00:00Z"
+    }
+  },
+  "type": "plan_status",
+  "updated_at": "2026-10-22T10:00:00Z"
+}

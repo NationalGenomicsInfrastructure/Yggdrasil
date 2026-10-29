@@ -47,6 +47,10 @@ merged into a correlated attempt.
 The snapshot describes the latest observed attempt. Its plan generation is the
 one that attempt captured, which is not necessarily the stored plan's current
 generation; a view of the stored plan reads that from the plan document.
+
+**The stored document.** :func:`snapshot_document` wraps a projection in the
+envelope every stored snapshot carries, including the ``schema_version`` this
+release writes, so a snapshot can be built from projections without a spool.
 """
 
 from __future__ import annotations
@@ -55,6 +59,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from yggdrasil.contract import CURRENT_FAMILIES, PLAN_STATUS
+from yggdrasil.contract.versions import SCHEMA_VERSION_FIELD
 from yggdrasil.core.execution_ids import execution_order_key
 from yggdrasil.flow.events.attempt_records import STEP_BLOCKED_EVENT
 from yggdrasil.flow.outcomes import StepOutcome
@@ -677,3 +683,48 @@ def project_legacy(runs: Mapping[str, StepRun]) -> dict[str, dict[str, Any]]:
         status.state = status.state or STATE_UNKNOWN
         steps[step_id] = status.to_dict()
     return steps
+
+
+# ----- the stored document -----
+
+
+def snapshot_document(
+    *,
+    realm: str,
+    plan_id: str,
+    scope: dict[str, Any],
+    projection: str,
+    attempt: dict[str, Any] | None,
+    steps: dict[str, dict[str, Any]],
+    updated_at: str,
+) -> dict[str, Any]:
+    """Return the ``plan_status`` snapshot of one plan, as it is stored.
+
+    Adds ``schema_version`` (the family this release writes) and ``type`` to
+    the given fields, which it keeps unchanged. The sink that stores the
+    snapshot adds its ``_id``.
+
+    Args:
+        realm: The plan's realm.
+        plan_id: The plan.
+        scope: The plan's scope.
+        projection: ``attempt``, or ``legacy`` for uncorrelated histories.
+        attempt: The attempt summary from :func:`project_attempt`; None for a
+            legacy projection.
+        steps: The step entries by step ID.
+        updated_at: When this snapshot is written, in the canonical spelling.
+
+    Returns:
+        dict[str, Any]: The snapshot document.
+    """
+    return {
+        SCHEMA_VERSION_FIELD: CURRENT_FAMILIES[PLAN_STATUS],
+        "type": PLAN_STATUS,
+        "realm": realm,
+        "plan_id": plan_id,
+        "scope": scope,
+        "projection": projection,
+        "attempt": attempt,
+        "steps": steps,
+        "updated_at": updated_at,
+    }

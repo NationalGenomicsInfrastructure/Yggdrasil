@@ -1,10 +1,13 @@
-"""Plan-store contract for generations, conditional writes and finalization.
+"""Plan-store contract: generations, conditional writes, strict reads, finalization.
 
-Every scenario runs unchanged against both backends: SQLite on a real
+Every shared scenario runs unchanged against both backends: SQLite on a real
 temporary file, and ``PlanDBManager`` on an in-memory client that enforces
 CouchDB's revision rules. Concurrent writers are interleaved deterministically
 by running them right after the store under test reads the document, which is
-exactly the window a lost update needs.
+exactly the window a lost update needs. What a backend can answer instead of
+the stored document differs (a body stored under another ID on SQLite, any
+body CouchDB returns with a success status), so those scenarios are written
+per backend, around one shared assertion.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from typing import Any
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
+from tests.contract.support import ConformingBuilders
 from tests.plan_store_support import (
     DRAINED_FAILURE,
     PREFLIGHT_REJECTED,
@@ -30,13 +34,16 @@ from tests.plan_store_support import (
     patch_api_exception,
     plan_db_manager_on,
 )
+from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
-from yggdrasil.storage.plan_documents import build_plan_document
 from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 from yggdrasil.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 
 PLAN_ID = "pln_test_P1_v1"
+
+# Marks a field to remove from a document.
+ABSENT = object()
 
 
 class PlanStoreContract:
@@ -75,6 +82,14 @@ class PlanStoreContract:
 
     def write_count(self, doc: dict[str, Any]) -> int:
         """Number of writes the document's revision reflects."""
+        raise NotImplementedError
+
+    def raw_stored(self) -> dict[str, Any] | None:
+        """The plan document exactly as the backend holds it, ``_rev`` included."""
+        raise NotImplementedError
+
+    def plan_seq(self) -> int | None:
+        """The head of the plan-change sequence; None where there is none."""
         raise NotImplementedError
 
     # ----- helpers -----
@@ -118,6 +133,31 @@ class PlanStoreContract:
         recreated = self.save()
         self.assertNotEqual(recreated["plan_generation"], doc["plan_generation"])
 
+    # ----- version marker and timestamps -----
+
+    def test_saved_plan_is_family_one_with_canonical_timestamps(self):
+        doc = self.save()
+        self.assertIs(type(doc["schema_version"]), int)
+        self.assertEqual(doc["schema_version"], 1)
+        for field in ("created_at", "updated_at"):
+            with self.subTest(field=field):
+                self.assertTrue(is_canonical(doc[field]), doc[field])
+
+    def test_finalization_keeps_the_marker_and_writes_canonical_timestamps(self):
+        doc = self.save()
+        self.plans.finalize_execution(finalization_for(doc))
+
+        stored = self.plans.fetch_plan(PLAN_ID)
+        self.assertEqual(stored["schema_version"], 1)
+        written = {
+            "updated_at": stored["updated_at"],
+            "last_executed_at": stored["last_executed_at"],
+            "finalized_at": stored["last_finalized_execution"]["finalized_at"],
+        }
+        for field, value in written.items():
+            with self.subTest(field=field):
+                self.assertTrue(is_canonical(value), value)
+
     # ----- competing save_plan -----
 
     def test_competing_creation_loser_raises_and_keeps_winner(self):
@@ -157,18 +197,6 @@ class PlanStoreContract:
         self.assertEqual(
             stored["last_finalized_execution"]["execution_id"], request.execution_id
         )
-
-    # ----- update_executed_token -----
-
-    def test_token_update_reapplies_over_a_concurrent_rerun_request(self):
-        self.save()
-        self.after_next_read(lambda: self.external_update(run_token=1))
-        self.assertTrue(self.plans.update_executed_token(PLAN_ID, 0, max_retries=2))
-
-        doc = self.plans.fetch_plan(PLAN_ID)
-        self.assertEqual(doc["executed_run_token"], 0)
-        self.assertEqual(doc["run_token"], 1)  # the rerun request survived
-        self.assertTrue(is_plan_eligible(doc))
 
     # ----- finalization: recording -----
 
@@ -339,6 +367,60 @@ class PlanStoreContract:
         self.assertEqual(self.plans.fetch_plan(PLAN_ID), committed)
         self.assertEqual(committed["executed_run_token"], 1)
 
+    # ----- finalization: invalid control state -----
+
+    def assert_refused_without_writing(self, request):
+        """Finalize request; assert it was refused and nothing was written.
+
+        Returns:
+            FinalizationResult: The refusal.
+        """
+        before, seq = self.raw_stored(), self.plan_seq()
+
+        result = self.plans.finalize_execution(request)
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        self.assertFalse(result.recorded)
+        self.assertEqual(self.raw_stored(), before)
+        self.assertEqual(self.plan_seq(), seq)
+        return result
+
+    def test_invalid_stored_tokens_are_refused_without_writing(self):
+        request = finalization_for(self.save())
+        self.external_update(executed_run_token="soon")
+
+        result = self.assert_refused_without_writing(request)
+
+        self.assertIn("executed_run_token 'soon' is a str", result.message)
+
+    def test_a_write_that_would_leave_executed_above_run_is_not_made(self):
+        self.save()
+        self.external_update(run_token=5)
+        request = finalization_for(self.plans.fetch_plan(PLAN_ID))  # run_token 5
+        self.external_update(run_token=4)  # a valid pair, 4 / -1
+
+        result = self.assert_refused_without_writing(request)
+
+        self.assertIn("run_token 4 / executed_run_token 5", result.message)
+        stored = self.raw_stored()
+        self.assertEqual((stored["run_token"], stored["executed_run_token"]), (4, -1))
+        self.assertNotIn("last_finalized_execution", stored)
+
+    def test_tokens_lowered_between_read_and_write_are_refused_on_the_reread(self):
+        self.save()
+        self.external_update(run_token=5)
+        request = finalization_for(self.plans.fetch_plan(PLAN_ID))
+        self.after_next_read(lambda: self.external_update(run_token=4))
+
+        result = self.plans.finalize_execution(request)
+
+        self.assertEqual(result.status, FinalizationStatus.INVALID_CONTROL_STATE)
+        stored = self.raw_stored()
+        self.assertEqual((stored["run_token"], stored["executed_run_token"]), (4, -1))
+        self.assertNotIn("last_finalized_execution", stored)
+        # Nothing landed after the competing write: one save and two updates.
+        self.assertEqual(self.write_count(stored), 3)
+
     def test_legacy_document_without_generation_cannot_be_finalized(self):
         doc = self.save()
         request = finalization_for(doc)
@@ -421,65 +503,114 @@ class PlanStoreContract:
             FinalizationStatus.COMMITTED,
         )
 
-    # ----- legacy generation initialization -----
+    # ----- finalization: the family -----
 
-    def _legacy_document(self) -> dict[str, Any]:
-        """Store and return a plan document written before generations existed."""
-        doc = build_plan_document(make_plan(PLAN_ID), "test_realm", dict(SCOPE))
-        del doc["plan_generation"]
-        doc["executed_run_token"] = 0
-        doc["run_token"] = 1
-        self.raw_put(doc)
-        return self.plans.fetch_plan(PLAN_ID)
+    def test_a_document_of_no_supported_family_is_not_finalized(self):
+        request = finalization_for(self.save())
+        for marker in (ABSENT, "1", 2):
+            label = "absent" if marker is ABSENT else repr(marker)
+            with self.subTest(marker=label):
+                doc = self.plans.fetch_plan(PLAN_ID)
+                if marker is ABSENT:
+                    del doc["schema_version"]
+                else:
+                    doc["schema_version"] = marker
+                self.raw_conditional_put(doc)
+                before, seq = self.raw_stored(), self.plan_seq()
 
-    def test_legacy_document_gets_a_generation_and_nothing_else_changes(self):
-        legacy = self._legacy_document()
+                result = self.plans.finalize_execution(request)
 
-        initialized = self.plans.ensure_plan_generation(PLAN_ID)
+                self.assertEqual(result.status, FinalizationStatus.SUPERSEDED)
+                self.assertEqual(result.reason, SupersessionReason.UNSUPPORTED_DOCUMENT)
+                self.assertEqual(self.raw_stored(), before)
+                self.assertEqual(self.plan_seq(), seq)
 
-        self.assertTrue(initialized["plan_generation"])
-        stored = self.plans.fetch_plan(PLAN_ID)
-        self.assertEqual(stored, initialized)
-        self.assertEqual(
-            {k: v for k, v in stored.items() if k not in ("_rev", "plan_generation")},
-            {k: v for k, v in legacy.items() if k != "_rev"},
-        )
-        self.assertEqual(self.write_count(stored), self.write_count(legacy) + 1)
+    def test_a_marker_changed_between_read_and_write_stops_the_write(self):
+        request = finalization_for(self.save())
+        self.after_next_read(lambda: self.external_update(schema_version=2))
 
-    def test_document_with_a_generation_is_returned_without_a_write(self):
+        result = self.plans.finalize_execution(request)
+
+        self.assertEqual(result.status, FinalizationStatus.SUPERSEDED)
+        self.assertEqual(result.reason, SupersessionReason.UNSUPPORTED_DOCUMENT)
+        stored = self.raw_stored()
+        self.assertEqual(stored["schema_version"], 2)
+        self.assertNotIn("last_finalized_execution", stored)
+        # Nothing landed after the competing write: one save and one update.
+        self.assertEqual(self.write_count(stored), 2)
+
+    # ----- the strict read -----
+
+    def test_the_strict_read_returns_the_document_as_stored(self):
         doc = self.save()
-        self.assertEqual(self.plans.ensure_plan_generation(PLAN_ID), doc)
-        self.assertEqual(self.plans.fetch_plan(PLAN_ID), doc)
+        seq = self.plan_seq()
 
-    def test_missing_plan_has_no_generation_to_ensure(self):
-        self.assertIsNone(self.plans.ensure_plan_generation("pln_missing"))
+        self.assertEqual(self.plans.read_plan_document(PLAN_ID), doc)
+        self.assertIsNone(self.plans.read_plan_document("pln_missing"))
+        self.assertEqual(self.raw_stored(), doc)
+        self.assertEqual(self.plan_seq(), seq)
 
-    def test_legacy_init_race_adopts_the_winners_generation(self):
-        legacy = self._legacy_document()
-        winner: dict[str, Any] = {}
-        self.after_next_read(
-            lambda: winner.update(self.plans.ensure_plan_generation(PLAN_ID))
-        )
+    def test_the_strict_read_gives_no_document_a_generation(self):
+        self.save()
+        for marker in (ABSENT, 1):
+            label = "unversioned" if marker is ABSENT else "family 1"
+            with self.subTest(document=label):
+                legacy = self.plans.fetch_plan(PLAN_ID)
+                legacy.pop("plan_generation", None)
+                if marker is ABSENT:
+                    del legacy["schema_version"]
+                else:
+                    legacy["schema_version"] = marker
+                self.raw_conditional_put(legacy)
+                stored, seq = self.raw_stored(), self.plan_seq()
 
-        loser = self.plans.ensure_plan_generation(PLAN_ID)
+                read = self.plans.read_plan_document(PLAN_ID)
 
-        self.assertEqual(loser["plan_generation"], winner["plan_generation"])
-        stored = self.plans.fetch_plan(PLAN_ID)
-        self.assertEqual(stored["plan_generation"], winner["plan_generation"])
-        self.assertEqual(self.write_count(stored), self.write_count(legacy) + 1)
+                self.assertNotIn("plan_generation", read)
+                self.assertEqual(read, stored)
+                self.assertEqual(self.raw_stored(), stored)
+                self.assertEqual(self.plan_seq(), seq)
 
-    def test_legacy_init_reapplies_over_an_unrelated_concurrent_change(self):
-        self._legacy_document()
-        self.after_next_read(lambda: self.external_update(run_token=2))
+    def test_a_read_failure_is_a_classified_plan_store_error(self):
+        self.save()
+        for transient in (True, False):
+            with self.subTest(transient=transient):
+                self.fail_next_read(transient=transient)
 
-        initialized = self.plans.ensure_plan_generation(PLAN_ID)
+                with self.assertRaises(PlanStoreError) as ctx:
+                    self.plans.read_plan_document(PLAN_ID)
 
-        self.assertTrue(initialized["plan_generation"])
-        self.assertEqual(initialized["run_token"], 2)
-        self.assertEqual(self.plans.fetch_plan(PLAN_ID), initialized)
+                self.assertIsNotNone(ctx.exception.__cause__)
+                self.assertEqual(ctx.exception.retryable, transient)
+
+    def assert_not_the_stored_document(self, serve):
+        """Assert that reads served by serve are failures, and write nothing.
+
+        Both the strict read and finalization must raise a non-retryable
+        PlanStoreError rather than conclude anything from what they read.
+
+        Args:
+            serve: Arranges for the store's next read of the plan to answer
+                with something other than its stored document.
+        """
+        request = finalization_for(self.plans.fetch_plan(PLAN_ID))
+        before, seq = self.raw_stored(), self.plan_seq()
+
+        for call in (
+            lambda: self.plans.read_plan_document(PLAN_ID),
+            lambda: self.plans.finalize_execution(request),
+        ):
+            serve()
+            with self.assertRaises(PlanStoreError) as ctx:
+                call()
+            self.assertFalse(ctx.exception.retryable)
+            self.assertIn("not the plan's stored document", str(ctx.exception))
+
+        self.assertEqual(self.raw_stored(), before)
+        self.assertEqual(self.plan_seq(), seq)
 
 
-class TestSQLiteConditionalUpdates(PlanStoreContract, unittest.TestCase):
+class TestSQLiteConditionalUpdates(PlanStoreContract, ConformingBuilders):
     """The contract against SQLitePlanStore on a real temporary database."""
 
     def setUp(self):
@@ -536,8 +667,49 @@ class TestSQLiteConditionalUpdates(PlanStoreContract, unittest.TestCase):
     def write_count(self, doc):
         return int(doc["_rev"])
 
+    def raw_stored(self):
+        return self.store.get_document("plans", PLAN_ID)
 
-class TestCouchConditionalUpdates(PlanStoreContract, unittest.TestCase):
+    def plan_seq(self):
+        return self.store.current_plan_seq()
+
+    # ----- what a read may return -----
+
+    def misfile(self) -> None:
+        """Store another plan's body under this plan's key, as given.
+
+        The store supplies ``_rev`` from the row, but the body keeps its own
+        ``_id``.
+        """
+        doc = self.plans.fetch_plan(PLAN_ID)
+        doc["_id"] = "pln_other"
+        self.store.put_document(
+            "plans", PLAN_ID, doc, bump_plan_seq=True, expected_rev=doc["_rev"]
+        )
+
+    def test_a_body_stored_under_another_id_is_not_the_document(self):
+        self.save()
+        self.misfile()
+        self.assertEqual(self.raw_stored()["_id"], "pln_other")
+
+        self.assert_not_the_stored_document(lambda: None)
+
+    def test_a_misfiled_body_on_the_conflict_reread_stops_the_write(self):
+        request = finalization_for(self.save())
+        self.after_next_read(self.misfile)
+
+        with self.assertRaises(PlanStoreError) as ctx:
+            self.plans.finalize_execution(request)
+
+        self.assertFalse(ctx.exception.retryable)
+        stored = self.raw_stored()
+        self.assertEqual(stored["_id"], "pln_other")
+        self.assertNotIn("last_finalized_execution", stored)
+        # One save and the misfiling write; the finalizer wrote nothing.
+        self.assertEqual(self.write_count(stored), 2)
+
+
+class TestCouchConditionalUpdates(PlanStoreContract, ConformingBuilders):
     """The contract against PlanDBManager on a revision-enforcing fake client."""
 
     def setUp(self):
@@ -568,6 +740,54 @@ class TestCouchConditionalUpdates(PlanStoreContract, unittest.TestCase):
 
     def write_count(self, doc):
         return int(doc["_rev"].split("-")[0])
+
+    def raw_stored(self):
+        return self.server.raw(PLAN_ID)
+
+    def plan_seq(self):
+        return None
+
+    # ----- what a read may return -----
+
+    def answers(self) -> dict[str, dict[str, Any]]:
+        """Bodies CouchDB might return with a success status for this plan."""
+        stored = self.plans.fetch_plan(PLAN_ID)
+        other = {**stored, "_id": "pln_other"}
+        unrevised = {k: v for k, v in stored.items() if k != "_rev"}
+        return {
+            "an object-shaped error": {"error": "proxy failure"},
+            "another document's body": other,
+            "a body without a revision": unrevised,
+        }
+
+    def test_a_success_answer_that_is_not_the_document_is_a_failure(self):
+        self.save()
+        for case, body in self.answers().items():
+            with self.subTest(case=case):
+                self.assert_not_the_stored_document(
+                    lambda body=body: self.server.read_responses.append(body)
+                )
+
+    def test_a_malformed_conflict_reread_stops_the_write(self):
+        request = finalization_for(self.save())
+        for case, body in self.answers().items():
+            with self.subTest(case=case):
+
+                def rerun_then_answer(body: dict[str, Any] = body) -> None:
+                    self.external_update(run_token=self.raw_stored()["run_token"] + 1)
+                    self.server.read_responses.append(body)
+
+                self.after_next_read(rerun_then_answer)
+                updated_writes = self.write_count(self.raw_stored()) + 1
+
+                with self.assertRaises(PlanStoreError) as ctx:
+                    self.plans.finalize_execution(request)
+
+                self.assertFalse(ctx.exception.retryable)
+                stored = self.raw_stored()
+                self.assertNotIn("last_finalized_execution", stored)
+                # Only the competing write landed; the finalizer wrote nothing.
+                self.assertEqual(self.write_count(stored), updated_writes)
 
 
 if __name__ == "__main__":

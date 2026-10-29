@@ -20,7 +20,6 @@ from unittest.mock import patch
 
 from tests.plan_store_support import SCOPE, finalization_for, make_plan
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
-from yggdrasil.storage.plan_documents import build_plan_document
 from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus
 from yggdrasil.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
@@ -352,23 +351,6 @@ class TestPlanStoreThreadRaces(_SQLiteTestBase):
         self.assertEqual(doc["_rev"], "2")
         self.assertEqual(self.store.current_plan_seq(), seq_before + 1)
 
-    def test_concurrent_legacy_generation_init_writes_once(self):
-        legacy = build_plan_document(make_plan(PLAN_ID), "test_realm", dict(SCOPE))
-        del legacy["plan_generation"]
-        self.store.put_document("plans", PLAN_ID, legacy, bump_plan_seq=True)
-
-        results = self.race_after_reads(
-            lambda: self.plans.ensure_plan_generation(PLAN_ID),
-            lambda: self.plans.ensure_plan_generation(PLAN_ID),
-        )
-
-        self.assertEqual([kind for kind, _ in results], ["ok", "ok"])
-        generations = {doc["plan_generation"] for _, doc in results}
-        self.assertEqual(len(generations), 1)
-        stored = self.plans.fetch_plan(PLAN_ID)
-        self.assertEqual({stored["plan_generation"]}, generations)
-        self.assertEqual(stored["_rev"], "2")
-
     def test_finalization_racing_a_rerun_request_keeps_both(self):
         self.save("original")
         request = finalization_for(self.plans.fetch_plan(PLAN_ID))
@@ -407,87 +389,6 @@ class TestPlanStoreThreadRaces(_SQLiteTestBase):
             doc["last_finalized_execution"]["execution_id"], request.execution_id
         )
         self.assertTrue(is_plan_eligible(doc))  # the newer request is pending
-
-    def test_token_update_racing_a_rerun_request_keeps_both(self):
-        self.save("original")
-
-        def request_rerun() -> None:
-            doc = self.store.get_document("plans", PLAN_ID)
-            doc["run_token"] = 1
-            try:
-                self.store.put_document(
-                    "plans", PLAN_ID, doc, bump_plan_seq=True, expected_rev=doc["_rev"]
-                )
-            except RevisionConflictError:
-                doc = self.store.get_document("plans", PLAN_ID)
-                doc["run_token"] = 1
-                self.store.put_document(
-                    "plans", PLAN_ID, doc, bump_plan_seq=True, expected_rev=doc["_rev"]
-                )
-
-        results = self.race_after_reads(
-            lambda: self.plans.update_executed_token(PLAN_ID, 0), request_rerun
-        )
-
-        self.assertEqual(results[0], ("ok", True))
-        self.assertEqual(results[1][0], "ok")
-        doc = self.plans.fetch_plan(PLAN_ID)
-        self.assertEqual((doc["executed_run_token"], doc["run_token"]), (0, 1))
-
-
-class TestBoundedRereads(_SQLiteTestBase):
-    """Operations that reread after a lost race stop at their bound."""
-
-    def setUp(self):
-        super().setUp()
-        self.store = SQLiteInternalStore(self.path)
-        self.plans = SQLitePlanStore(self.store)
-
-    def interfere_after_every_read(self, change: Callable[[dict[str, Any]], None]):
-        """After each plan read, commit change on top of what was read."""
-        real = self.store.get_document
-        writes = []
-
-        def read_then_interfere(namespace, doc_id):
-            doc = real(namespace, doc_id)
-            if doc is not None:
-                concurrent = dict(doc)
-                change(concurrent)
-                self.store.put_document(
-                    namespace, doc_id, concurrent, expected_rev=doc["_rev"]
-                )
-                writes.append(doc_id)
-            return doc
-
-        self.store.get_document = read_then_interfere
-        return writes
-
-    def test_token_update_gives_up_after_max_retries(self):
-        self.plans.save_plan(make_plan(PLAN_ID), "test_realm", dict(SCOPE))
-        writes = self.interfere_after_every_read(
-            lambda doc: doc.update(notes=f"edit {doc['_rev']}")
-        )
-
-        self.assertFalse(self.plans.update_executed_token(PLAN_ID, 0, max_retries=2))
-
-        self.assertEqual(len(writes), 2)
-        del self.store.get_document
-        self.assertEqual(self.plans.fetch_plan(PLAN_ID)["executed_run_token"], -1)
-
-    def test_legacy_generation_init_gives_up_after_three_attempts(self):
-        legacy = build_plan_document(make_plan(PLAN_ID), "test_realm", dict(SCOPE))
-        del legacy["plan_generation"]
-        self.store.put_document("plans", PLAN_ID, legacy)
-        writes = self.interfere_after_every_read(
-            lambda doc: doc.update(notes=f"edit {doc['_rev']}")
-        )
-
-        with self.assertRaises(RevisionConflictError):
-            self.plans.ensure_plan_generation(PLAN_ID)
-
-        self.assertEqual(len(writes), 3)
-        del self.store.get_document
-        self.assertNotIn("plan_generation", self.plans.fetch_plan(PLAN_ID))
 
 
 class TestBackendFailureClassification(_SQLiteTestBase):

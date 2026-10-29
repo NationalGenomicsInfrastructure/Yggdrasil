@@ -1,26 +1,30 @@
 """Conditional plan-document updates shared by every plan store.
 
-Two updates rewrite an existing plan document on behalf of execution, and both
-must stay correct while other writers change the same document:
-
-- **Generation initialization** gives a document written before
-  ``plan_generation`` existed its first generation ID.
-- **Execution finalization** records a finished execution request's outcome
-  together with its executed token.
+One update rewrites an existing plan document on behalf of execution:
+**execution finalization** records a finished execution request's outcome
+together with its executed token. It must stay correct while other writers
+change the same document.
 
 A backend supplies only two primitives: fetch the current document, and
 replace it on condition that its revision has not moved, raising
 :class:`~yggdrasil.storage.errors.RevisionConflictError` otherwise. Everything that
-depends on what a plan document means (generations, tokens, authority) is
-decided here, once, so the CouchDB and SQLite stores cannot interpret the same
-race differently.
+depends on what a plan document means (families, generations, tokens,
+authority) is decided here, once, so the CouchDB and SQLite stores cannot
+interpret the same race differently. So is what counts as a stored document
+at all (:func:`require_storage_envelope`), which both stores' fetch applies.
 
 A revision check answers only "has this document changed since I read it". It
 cannot answer "is this still the request that was executed": a worker that
 rereads the document holds a current revision whatever happened to the plan
-in between. The finalizer therefore checks generation, token and authority
-against every document it reads, before its first write as well as after a
-conflict.
+in between. The finalizer therefore checks family, generation, token and
+authority against every document it reads, before its first write as well as
+after a conflict.
+
+The family comes first. Finalization is an update: it changes only the fields
+it owns and keeps the rest as read, so it may write only into a document of
+the family the request was captured under, which this release must support.
+It never writes to a document of any other family, or to one without a valid
+``schema_version``.
 """
 
 from __future__ import annotations
@@ -31,21 +35,25 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from yggdrasil.contract import PLAN_DOCUMENT
+from yggdrasil.contract.controls import EXECUTED_RUN_TOKEN_FIELD, token_pair
+from yggdrasil.contract.diagnostics import describe_recorded
+from yggdrasil.contract.versions import SUPPORTED, UNVERSIONED, VersionInfo, version_of
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY
 from yggdrasil.flow.outcomes import ExecutionOutcome, TerminationReason
-from yggdrasil.storage.errors import RevisionConflictError
+from yggdrasil.flow.utils.ygg_time import utcnow_iso
+from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
 from yggdrasil.storage.plan_documents import (
     LAST_FINALIZED_EXECUTION_FIELD,
-    PLAN_GENERATION_FIELD,
-    new_plan_generation,
     plan_generation_of,
-    utc_now_iso,
     validate_execution_authority,
 )
 
-# Backend primitive: fetch(doc_id) returns the live plan document with its
-# ``_rev``, or None when there is none.
+# Backend primitive: fetch(doc_id) returns the plan document as stored, with
+# its ``_rev``, or None only when the backend confirms there is none. A body
+# whose storage envelope is not intact is never returned: the fetch raises
+# PlanStoreError instead (see require_storage_envelope).
 PlanFetcher = Callable[[str], dict[str, Any] | None]
 
 # Backend primitive: replace(doc_id, body, expected_rev) writes body only if the
@@ -53,95 +61,63 @@ PlanFetcher = Callable[[str], dict[str, Any] | None]
 # raises RevisionConflictError otherwise.
 PlanReplacer = Callable[[str, dict[str, Any], str], str]
 
-# Bound on fetch-and-write attempts when assigning a legacy document's first
-# generation. Each attempt that loses a race rereads the document first.
-GENERATION_INIT_ATTEMPTS = 3
 
+def require_storage_envelope(doc_id: str, body: object) -> dict[str, Any]:
+    """Return what a backend read for a plan, if it is the plan's stored document.
 
-def initialize_plan_generation(
-    doc_id: str,
-    *,
-    fetch: PlanFetcher,
-    replace: PlanReplacer,
-    logger: logging.Logger,
-    attempts: int = GENERATION_INIT_ATTEMPTS,
-) -> dict[str, Any] | None:
-    """Return the current plan document, first giving it a generation if needed.
-
-    A document that already has a generation is returned as read, without a
-    write. A legacy document gets a fresh generation added to exactly the state
-    that was read: every other field, ``updated_at`` included, is written back
-    unchanged, conditioned on the revision of that read.
-
-    Losing that write to another writer is safe to retry, because the intent
-    ("give this plan a generation if it has none") does not depend on the
-    state it was computed from. The document is reread: if the other writer
-    assigned a generation, it is adopted without writing; otherwise the
-    generation is added to the newer state. The returned document is a
-    complete snapshot, so a caller can capture the generation and every other
-    field from one read.
+    A body counts as the stored document of plan doc_id only when it is a JSON
+    object whose ``_id`` is doc_id and whose ``_rev`` is a non-empty string.
+    Anything else, such as an object-shaped error from a proxy, another
+    document's body or a body without a revision, says nothing about the
+    plan: it is neither a missing plan nor an unversioned document, so no
+    conclusion may be drawn from it. Only the envelope is checked; what the
+    document says is for its readers to judge.
 
     Args:
-        doc_id: The plan document ID.
-        fetch: Backend fetch primitive.
-        replace: Backend conditional-replace primitive.
-        logger: Logger for the assignment and any lost races.
-        attempts: Maximum number of fetch-and-write attempts.
+        doc_id: The plan document ID that was read.
+        body: What the backend returned for it, as an existing document.
 
     Returns:
-        dict | None: The current document, with its ``plan_generation`` and
-        current ``_rev``; None if the plan does not exist.
+        dict[str, Any]: body itself, unchanged.
 
     Raises:
-        RevisionConflictError: If every attempt lost a race to a writer that
-            did not assign a generation.
-        PlanStoreError: If the backend fails.
-        ValueError: If attempts is less than 1.
+        PlanStoreError: Not retryable, if body's envelope is not intact.
     """
-    if attempts < 1:
-        raise ValueError(f"attempts must be at least 1, got {attempts}")
-
-    attempt = 0
-    while True:
-        attempt += 1
-        doc = fetch(doc_id)
-        if doc is None or plan_generation_of(doc) is not None:
-            return doc
-
-        if PLAN_GENERATION_FIELD in doc:
-            logger.warning(
-                "Plan '%s' has an unusable plan_generation %r; assigning a new one",
-                doc_id,
-                doc[PLAN_GENERATION_FIELD],
-            )
-        initialized = dict(doc)
-        initialized[PLAN_GENERATION_FIELD] = new_plan_generation()
-        try:
-            initialized["_rev"] = replace(doc_id, initialized, str(doc["_rev"]))
-        except RevisionConflictError:
-            if attempt >= attempts:
-                logger.error(
-                    "Plan '%s' kept changing while its first plan_generation was "
-                    "being assigned; giving up after %d attempts",
-                    doc_id,
-                    attempts,
-                )
-                raise
-            logger.info(
-                "Plan '%s' changed while its first plan_generation was being "
-                "assigned; rereading it (attempt %d/%d)",
-                doc_id,
-                attempt,
-                attempts,
-            )
-            continue
-
-        logger.info(
-            "Assigned plan_generation '%s' to legacy plan '%s'",
-            initialized[PLAN_GENERATION_FIELD],
-            doc_id,
+    if not isinstance(body, dict):
+        problem = f"a value of type {type(body).__name__} instead of a JSON object"
+    elif "_id" not in body:
+        problem = "an object without an _id"
+    elif body["_id"] != doc_id:
+        problem = f"an object whose _id is {describe_recorded(body['_id'])}"
+    elif "_rev" not in body:
+        problem = "an object without a _rev"
+    elif not isinstance(body["_rev"], str) or not body["_rev"]:
+        problem = (
+            f"an object whose _rev is {describe_recorded(body['_rev'])}, not a "
+            "non-empty string"
         )
-        return initialized
+    else:
+        return body
+    raise PlanStoreError(
+        f"The read of plan '{doc_id}' returned {problem}, which is not the "
+        "plan's stored document; the plan's stored state is unknown"
+    )
+
+
+def describe_schema_version(version: VersionInfo) -> str:
+    """Show a plan document's recorded ``schema_version`` in a diagnostic.
+
+    Args:
+        version: What the document's ``schema_version`` says.
+
+    Returns:
+        str: ``absent`` for an unversioned document; otherwise the recorded
+        value, bounded and never raising (see
+        :func:`~yggdrasil.contract.diagnostics.describe_recorded`).
+    """
+    if version.state == UNVERSIONED:
+        return "absent"
+    return describe_recorded(version.recorded)
 
 
 class FinalizationStatus(str, Enum):
@@ -158,12 +134,18 @@ class FinalizationStatus(str, Enum):
             state.
         SUPERSEDED: The request can never be finalized, for the reason given.
             Nothing was written; retrying cannot succeed.
+        INVALID_CONTROL_STATE: The plan's execution tokens are not a valid
+            pair as read, or recording this completion would make them
+            invalid: an executed token above the run token it leaves in
+            place. Nothing was written; retrying cannot succeed until the
+            document changes. The request is neither recorded nor superseded.
     """
 
     COMMITTED = "committed"
     ALREADY_COMMITTED = "already_committed"
     CONFLICT = "conflict"
     SUPERSEDED = "superseded"
+    INVALID_CONTROL_STATE = "invalid_control_state"
 
 
 class SupersessionReason(str, Enum):
@@ -171,6 +153,13 @@ class SupersessionReason(str, Enum):
 
     Attributes:
         PLAN_MISSING: The plan document no longer exists.
+        UNSUPPORTED_DOCUMENT: The plan document's ``schema_version`` is
+            absent or invalid, names a family this release does not support,
+            or is not the family the request was captured under. The
+            executor captures requests only from supported documents, and a
+            document keeps its family within a generation, so for such a
+            request this means another writer replaced or changed the
+            document after it was captured.
         GENERATION_CHANGED: The plan was regenerated, or deleted and
             recreated, after the request was captured, or another writer
             removed its generation.
@@ -183,6 +172,7 @@ class SupersessionReason(str, Enum):
     """
 
     PLAN_MISSING = "plan_missing"
+    UNSUPPORTED_DOCUMENT = "unsupported_document"
     GENERATION_CHANGED = "generation_changed"
     AUTHORITY_CHANGED = "authority_changed"
     REQUEST_ALREADY_FINALIZED = "request_already_finalized"
@@ -272,8 +262,8 @@ class ExecutionFinalization:
     """A finished execution request to record in its plan document.
 
     Usually built from the attempt's context with :meth:`from_attempt`. Carries
-    the identity captured when the request was admitted (generation, token,
-    authority, owner) because finalization is judged against what was
+    the identity captured when the request was admitted (family, generation,
+    token, authority, owner) because finalization is judged against what was
     executed, not against what the plan document says now.
 
     Only a request whose execution finished can be finalized (see
@@ -281,6 +271,10 @@ class ExecutionFinalization:
 
     Attributes:
         plan_id: The plan document ID.
+        schema_version: The plan document's family, captured when the request
+            was admitted. Finalization writes only into a document that is
+            still of this family. It is not part of :meth:`identity`: the
+            persisted record does not carry it.
         plan_generation: Generation captured when the request was admitted.
         run_token: Run token captured when the request was admitted.
         execution_id: The attempt that executed the request. An interrupted
@@ -297,6 +291,7 @@ class ExecutionFinalization:
     """
 
     plan_id: str
+    schema_version: int
     plan_generation: str
     run_token: int
     execution_id: str
@@ -311,10 +306,18 @@ class ExecutionFinalization:
         """Reject a request that cannot be finalized or contradicts its report.
 
         Raises:
-            ValueError: If the generation is empty, the token is negative, the
-                authority is invalid, the attempt did not finish its request,
-                or the report disagrees with the request's identity or outcome.
+            ValueError: If the family is not a positive integer, the
+                generation is empty, the token is negative, the authority is
+                invalid, the attempt did not finish its request, or the report
+                disagrees with the request's identity or outcome.
         """
+        # bool is a subclass of int, and 1.0 == 1: only a true int names a family.
+        if type(self.schema_version) is not int or self.schema_version < 1:
+            raise ValueError(
+                f"Execution '{self.execution_id}' of plan '{self.plan_id}' has an "
+                f"invalid captured schema_version {self.schema_version!r}; "
+                "finalization is always judged against a family"
+            )
         if not self.plan_generation:
             raise ValueError(
                 f"Execution '{self.execution_id}' of plan '{self.plan_id}' has no "
@@ -349,18 +352,23 @@ class ExecutionFinalization:
             )
 
     @classmethod
-    def from_attempt(cls, context: AttemptContext) -> ExecutionFinalization:
+    def from_attempt(
+        cls, context: AttemptContext, *, schema_version: int
+    ) -> ExecutionFinalization:
         """Build the finalization of a finished attempt.
 
         Args:
             context: The attempt's context, after the attempt ended.
+            schema_version: The plan document's family, captured when the
+                request was admitted. The attempt context does not carry it.
 
         Returns:
             ExecutionFinalization: The request to record.
 
         Raises:
             ValueError: If the attempt has not finished, captured no generation
-                or run token, or did not finish its request.
+                or run token, or did not finish its request, or if
+                schema_version is not a positive integer.
         """
         report = context.report
         outcome = report.outcome
@@ -377,6 +385,7 @@ class ExecutionFinalization:
             )
         return cls(
             plan_id=report.plan_id,
+            schema_version=schema_version,
             plan_generation=report.plan_generation,
             run_token=report.run_token,
             execution_id=report.execution_id,
@@ -421,28 +430,6 @@ class ExecutionFinalization:
         return {**self.identity(), "finalized_at": finalized_at, "report": self.report}
 
 
-def _executed_token(doc: dict[str, Any]) -> int:
-    """Read a plan document's executed token, defaulting to never executed.
-
-    Args:
-        doc: A persisted plan document.
-
-    Returns:
-        int: The executed run token, or -1 if the document has none.
-
-    Raises:
-        ValueError: If the stored value is not an integer.
-    """
-    value = doc.get("executed_run_token", -1)
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"Plan '{doc.get('_id', '<unknown>')}' has an unreadable "
-            f"executed_run_token {value!r}; refusing to finalize over it"
-        ) from exc
-
-
 def _describe(request: ExecutionFinalization) -> str:
     """Name a finalization request for log and result messages."""
     return (
@@ -462,6 +449,20 @@ def _superseded(
     )
 
 
+def _invalid_control_state(
+    request: ExecutionFinalization, detail: str
+) -> FinalizationResult:
+    """Build an INVALID_CONTROL_STATE result for request."""
+    return FinalizationResult(
+        status=FinalizationStatus.INVALID_CONTROL_STATE,
+        message=(
+            f"Cannot finalize {_describe(request)}: {detail}; nothing was "
+            "written, and the result cannot be recorded until the plan's "
+            "tokens change"
+        ),
+    )
+
+
 def check_finalization(
     doc: dict[str, Any], request: ExecutionFinalization
 ) -> FinalizationResult | None:
@@ -469,16 +470,31 @@ def check_finalization(
 
     The checks run in this order:
 
-    1. The document records this exact completion (every field of
-       :meth:`ExecutionFinalization.identity`) under the captured generation,
-       and its executed token equals the captured token: ALREADY_COMMITTED.
-       This comes first because a recorded result stays true even if the
-       plan's authority changed after it was written.
-    2. The generation differs from the captured one: SUPERSEDED.
-    3. The authority or owner differs from the captured one: SUPERSEDED.
-    4. The executed token already reaches the captured token: SUPERSEDED.
+    1. The document is not of a supported family equal to the captured one
+       (:func:`~yggdrasil.contract.versions.version_of`): SUPERSEDED. This
+       comes before everything else, because nothing in a document of
+       another family, or of none, means what this release reads it as: not
+       even a record of this exact completion.
+    2. The generation differs from the captured one: SUPERSEDED. This comes
+       next so that a regenerated plan always settles the request, whatever
+       its tokens say.
+    3. The stored execution tokens are not a valid pair under the strict
+       token rule (:func:`~yggdrasil.contract.controls.token_pair`):
+       INVALID_CONTROL_STATE. Nothing else is concluded from tokens that
+       cannot be read.
+    4. The document records this exact completion (every field of
+       :meth:`ExecutionFinalization.identity`), and its executed token equals
+       the captured token: ALREADY_COMMITTED. This comes before the authority
+       because a recorded result stays true even if the plan's authority
+       changed after it was written.
+    5. The authority or owner differs from the captured one: SUPERSEDED.
+    6. The executed token already reaches the captured token: SUPERSEDED.
        Another execution, or another result, finalized this request or a
        newer one.
+    7. The pair the write would produce, the stored run token with the
+       captured token as executed, is not a valid pair:
+       INVALID_CONTROL_STATE. Writing would leave an executed token above
+       the run token, as when the run token was lowered after admission.
 
     Args:
         doc: The plan document as just read.
@@ -487,17 +503,38 @@ def check_finalization(
     Returns:
         FinalizationResult | None: The resolution when the completion must not
         be written; None when the request is valid and not yet recorded.
-
-    Raises:
-        ValueError: If the document's executed_run_token is not an integer.
+        Never raises on stored content.
     """
-    generation = plan_generation_of(doc)
-    executed = _executed_token(doc)
-    record = doc.get(LAST_FINALIZED_EXECUTION_FIELD)
+    version = version_of(PLAN_DOCUMENT, doc)
+    if version.state != SUPPORTED or version.family != request.schema_version:
+        return _superseded(
+            request,
+            SupersessionReason.UNSUPPORTED_DOCUMENT,
+            f"the plan's schema_version is now {describe_schema_version(version)} "
+            f"({version.state}), and the request was captured under family "
+            f"{request.schema_version}",
+        )
 
+    generation = plan_generation_of(doc)
+    if generation != request.plan_generation:
+        return _superseded(
+            request,
+            SupersessionReason.GENERATION_CHANGED,
+            f"the plan's generation is now {describe_recorded(generation)}",
+        )
+
+    tokens = token_pair(doc)
+    if not tokens.valid:
+        return _invalid_control_state(
+            request,
+            f"the plan's tokens are not a valid pair ({'; '.join(tokens.problems)})",
+        )
+    executed = tokens.executed
+    assert executed is not None  # a valid pair has both tokens
+
+    record = doc.get(LAST_FINALIZED_EXECUTION_FIELD)
     if (
-        generation == request.plan_generation
-        and executed == request.run_token
+        executed == request.run_token
         and isinstance(record, dict)
         and all(record.get(key) == value for key, value in request.identity().items())
     ):
@@ -505,27 +542,35 @@ def check_finalization(
             status=FinalizationStatus.ALREADY_COMMITTED,
             message=f"{_describe(request)} is already finalized",
         )
-    if generation != request.plan_generation:
-        return _superseded(
-            request,
-            SupersessionReason.GENERATION_CHANGED,
-            f"the plan's generation is now {generation!r}",
-        )
     authority = doc.get("execution_authority")
     owner = doc.get("execution_owner")
     if (authority, owner) != (request.execution_authority, request.execution_owner):
         return _superseded(
             request,
             SupersessionReason.AUTHORITY_CHANGED,
-            f"execution authority/owner is now {authority!r}/{owner!r}, captured "
-            f"as {request.execution_authority!r}/{request.execution_owner!r}",
+            f"execution authority/owner is now {describe_recorded(authority)}/"
+            f"{describe_recorded(owner)}, captured as "
+            f"{request.execution_authority!r}/"
+            f"{describe_recorded(request.execution_owner)}",
         )
     if executed >= request.run_token:
+        recorder = record.get("execution_id") if isinstance(record, dict) else None
         return _superseded(
             request,
             SupersessionReason.REQUEST_ALREADY_FINALIZED,
             f"executed_run_token is already {executed}, recorded by "
-            f"{record.get('execution_id') if isinstance(record, dict) else None!r}",
+            f"{describe_recorded(recorder)}",
+        )
+
+    produced = token_pair({**doc, EXECUTED_RUN_TOKEN_FIELD: request.run_token})
+    if not produced.valid:
+        return _invalid_control_state(
+            request,
+            f"the plan's tokens are run_token {tokens.run} / executed_run_token "
+            f"{executed}, and recording run_token {request.run_token} as executed "
+            f"would leave run_token {tokens.run} / executed_run_token "
+            f"{request.run_token}, which is not a valid pair "
+            f"({'; '.join(produced.problems)})",
         )
     return None
 
@@ -537,8 +582,9 @@ def build_finalized_document(
 
     Only the completion fields change: ``executed_run_token``, the last
     finalized execution record, ``last_executed_at`` and ``updated_at``. Every
-    other field is carried over exactly as read, including ``run_token``, which
-    may already name a newer request that must stay pending.
+    other field is carried over exactly as read, including ``schema_version``,
+    and ``run_token``, which may already name a newer request that must stay
+    pending.
 
     Args:
         doc: The plan document the completion was checked against.
@@ -559,8 +605,18 @@ def build_finalized_document(
 
 
 def _logged(logger: logging.Logger, result: FinalizationResult) -> FinalizationResult:
-    """Log a finalization result at a level matching its status, and return it."""
-    level = logging.INFO if result.recorded else logging.WARNING
+    """Log a finalization result at a level matching its status, and return it.
+
+    A recorded result is INFO. Invalid control state is ERROR: a finished
+    request cannot be recorded until someone changes the plan's tokens. Any
+    other result is WARNING.
+    """
+    if result.recorded:
+        level = logging.INFO
+    elif result.status is FinalizationStatus.INVALID_CONTROL_STATE:
+        level = logging.ERROR
+    else:
+        level = logging.WARNING
     logger.log(level, "%s", result.message)
     return result
 
@@ -581,8 +637,10 @@ def finalize_execution(
     and the outcome record land in that one write, so they cannot disagree.
 
     If the write loses a race, the document is read and judged again, so the
-    result reports what the newer state means: a supersession, a completion
-    that already landed, or a CONFLICT for a request that is still valid.
+    result reports what the newer state means: a supersession, including a
+    document that is no longer of the captured family, a completion that
+    already landed, tokens that are no longer a valid pair or would be made
+    invalid by the write, or a CONFLICT for a request that is still valid.
     Nothing is retried here. A caller that retries CONFLICT or PlanStoreError
     owns the retry bound and backoff, so retries never multiply across layers.
 
@@ -594,12 +652,13 @@ def finalize_execution(
         now: ISO-8601 UTC finalization time; defaults to the current time.
 
     Returns:
-        FinalizationResult: COMMITTED, ALREADY_COMMITTED, CONFLICT or SUPERSEDED.
+        FinalizationResult: COMMITTED, ALREADY_COMMITTED, CONFLICT, SUPERSEDED
+        or INVALID_CONTROL_STATE.
 
     Raises:
-        PlanStoreError: If the backend fails. A failed write may still have
-            landed; calling again reports that as ALREADY_COMMITTED.
-        ValueError: If the document's executed_run_token is not an integer.
+        PlanStoreError: If the backend fails, or a read returns something
+            other than the plan's stored document. A failed write may still
+            have landed; calling again reports that as ALREADY_COMMITTED.
     """
     doc = fetch(request.plan_id)
     if doc is None:
@@ -613,7 +672,7 @@ def finalize_execution(
     if verdict is not None:
         return _logged(logger, verdict)
 
-    finalized = build_finalized_document(doc, request, now=now or utc_now_iso())
+    finalized = build_finalized_document(doc, request, now=now or utcnow_iso())
     try:
         replace(request.plan_id, finalized, str(doc["_rev"]))
     except RevisionConflictError:

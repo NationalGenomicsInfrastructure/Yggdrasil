@@ -303,6 +303,43 @@ def _caseless(step_id: str) -> str:
     return unicodedata.normalize("NFD", decomposed.casefold())
 
 
+def _require_spool_names(plan: Plan) -> None:
+    """Refuse a plan whose realm or plan ID cannot name one directory.
+
+    The realm names the plan's directory in the event spool, and the plan ID
+    names the plan's directory there and in the work root, so each has to be
+    one directory component: a nonempty string other than ``.`` or ``..``,
+    without ``/``, backslash or NUL (see
+    :func:`~yggdrasil.flow.events.attempt_records.is_record_key`). Anything
+    else would put the plan's files beside or above other plans', or in no
+    directory at all. Step IDs have rules of their own, checked in preflight.
+
+    It has no side effects and keeps the IDs as given: nothing is stripped or
+    normalized. The message names the field, and the type of a value that is
+    not a string, but never renders a value, which may hold control
+    characters.
+
+    Args:
+        plan: The plan about to be attempted.
+
+    Raises:
+        ValueError: If ``plan.realm``, checked first, or ``plan.plan_id``
+            cannot name one directory component.
+    """
+    for field, value in (("realm", plan.realm), ("plan_id", plan.plan_id)):
+        if not is_record_key(value):
+            found = (
+                ""
+                if isinstance(value, str)
+                else f"; it is of type {type(value).__name__}"
+            )
+            raise ValueError(
+                f"plan.{field} must name one directory component: a non-empty "
+                f"string other than '.' or '..', without '/', backslash or NUL"
+                f"{found}"
+            )
+
+
 def _validate_param_binding(spec: StepSpec, fn: Any) -> None:
     """Reject params that cannot bind to a step's signature.
 
@@ -535,7 +572,10 @@ def _replace_marker(marker: Path, fingerprint: str) -> None:
 class Engine:
     """
     Sequential, dependency-driven plan executor with:
-    - whole-plan preflight before any side effect
+    - a realm and plan ID that each name one directory, checked before an
+      attempt starts
+    - whole-plan preflight before work-root writes; an attempt reserves its
+      execution ID and publishes its start record first
     - dependency scheduling: a step starts only once every step it depends on
       has succeeded or been reused, earliest in plan order first
     - failure policies: ``fail_fast`` stops at the first step failure;
@@ -615,6 +655,11 @@ class Engine:
         exactly once. Blocks on the plan's history and on the reservation:
         call it off the event loop.
 
+        A plan whose realm or plan ID cannot name one directory is refused
+        first, with a ValueError, so an operational caller that never calls
+        :meth:`run` cannot reserve for it either: the history is not read,
+        no ID is allocated and nothing is reserved.
+
         Args:
             plan: The plan about to be attempted.
 
@@ -623,9 +668,12 @@ class Engine:
             False only when this engine has no reserver.
 
         Raises:
+            ValueError: If ``plan.realm`` or ``plan.plan_id`` cannot name one
+                directory component.
             ReservationExhaustedError: If every candidate ID was already taken.
             Exception: Whatever reading the history or reserving raised.
         """
+        _require_spool_names(plan)
         return reserve_execution_id(
             self.execution_ids, self.attempt_reserver, plan.realm, plan.plan_id
         )
@@ -845,6 +893,11 @@ class Engine:
     def run(self, plan: Plan) -> AttemptReport | None:
         """Execute a plan's steps in dependency order.
 
+        A plan whose realm or plan ID cannot name one directory is refused
+        before an attempt starts, with a plain ValueError: no execution ID is
+        allocated or reserved, nothing is published or written, and there is
+        no attempt, so no report either.
+
         Preflight runs before anything is written to the work root, so a
         rejected plan leaves existing plan snapshots, artifacts and cache
         markers untouched. The attempt is still recorded in the event spool.
@@ -876,6 +929,8 @@ class Engine:
             plan.
 
         Raises:
+            ValueError: If ``plan.realm`` or ``plan.plan_id`` cannot name one
+                directory component. No attempt starts.
             PreflightValidationError: If the plan is rejected by preflight.
             OrchestrationError: If engine bookkeeping or event publication
                 fails, or no execution ID can be allocated and reserved. In the
@@ -886,6 +941,9 @@ class Engine:
             Exception: Any other exception a step raised under ``fail_fast``,
                 unchanged.
         """
+        # Before the boundary below, which would turn the refusal into an
+        # OrchestrationError.
+        _require_spool_names(plan)
         with _orchestration_boundary(
             f"Allocating an execution ID for plan '{plan.plan_id}'"
         ):
@@ -919,10 +977,17 @@ class Engine:
         while runnable work remains, so it never interrupts a running step and a
         signal arriving after the last step does not undo a drained attempt.
 
-        Before anything else, the attempt's execution ID is reserved if its
-        context says it is not yet: a caller that built the context with an ID
-        of its own gets it claimed here, exclusively, and never renamed. An ID
-        already taken is refused, so no attempt writes into another's records.
+        A plan whose realm or plan ID cannot name one directory is refused
+        first, with a plain ValueError, before the context is checked: nothing
+        is reserved, published or written, no report is closed, and the
+        context, its report and any reservation the caller made are left
+        exactly as they were.
+
+        Then, before anything else, the attempt's execution ID is reserved if
+        its context says it is not yet: a caller that built the context with an
+        ID of its own gets it claimed here, exclusively, and never renamed. An
+        ID already taken is refused, so no attempt writes into another's
+        records.
 
         What the attempt publishes, in order, all stamped with its correlation:
 
@@ -948,6 +1013,8 @@ class Engine:
             failed if any step failed or was blocked.
 
         Raises:
+            ValueError: If ``plan.realm`` or ``plan.plan_id`` cannot name one
+                directory component. The attempt does not start.
             PreflightValidationError: If preflight rejects the plan
                 (PREFLIGHT_REJECTED).
             AttemptCancelledError: If cancellation was signaled while runnable
@@ -976,6 +1043,7 @@ class Engine:
         exception as a note, and the report stays CANCELLED, so the report and
         the exception never disagree about how the attempt ended.
         """
+        _require_spool_names(plan)
         self._check_attempt_context(plan, context)
         self._reserve_given_execution_id(plan, context)
         report = context.report

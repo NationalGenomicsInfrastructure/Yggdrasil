@@ -69,6 +69,7 @@ from yggdrasil.ops.snapshot import (
     project_attempt,
     project_legacy,
     run_id_of,
+    snapshot_document,
 )
 
 logger = custom_logger(__name__)
@@ -530,7 +531,9 @@ def build_plan_snapshot(
     :mod:`yggdrasil.ops.snapshot`). A plan with no observed attempt is shown as a
     legacy projection instead.
 
-    Snapshot fields, beyond ``type``, ``realm``, ``plan_id`` and ``updated_at``:
+    The snapshot is assembled by :func:`~yggdrasil.ops.snapshot.snapshot_document`.
+    Its fields, beyond ``schema_version``, ``type``, ``realm``, ``plan_id``
+    and ``updated_at``:
 
     - ``scope``: from the attempt's own events; for a legacy projection, from
       the first legacy event that carries one.
@@ -576,13 +579,12 @@ def build_plan_snapshot(
         now = utcnow_iso()
     except Exception:
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    return {
-        "type": "plan_status",
-        "realm": realm,
-        "plan_id": plan_id,
-        "scope": scope,
-        "projection": projection,
-        "attempt": attempt_summary,
-        "steps": steps,
-        "updated_at": now,
-    }
+    return snapshot_document(
+        realm=realm,
+        plan_id=plan_id,
+        scope=scope,
+        projection=projection,
+        attempt=attempt_summary,
+        steps=steps,
+        updated_at=now,
+    )

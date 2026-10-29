@@ -1,0 +1,47 @@
+{
+  "_id": "proj-P1:plan_status:test_realm:pln_legacy",
+  "_rev": "1-corpus",
+  "attempt": null,
+  "plan_id": "pln_legacy",
+  "projection": "legacy",
+  "realm": "test_realm",
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "steps": {
+    "demux": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": null,
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20250101T000000000000Z_000001",
+      "state": "step.succeeded",
+      "step_name": "demux",
+      "ts": "2025-01-01T00:00:00Z"
+    },
+    "qc": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": null,
+      "job": null,
+      "metrics": {},
+      "outcome": null,
+      "progress": 0,
+      "run_id": "run_20250101T000000000000Z_000002",
+      "state": "unknown",
+      "step_name": "",
+      "ts": null
+    }
+  },
+  "type": "plan_status",
+  "updated_at": "2026-10-22T10:00:00Z"
+}

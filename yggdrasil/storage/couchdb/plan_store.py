@@ -27,14 +27,13 @@ from yggdrasil.storage.plan_documents import (
     json_safe,
     plan_model_from_document,
     plan_summary_from_document,
-    utc_now_iso,
     validate_execution_authority,
 )
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     FinalizationResult,
     finalize_execution,
-    initialize_plan_generation,
+    require_storage_envelope,
 )
 
 logger = custom_logger(__name__)
@@ -47,12 +46,6 @@ __all__ = ["PlanDBManager", "VALID_EXECUTION_AUTHORITIES"]
 # considered worth another attempt — only who decides to make one.
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
-# Backwards-compatible aliases; canonical definitions live in
-# yggdrasil/storage/plan_documents.py, shared with the SQLite backend.
-_json_safe = json_safe
-_validate_execution_authority = validate_execution_authority
-_utc_now_iso = utc_now_iso
-
 
 class PlanDBManager(CouchDBHandler):
     """
@@ -61,14 +54,14 @@ class PlanDBManager(CouchDBHandler):
     Provides methods for:
     - Saving plan documents (with status, tokens, metadata)
     - Fetching plan documents by ID
+    - Reading a plan document strictly, to decide an execution from
     - Querying approved pending plans (for startup recovery)
-    - Updating execution tokens after successful runs
-    - Assigning a legacy plan its first generation
     - Finalizing finished execution requests
 
     Plan Document Schema:
     {
         "_id": "pln_<realm>_<scope_id>_v<version>",
+        "schema_version": 1,
         "realm": "tenx",
         "scope": {"kind": "project", "id": "P36805"},
         "status": "draft" | "approved",
@@ -141,10 +134,14 @@ class PlanDBManager(CouchDBHandler):
 
         Creates or regenerates the plan document with a fresh
         ``plan_generation``. On regeneration, this resets execution tokens to
-        ensure the new plan is eligible for execution. The write carries the
-        ``_rev`` that was read (none for a new plan), so CouchDB rejects it if
-        another writer got there first; the conflict is raised, not retried,
-        because this call's planning intent may be older than the winner's.
+        ensure the new plan is eligible for execution. The new document is
+        built from the one read, so a slot that planning may not replace
+        (``check_replaceable`` in ``yggdrasil/storage/plan_documents.py``) is
+        refused before any write. The write carries the ``_rev`` that was read
+        (none for a new plan), so CouchDB rejects it if another writer got
+        there first, and a slot that changes after the read is never replaced
+        unchecked. The conflict is raised, not retried, because this call's
+        planning intent may be older than the winner's.
 
         The document ID is taken from ``plan.plan_id``, which is owned by the
         realm/planner. PlanDBManager is a generic CRUD layer and never derives
@@ -167,6 +164,8 @@ class PlanDBManager(CouchDBHandler):
 
         Raises:
             ValueError: If execution_authority is invalid or plan.plan_id is missing
+            UnsupportedDocumentError: If planning may not replace the document
+                in the slot. Nothing was written.
             RevisionConflictError: If another writer created or changed the plan
                 document after it was read (CouchDB 409). Nothing was written.
             ApiException: On other database errors
@@ -256,107 +255,34 @@ class PlanDBManager(CouchDBHandler):
             return None
         return plan_model_from_document(doc, self._logger)
 
-    def update_executed_token(
-        self,
-        doc_id: str,
-        run_token: int,
-        *,
-        max_retries: int = 3,
-    ) -> bool:
+    def read_plan_document(self, doc_id: str) -> dict[str, Any] | None:
         """
-        Update executed_run_token after successful plan execution.
+        Read a plan document as stored, to decide an execution from.
 
-        Uses optimistic locking (_rev) to prevent race conditions.
-        Retries on conflict (409) up to max_retries times.
-
-        This update does not check the plan generation or record an outcome;
-        :meth:`finalize_execution` does both.
-
-        Args:
-            doc_id: The plan document ID
-            run_token: The run_token value that was just executed
-            max_retries: Maximum retry attempts on conflict
-
-        Returns:
-            bool: True if update succeeded, False otherwise
-        """
-        for attempt in range(1, max_retries + 1):
-            doc = self.fetch_document_by_id(doc_id)
-            if not doc:
-                self._logger.error("Cannot update token: plan '%s' not found", doc_id)
-                return False
-
-            # Update fields
-            doc["executed_run_token"] = run_token
-            doc["last_executed_at"] = _utc_now_iso()
-            doc["updated_at"] = _utc_now_iso()
-
-            try:
-                self.server.put_document(
-                    db=self.db_name,
-                    doc_id=doc_id,
-                    document=cast(Document, doc),
-                ).get_result()
-
-                self._logger.debug(
-                    "Updated executed_run_token=%d for plan '%s'",
-                    run_token,
-                    doc_id,
-                )
-                return True
-
-            except ApiException as e:
-                if e.code == 409:
-                    self._logger.warning(
-                        "Conflict updating plan '%s'; retry %d/%d",
-                        doc_id,
-                        attempt,
-                        max_retries,
-                    )
-                    continue
-                self._logger.error("Failed to update plan '%s': %s", doc_id, e)
-                return False
-
-        self._logger.error(
-            "Failed to update plan '%s' after %d retries",
-            doc_id,
-            max_retries,
-        )
-        return False
-
-    def ensure_plan_generation(self, doc_id: str) -> dict[str, Any] | None:
-        """
-        Return the current plan document, giving a legacy one a generation.
-
-        See :func:`yggdrasil.storage.plan_updates.initialize_plan_generation`.
+        A plain read that writes nothing, through the same strict fetch as
+        the finalizer's reads (:meth:`_fetch_plan_document`).
 
         Args:
             doc_id: The plan document ID
 
         Returns:
-            dict or None: The current document with its ``plan_generation``,
-                or None if the plan does not exist
+            dict or None: The document with ``_rev``, or None if CouchDB
+                reports it does not exist
 
         Raises:
-            RevisionConflictError: If the document kept changing without
-                gaining a generation
-            PlanStoreError: If CouchDB fails or cannot be reached
+            PlanStoreError: If CouchDB fails, cannot be reached, or answers
+                with something other than the plan's stored document
         """
-        return initialize_plan_generation(
-            doc_id,
-            fetch=self._fetch_plan_document,
-            replace=self._replace_plan_document,
-            logger=self._logger,
-        )
+        return self._fetch_plan_document(doc_id)
 
     def finalize_execution(self, request: ExecutionFinalization) -> FinalizationResult:
         """
         Record a finished execution request in its plan document.
 
-        See :func:`yggdrasil.storage.plan_updates.finalize_execution`. The generation,
-        token and authority checks run on every read, so a write that CouchDB
-        would accept at the current ``_rev`` is still refused on behalf of a
-        superseded request.
+        See :func:`yggdrasil.storage.plan_updates.finalize_execution`. The
+        family, generation, token and authority checks run on every read, so
+        a write that CouchDB would accept at the current ``_rev`` is still
+        refused on behalf of a superseded request.
 
         Args:
             request: The finished request to record
@@ -365,7 +291,8 @@ class PlanDBManager(CouchDBHandler):
             FinalizationResult: How this one attempt resolved
 
         Raises:
-            PlanStoreError: If CouchDB fails or cannot be reached
+            PlanStoreError: If CouchDB fails, cannot be reached, or answers a
+                read with something other than the plan's stored document
         """
         return finalize_execution(
             request,
@@ -413,14 +340,18 @@ class PlanDBManager(CouchDBHandler):
 
     def _fetch_plan_document(self, doc_id: str) -> dict[str, Any] | None:
         """
-        Fetch a plan document for a conditional update.
+        Fetch a plan document strictly, for an execution decision or update.
 
         Reads the document directly rather than through
         :meth:`fetch_document_by_id`, which reports a malformed response as a
-        missing document. A conditional update must not confuse the two: a
-        missing plan tells the caller its execution request was superseded and
-        can never be recorded, which a proxy returning a non-document body is
-        no evidence of.
+        missing document. Execution must not confuse the two: a missing plan
+        tells the caller its execution request was superseded and can never
+        be recorded, which a proxy returning a non-document body is no
+        evidence of. A body that CouchDB returns with a success status counts
+        as the document only when its storage envelope is intact (see
+        :func:`yggdrasil.storage.plan_updates.require_storage_envelope`): an
+        object-shaped error, another document's body or a body without a
+        revision is a failure too, never an unversioned document.
 
         Args:
             doc_id: The plan document ID
@@ -431,7 +362,7 @@ class PlanDBManager(CouchDBHandler):
 
         Raises:
             PlanStoreError: If CouchDB fails, cannot be reached, or answers
-                with something other than a document
+                with something other than the plan's stored document
         """
         try:
             document = self.server.get_document(
@@ -448,12 +379,7 @@ class PlanDBManager(CouchDBHandler):
         except RequestException as exc:
             raise self._plan_store_error(doc_id, "read", exc) from exc
 
-        if not isinstance(document, dict):
-            raise PlanStoreError(
-                f"CouchDB answered with {type(document).__name__} instead of a "
-                f"document for plan '{doc_id}'; the plan's existence is unknown"
-            )
-        return document
+        return require_storage_envelope(doc_id, document)
 
     def _replace_plan_document(
         self, doc_id: str, body: dict[str, Any], expected_rev: str

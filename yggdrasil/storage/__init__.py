@@ -20,7 +20,11 @@ from yggdrasil.storage.config import (
     default_sqlite_path,
     resolve_internal_storage_config,
 )
-from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
+from yggdrasil.storage.errors import (
+    PlanStoreError,
+    RevisionConflictError,
+    UnsupportedDocumentError,
+)
 from yggdrasil.storage.factory import build_internal_storage
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
@@ -48,6 +52,7 @@ __all__ = [
     "RevisionConflictError",
     "SQLiteInternalStorageConfig",
     "SupersessionReason",
+    "UnsupportedDocumentError",
     "build_internal_storage",
     "default_sqlite_path",
     "resolve_internal_storage_config",

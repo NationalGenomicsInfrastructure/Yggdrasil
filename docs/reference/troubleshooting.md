@@ -93,6 +93,22 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
    ```
 2. Check `build_payload` returns a dict with the fields your handler expects
 3. Confirm `connection` name in the WatchSpec matches its key in `external_systems`
+4. Search the log for `Planning refused to replace plan`: a plan already stored under that ID may have been left as it was (see [Plan not replaced: planning refused](#plan-not-replaced-planning-refused)).
+
+### Plan not replaced: planning refused
+
+**Symptom:** The log says, at ERROR, `Planning refused to replace plan '<plan_id>': its <field> <value> is <reason> (supported plan-document families: [1]). The draft was not persisted; the stored plan is unchanged.`
+
+**Explanation:** Planning replaces the whole document stored under a plan's ID, and first checks what that document is. It refuses a document whose `schema_version` is invalid (`"1"`, `1.0`, `null`, ...) or names a family this release does not support, such as a family-2 plan written by a newer release. It also refuses a document whose `created_at` it cannot keep: missing, not a real date-time, or spelled in a way it may not re-spell, such as with a fraction of a second. Nothing is written, and planning goes on with its other drafts. `run-doc --force` does not bypass the check. See [When planning replaces a plan](document_contract.md#when-planning-replaces-a-plan).
+
+**Resolution:** It depends on the field. Never choose a value just to make the check pass: the marker states which contract the whole document follows, and `created_at` records when the document was created.
+
+- `schema_version ... is unsupported`: the plan belongs to a newer release. Plan it with software that supports that family; do not change the marker.
+- `schema_version ... is invalid`: the marker was damaged, or written outside the contract. A value such as `"1"` does not show that the document follows family 1, so do not replace it with a valid-looking one. Restore the marker only when you know what it was, for instance from a backup or from the record of the edit that damaged it; if the document had no marker before, restoring it means removing the field. Otherwise, keep a copy of the document, delete it, and let the realm plan again.
+- `created_at is missing`, or `created_at ... is malformed`: the creation instant is unknown. Restore it only from a known source, spelled canonically (`2026-10-22T10:00:00Z`). Otherwise, keep a copy of the document, delete it, and let the realm plan again: the new document records a new creation time.
+- `created_at ... is unsupported`: the value is a real date-time that planning may not re-spell. A whole second with another offset, or with `+00:00` in a family-1 document, can be written as the same instant in `Z`: `2026-10-22T12:00:00+02:00` becomes `2026-10-22T10:00:00Z`. A fraction of a second has no canonical spelling: dropping it changes the recorded instant, so do that only when the change is acceptable, and otherwise delete the document as above.
+
+Write a repair conditionally on the `_rev` you read, changing only that field, as in step 3 of [Approving or rerunning by hand](document_contract.md#approving-or-rerunning-by-hand). Deleting the document discards its approval and its recorded results: the realm's new plan is a new document, which needs approving again unless its realm runs it automatically.
 
 ---
 
@@ -104,7 +120,9 @@ Credentials are resolved from `external_systems.endpoints.<name>.auth.user_env` 
 
 **Resolution:** Yggdrasil does not currently ship an approval UI or command.
 Use an operator-provided integration with the configured plan store to set
-`status="approved"`. For SQLite, that integration must also advance the
+`status="approved"`, following
+[Approving or rerunning by hand](document_contract.md#approving-or-rerunning-by-hand).
+For SQLite, that integration must also advance the
 plan change sequence transactionally; editing only the stored JSON will
 not notify PlanWatcher.
 
@@ -112,11 +130,24 @@ not notify PlanWatcher.
 
 **Checks:**
 1. Confirm PlanWatcher is started: `grep "PlanWatcher" yggdrasil.log`
-2. Check `run_token > executed_run_token` in the plan document. If they are equal, the last request is already finished, whatever its outcome (see [A finished plan does not run again](#a-finished-plan-does-not-run-again)).
-3. Verify the configured internal plan store (`yggdrasil_plans` database) exists and is accessible: the CouchDB
+2. Search the log for `is not executed: its schema_version`. A plan document without a `schema_version`, such as one written before this release, or with a value other than `1`, is never executed, and is logged at WARNING each time it is observed. Regenerate it through its realm (see [Plans stopped running after an upgrade](#plans-stopped-running-after-an-upgrade)).
+3. Check the stored tokens. `run_token` and `executed_run_token` must both be JSON integers, not strings, floats or booleans; `run_token` from 0 to 2^53 − 1, `executed_run_token` from −1 to 2^53 − 1, and `executed_run_token` not above `run_token`. Otherwise the plan is not eligible, and nothing is defaulted or converted. PlanWatcher skips such a plan with a DEBUG line only (`Skipping ineligible plan: <plan_id> (Not eligible: invalid tokens (...))`, or, in run-once's recovery scan, `Recovery: requested plan <plan_id> is not eligible (...)`). Debug logging is on only with `--dev`, which also selects the development configuration, so do not enable it on a production service to see the reason: compare the stored tokens with the rule instead.
+4. Check `run_token > executed_run_token` in the plan document. If they are equal, the last request is already finished, whatever its outcome (see [A finished plan does not run again](#a-finished-plan-does-not-run-again)).
+5. Search the log for `does not describe an executable request`. A plan missing an execution field, for the plan or one of its steps, or whose `failure_policy` is missing or unknown, is refused at admission, logged at ERROR with each problem named. Fix the realm's planning, and let it regenerate the plan.
+6. Verify the configured internal plan store (`yggdrasil_plans` database) exists and is accessible: the CouchDB
    plans connection in production, or the SQLite file in dev mode.
-4. Search the log for `pending finalization`: the plan may have an unrecorded result (see [Result could not be recorded](#result-could-not-be-recorded)).
-5. Search the log for `the daemon is stopping`. A plan that became eligible while the daemon was shutting down was not started, and stays eligible. A daemon restarted from its saved checkpoint resumes after that change and does not see it again. Re-emit an observable change for the plan once the daemon is running.
+7. Search the log for `pending finalization`: the plan may have an unrecorded result (see [Result could not be recorded](#result-could-not-be-recorded)).
+8. Search the log for `the daemon is stopping`. A plan that became eligible while the daemon was shutting down was not started, and stays eligible. A daemon restarted from its saved checkpoint resumes after that change and does not see it again. Re-emit an observable change for the plan once the daemon is running.
+
+See [What Yggdrasil refuses](document_contract.md#when-a-plan-is-admitted-for-execution) for the whole order of admission checks.
+
+### Plans stopped running after an upgrade
+
+**Symptom:** After upgrading to a release with the document contract, approved plans that ran before no longer run, and the log says, at WARNING, `Plan '<plan_id>' is not executed: its schema_version is absent, so it is unversioned (supported plan-document families: [1])`.
+
+**Explanation:** Documents written by earlier releases carry no `schema_version`. They stay unversioned: nothing stamps them, and Yggdrasil never executes or updates them. Planning may replace them, which is how a plan comes into the contract.
+
+**Resolution:** Regenerate the plans you still want through their realm. Each comes out as a family-1 document of a new generation, which needs approving again unless its realm runs it automatically. In a development store, list the documents by version state first, or reset the disposable state instead. See [Upgrading and rolling back](document_contract.md#upgrading-and-rolling-back).
 
 ---
 
@@ -148,9 +179,11 @@ If a step was blocked by a step it should not need, the dependency is in the pla
 
 ### Plan rejected before any step ran
 
-**Symptom:** The log and the attempt report show `termination_reason: "preflight_rejected"` and a diagnostic such as a duplicate step ID, a step ID that cannot name a work directory of its own (not a nonempty string, absolute, or with an empty, `.` or `..` part) or is not distinct from another when letter case and Unicode normalization are ignored, an unknown dependency, a dependency cycle, an unknown `failure_policy`, or a malformed or unresolvable `fn_ref`.
+**Symptom:** The log and the attempt report show `termination_reason: "preflight_rejected"` and a diagnostic such as a duplicate step ID, a step ID that cannot name a work directory of its own (not a nonempty string, absolute, or with an empty, `.` or `..` part) or is not distinct from another when letter case and Unicode normalization are ignored, an unknown dependency, a dependency cycle, or a malformed or unresolvable `fn_ref`.
 
-**Explanation:** The engine validates the whole plan before running anything, and rejects it without side effects. A rejected `fail_fast` plan stays eligible. A rejected `continue_independent` request is finished with a failed outcome, since the same plan would be rejected again. A plan with an unknown `failure_policy` stays eligible too: it is not a valid `continue_independent` request.
+**Explanation:** The engine validates the whole plan before running anything, and rejects it without side effects. A rejected `fail_fast` plan stays eligible. A rejected `continue_independent` request is finished with a failed outcome, since the same plan would be rejected again.
+
+A plan document whose `failure_policy` is missing or unknown never gets this far. Daemon and run-once execution refuse it at admission, so no attempt starts and there is no report: the log says, at ERROR, `Plan '<plan_id>' does not describe an executable request (...)`, and the plan stays eligible. Only a `Plan` passed directly to `Engine.run` reaches preflight with an explicitly unknown policy; there, an omitted policy defaults to `fail_fast`.
 
 Only confirmed defects of the plan are rejected. A step module that exists but cannot be imported is a different case (see [`fn_ref` cannot be resolved or imported](#fn_ref-cannot-be-resolved-or-imported)).
 
@@ -158,11 +191,13 @@ Only confirmed defects of the plan are rejected. A step module that exists but c
 
 ### Result could not be recorded
 
-**Symptom:** The log says `finished, but its result could not be recorded; keeping it pending`. The snapshot shows the attempt as finished, but the plan document's `executed_run_token` was not advanced. `run-doc --run-once` exits with code `1`.
+**Symptom:** The log says `finished, but its result could not be recorded`, followed by `keeping it pending`. The snapshot shows the attempt as finished, but the plan document's `executed_run_token` was not advanced. `run-doc --run-once` exits with code `1`.
 
-**Explanation:** Recording the result failed through every retry: the plan store was unreachable, failed, or kept losing write races. The process keeps the result in memory and does not run the plan again. Other plans are unaffected.
+**Explanation:** Recording the result failed. Either every retry failed, because the plan store was unreachable, failed, or kept losing write races, or a read returned something other than the plan's stored document, such as an error response from a proxy, which is never retried. Or the finalizer refused it over the plan's tokens: the stored tokens are not a valid pair, or recording the result would leave `executed_run_token` above `run_token`. The log then also says, at ERROR, `Cannot finalize execution ... the plan's tokens are not a valid pair (...)` or `... would leave run_token <n> / executed_run_token <m>, which is not a valid pair`. The process keeps the result in memory and does not run the plan again. Other plans are unaffected.
 
-**Resolution:** Once the plan store is healthy, raise `run_token`. The daemon records the pending result first, then runs the new request. A restart loses the pending result, and the old request then runs again, so realm steps must tolerate that. See [Plan Execution](plan_execution.md#when-a-result-cannot-be-recorded).
+A pending result is dropped instead, and never recorded, when the plan's document changes family. The log then says, at WARNING, `Dropping the pending finalization of execution '<execution_id>': the schema_version of plan '<plan_id>' is now ...`. The attempt's report stays in the event spool.
+
+**Resolution:** Once the plan store is healthy, raise `run_token`. If the tokens are the reason, first correct them so that they form a valid pair, with `run_token` above the pending request's token. The daemon records the pending result first, then runs the new request. A restart loses the pending result, and the old request then runs again, so realm steps must tolerate that. See [Plan Execution](plan_execution.md#when-a-result-cannot-be-recorded).
 
 ---
 
@@ -299,8 +334,10 @@ symlinks and foreign-owned files.
 
 ### Approved a plan but the dev daemon does nothing
 
-Check that the stored plan has `status="approved"` and
-`run_token > executed_run_token`. Also confirm that PlanWatcher is
+Work through the checks in
+[Plan is approved but Engine never runs it](#plan-is-statusapproved-but-engine-never-runs-it):
+`schema_version`, the token rule, `run_token > executed_run_token` and the
+plan's execution fields. Also confirm that PlanWatcher is
 running and that the approval was recorded as an observable change by
 the configured backend.
 

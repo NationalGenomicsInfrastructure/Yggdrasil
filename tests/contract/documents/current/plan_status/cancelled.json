@@ -1,0 +1,89 @@
+{
+  "_id": "proj-P1:plan_status:test_realm:pln_cancelled",
+  "_rev": "1-corpus",
+  "attempt": {
+    "counts": {
+      "blocked": 0,
+      "failed": 0,
+      "reused": 0,
+      "succeeded": 1,
+      "unreached": 2
+    },
+    "diagnostic": {
+      "details": {
+        "running_step_id": "qc"
+      },
+      "error_type": "KeyboardInterrupt",
+      "message": ""
+    },
+    "ended_at": "2026-10-22T10:00:00Z",
+    "execution_authority": "daemon",
+    "execution_id": "20261022T100000000000Z_0001",
+    "execution_owner": null,
+    "failure_policy": "fail_fast",
+    "is_drained": false,
+    "outcome": "failed",
+    "plan_generation": "ae886bba0a71bb2bb76c7ece60de2914",
+    "run_token": 0,
+    "started_at": "2026-10-22T10:00:00Z",
+    "state": "finished",
+    "termination_reason": "cancelled"
+  },
+  "plan_id": "pln_cancelled",
+  "projection": "attempt",
+  "realm": "test_realm",
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "steps": {
+    "demux": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": "succeeded",
+      "progress": 100,
+      "run_id": "run_20261022T100000000000Z_000001",
+      "state": "step.succeeded",
+      "step_name": "demux",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "qc": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": "sha256:796c262f78bb7a810f0da64f3edec947018f2cc4951a2e3e601b8f16ad67e2f9",
+      "job": null,
+      "metrics": {},
+      "outcome": null,
+      "progress": 0,
+      "run_id": "run_20261022T100000000000Z_000002",
+      "state": "interrupted",
+      "step_name": "qc",
+      "ts": "2026-10-22T10:00:00Z"
+    },
+    "upload": {
+      "artifacts": [],
+      "direct_blockers": [],
+      "error": null,
+      "failed_ancestors": [],
+      "fingerprint": null,
+      "job": null,
+      "metrics": {},
+      "outcome": null,
+      "progress": 0,
+      "run_id": null,
+      "state": "unreached",
+      "step_name": "upload",
+      "ts": null
+    }
+  },
+  "type": "plan_status",
+  "updated_at": "2026-10-22T10:00:00Z"
+}

@@ -12,11 +12,15 @@ The concrete, frozen workflow to execute. Created by a handler's planner and per
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `plan_id` | `str` | Unique identifier (e.g. `"my_realm:object-123"`) |
-| `realm` | `str` | Realm that owns this plan |
+| `plan_id` | `str` | Unique identifier (e.g. `"my_realm:object-123"`). Names the plan's directories, so it must be one directory component (see [Realm and plan IDs](#realm-and-plan-ids)) |
+| `realm` | `str` | Realm that owns this plan. Names the plan's directory in the event spool, so it must be one directory component (see [Realm and plan IDs](#realm-and-plan-ids)) |
 | `scope` | `dict` | Scope dict (`{"kind": ..., "id": ...}`) |
 | `steps` | `list[StepSpec]` | The plan's steps. Dependencies decide the execution order; list order only breaks ties between steps that are ready at the same time |
 | `failure_policy` | `str` | What a step failure does to the rest of the plan: `"fail_fast"` (default) or `"continue_independent"`. See [Failure policies](#failure-policies). Any other value is rejected |
+
+#### Realm and plan IDs
+
+The plan ID names the plan's work directory, `<work_root>/<plan_id>/`, and the realm and plan ID together name its directory in the event spool, `<spool>/<realm>/<plan_id>/`. Each must therefore be one directory component: a nonempty string other than `.` or `..`, without `/`, backslash or NUL. Any other character is allowed and kept as given, as in `test_realm:P1` or `tenx:P12345`. Unlike a step ID, neither can be nested. The engine refuses a plan that breaks this rule before an attempt starts (see [Engine](#engine-yggdrasilcoreengine)).
 
 ### `StepSpec`
 
@@ -161,6 +165,8 @@ A planner is a `BaseHandler` subclass — not just any object implementing `gene
 
 ## Engine (`yggdrasil.core.engine`)
 
+Before an attempt starts, the engine checks that `plan.realm`, then `plan.plan_id`, names one directory component (see [Realm and plan IDs](#realm-and-plan-ids)). If one does not, `Engine.run` raises a plain `ValueError` naming that field, such as `plan.plan_id must name one directory component: ...`. No attempt starts: no execution ID is allocated or reserved, nothing is published or written, and there is no report. A coordinated request is not admitted (`admission_failed`) and stays eligible. Step preflight still runs after an attempt starts and retains its existing rejection-report behavior.
+
 `Engine.run(plan)` runs one **attempt** at a plan. Steps run one at a time, in dependency order:
 
 1. **Preflight**, before anything is written to the work root. The plan is rejected if a step ID is not a nonempty string, is duplicated or unable to name a work directory of its own, or is not distinct from another when letter case and Unicode normalization are ignored (see [Step IDs](#step-ids)); if a dependency names an unknown step or the step itself, or the dependencies form a cycle; if `failure_policy` is unknown or `outputs` are malformed; or if a step's `fn_ref` is malformed, names a module that does not exist or a function its module does not define, is not a `@step`-decorated callable, or cannot bind its `params`. A rejected plan raises `PreflightValidationError` (a `ValueError`), and no step runs. Only a confirmed defect of the plan is rejected. A step module that exists but fails to import, because one of its own dependencies is missing or it raises while being imported, is a broken environment: the attempt aborts with an `OrchestrationError` instead.
@@ -186,7 +192,7 @@ A plan's `failure_policy` decides what an ordinary step failure does to the rest
 | `fail_fast` (default) | The attempt stops. Steps not run yet are never reached. | `None` if every step succeeded. The failure propagates; a `TransientStepError` surfaces as a `PermanentStepError`. |
 | `continue_independent` | The failure is recorded, and every step that depends on it, directly or through other steps, is **blocked**. Everything else keeps running until no step is ready. | The finished `AttemptReport`. Its `outcome` is `"failed"` if any step failed or was blocked. A returned report is **not** a success. |
 
-A plan without `failure_policy` runs under `fail_fast`, exactly as it did before failure policies existed.
+A plan without `failure_policy` runs under `fail_fast`, exactly as it did before failure policies existed. This default applies to `Plan` models passed directly to `Engine.run`; daemon and run-once admission require an explicit, supported `plan.failure_policy` in the stored document, otherwise admission is refused with `INVALID_DOCUMENT` (see [Plan Execution](../reference/plan_execution.md#the-plan-document)).
 
 Whichever the policy, some failures stop the whole attempt rather than one step: infrastructure failures (`OrchestrationError`), such as failing to publish an event, to maintain a cache marker or to import a step's module, and cancellation. `Engine.run` then raises under either policy. The attempt's report still records what was established before it stopped, but it is not always published: see [Attempt reports](#attempt-reports).
 

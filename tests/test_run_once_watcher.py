@@ -21,12 +21,13 @@ from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.outcomes import AttemptReport, StepOutcome, TerminationReason
+from yggdrasil.storage.plan_documents import build_plan_document
 from yggdrasil.storage.plan_updates import FinalizationResult, FinalizationStatus
 from yggdrasil.watchers.events import EventType, YggdrasilEvent
 
 
 def _run_once_plan_doc(plan_id: str, execution_owner: str) -> dict:
-    """An approved, eligible plan document owned by a run-once session."""
+    """An approved, eligible plan document owned by a run-once session, as stored."""
     plan = Plan(
         plan_id=plan_id,
         realm="test_realm",
@@ -35,17 +36,17 @@ def _run_once_plan_doc(plan_id: str, execution_owner: str) -> dict:
             StepSpec(step_id="s1", name="s1", fn_ref="tests.run_once:s1", params={})
         ],
     )
-    return {
-        "_id": plan_id,
-        "_rev": "1-test",
-        "status": "approved",
-        "run_token": 1,
-        "executed_run_token": 0,
-        "execution_authority": "run_once",
-        "execution_owner": execution_owner,
-        "plan_generation": f"generation-of-{plan_id}",
-        "plan": plan.to_dict(),
-    }
+    doc = build_plan_document(
+        plan,
+        "test_realm",
+        {"kind": "project", "id": "P1"},
+        auto_run=True,
+        execution_authority="run_once",
+        execution_owner=execution_owner,
+        plan_generation=f"generation-of-{plan_id}",
+    )
+    doc["_rev"] = "1-test"
+    return doc
 
 
 def _complete_attempt(plan: Plan, *, context: AttemptContext) -> AttemptReport:
@@ -176,6 +177,54 @@ class TestCheckPlanOverwrite(unittest.TestCase):
 
         self.assertEqual(plan_doc_id, "pln_test_123")
         self.assertTrue(should_continue)
+
+
+class TestCheckPlanOverwriteDisplay(unittest.TestCase):
+    """The existing plan's summary is shown as stored, never converted."""
+
+    def setUp(self):
+        """Set up a fresh core with a mocked plan store."""
+        SingletonMeta._instances.clear()
+        self.storage_patcher = patch("yggdrasil.daemon.core.build_internal_storage")
+        self.storage_patcher.start()
+        self.mock_plan_dbm = MagicMock()
+
+    def tearDown(self):
+        """Clean up singleton."""
+        self.storage_patcher.stop()
+        SingletonMeta._instances.clear()
+
+    @patch("yggdrasil.daemon.core.OpsConsumerService")
+    @patch("yggdrasil.daemon.core.FileSpoolEmitter")
+    @patch("yggdrasil.daemon.core.Engine")
+    @patch("yggdrasil.daemon.core.YggdrasilCore._init_db_managers")
+    def test_tokens_that_are_not_integers_are_shown_as_recorded(
+        self, mock_init_db, mock_engine, mock_emitter, mock_ops
+    ):
+        """A string, float or boolean token is shown verbatim, not converted."""
+        core = YggdrasilCore({"work_root": "/tmp/ygg_test"})
+        core.plan_dbm = self.mock_plan_dbm
+        for run_token, executed_run_token, shown in (
+            ("5", -1, "Run Token:  5 (executed: -1)"),
+            (5.7, 4.0, "Run Token:  5.7 (executed: 4.0)"),
+            (True, False, "Run Token:  True (executed: False)"),
+        ):
+            with self.subTest(shown=shown):
+                self.mock_plan_dbm.get_plan_summary.return_value = {
+                    "status": "approved",
+                    "execution_authority": "daemon",
+                    "updated_at": "2026-10-26T12:00:00Z",
+                    "run_token": run_token,
+                    "executed_run_token": executed_run_token,
+                }
+
+                with self.assertLogs(core._logger, level="WARNING") as logs:
+                    _, should_continue = core._check_plan_overwrite(
+                        "pln_test_123", force=False
+                    )
+
+                self.assertFalse(should_continue)
+                self.assertIn(shown, logs.records[0].getMessage())
 
 
 class TestRunOnceWithWatcher(unittest.TestCase):
@@ -561,7 +610,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
 
         core = YggdrasilCore(self.mock_config)
         core.engine.reserve_execution_id.return_value = _RESERVED
-        self.mock_storage.plans.ensure_plan_generation.side_effect = docs.get
+        self.mock_storage.plans.read_plan_document.side_effect = docs.get
         self.mock_storage.plans.finalize_execution.return_value = _COMMITTED
 
         # The first executed plan raises SIGINT (delivered to the loop's own
@@ -637,7 +686,7 @@ class TestRunOnceWatcherLoop(unittest.TestCase):
             signal.raise_signal(signal.SIGINT)
             return plan_doc
 
-        self.mock_storage.plans.ensure_plan_generation.side_effect = _load_plan
+        self.mock_storage.plans.read_plan_document.side_effect = _load_plan
 
         original = signal.getsignal(signal.SIGINT)
         try:

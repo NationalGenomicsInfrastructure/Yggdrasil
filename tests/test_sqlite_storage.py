@@ -199,7 +199,17 @@ class TestSQLitePlanStoreContract(SQLiteStoreTestBase):
 
     def setUp(self):
         super().setUp()
-        self.plans = SQLitePlanStore(SQLiteInternalStore(self.db_path))
+        self.store = SQLiteInternalStore(self.db_path)
+        self.plans = SQLitePlanStore(self.store)
+
+    def mark_executed(self, doc_id: str) -> None:
+        """Record the plan's request as executed, conditionally, as a writer does."""
+        doc = self.plans.fetch_plan(doc_id)
+        assert doc is not None, f"plan {doc_id} is not stored"
+        doc["executed_run_token"] = doc["run_token"]
+        self.store.put_document(
+            "plans", doc_id, doc, bump_plan_seq=True, expected_rev=doc["_rev"]
+        )
 
     def test_save_plan_draft_shape(self):
         doc_id = self.plans.save_plan(
@@ -222,7 +232,7 @@ class TestSQLitePlanStoreContract(SQLiteStoreTestBase):
         doc_id = self.plans.save_plan(
             _make_plan(), "test_realm", {"kind": "project", "id": "P1"}, auto_run=True
         )
-        self.plans.update_executed_token(doc_id, 0)
+        self.mark_executed(doc_id)
         created_at = self.plans.fetch_plan(doc_id)["created_at"]
 
         self.plans.save_plan(
@@ -252,18 +262,6 @@ class TestSQLitePlanStoreContract(SQLiteStoreTestBase):
         self.assertEqual(model.plan_id, plan.plan_id)
         self.assertEqual(model.steps[0].step_id, "s1")
 
-    def test_update_executed_token(self):
-        doc_id = self.plans.save_plan(
-            _make_plan(), "test_realm", {"kind": "project", "id": "P1"}, auto_run=True
-        )
-        self.assertTrue(self.plans.update_executed_token(doc_id, 0))
-        doc = self.plans.fetch_plan(doc_id)
-        self.assertEqual(doc["executed_run_token"], 0)
-        self.assertIn("last_executed_at", doc)
-
-    def test_update_executed_token_missing_plan(self):
-        self.assertFalse(self.plans.update_executed_token("nope", 0))
-
     def test_query_approved_pending_filters_eligibility(self):
         self.plans.save_plan(
             _make_plan("pln_a"), "test_realm", {"kind": "project", "id": "P1"}
@@ -280,7 +278,7 @@ class TestSQLitePlanStoreContract(SQLiteStoreTestBase):
             {"kind": "project", "id": "P1"},
             auto_run=True,
         )
-        self.plans.update_executed_token(executed, 0)  # executed — not eligible
+        self.mark_executed(executed)  # executed — not eligible
 
         eligible = self.plans.query_approved_pending()
         self.assertEqual([d["_id"] for d in eligible], ["pln_b"])

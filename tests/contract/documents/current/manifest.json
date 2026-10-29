@@ -1,0 +1,294 @@
+{
+  "entries": [
+    {
+      "expectation": "valid",
+      "file": "plan_document/draft.json",
+      "kind": "plan_document",
+      "position": 1,
+      "provenance": "build_plan_document",
+      "scenario": "draft, never run",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "by_hand": [
+        "approvals_required",
+        "approved_at",
+        "approved_by",
+        "status",
+        "updated_at"
+      ],
+      "derived_from": "plan_document/draft.json",
+      "expectation": "valid",
+      "file": "plan_document/approved.json",
+      "kind": "plan_document",
+      "position": 2,
+      "provenance": "the draft, approved by hand as the approval operation approves; no Yggdrasil writer approves in this release",
+      "scenario": "approved by an actor",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/running.json",
+      "kind": "plan_status",
+      "position": 3,
+      "provenance": "the ops consumer's build_plan_snapshot, read while the attempt's first step ran",
+      "scenario": "attempt running",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/approved_finalized.json",
+      "kind": "plan_document",
+      "position": 4,
+      "provenance": "build_finalized_document, recording the engine's attempt; the approval stamps are kept as read",
+      "scenario": "approved, finalized success",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/finished_success.json",
+      "kind": "plan_status",
+      "position": 5,
+      "provenance": "the ops consumer's build_plan_snapshot, after the attempt",
+      "scenario": "finished success",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "by_hand": [
+        "run_requested_at",
+        "run_requested_by",
+        "run_token",
+        "updated_at"
+      ],
+      "derived_from": "plan_document/approved_finalized.json",
+      "expectation": "valid",
+      "file": "plan_document/rerun_requested.json",
+      "kind": "plan_document",
+      "position": 6,
+      "provenance": "the finalized document, with a rerun requested by hand as the rerun operation requests one; no Yggdrasil writer requests reruns in this release",
+      "scenario": "rerun requested after a finished request",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/regenerated.json",
+      "kind": "plan_document",
+      "position": 7,
+      "provenance": "build_plan_document over the stored document, with lane 3 added to the plan",
+      "scenario": "regenerated after a finished request",
+      "sequence": "request_lifecycle"
+    },
+    {
+      "by_hand": [
+        "approved_at",
+        "created_at",
+        "schema_version",
+        "ticket",
+        "updated_at"
+      ],
+      "derived_from": "plan_document/approved.json",
+      "expectation": "invalid",
+      "file": "plan_document/pre_contract.json",
+      "kind": "plan_document",
+      "position": 1,
+      "problems": [
+        {
+          "code": "unversioned",
+          "path": "schema_version"
+        }
+      ],
+      "provenance": "the approved document as a release before the contract stored it, made by hand: no schema_version, +00:00 timestamps, and a field a tool outside the contract added",
+      "scenario": "pre-contract shape (no marker, +00:00)",
+      "sequence": "unversioned_regeneration"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/regenerated_over_unversioned.json",
+      "kind": "plan_document",
+      "position": 2,
+      "provenance": "build_plan_document over the stored pre-contract document",
+      "scenario": "regenerated over an unversioned slot",
+      "sequence": "unversioned_regeneration"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/auto_run_finalized.json",
+      "kind": "plan_document",
+      "provenance": "build_plan_document with auto_run, then build_finalized_document recording the engine's attempt",
+      "scenario": "auto-run, finalized success"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/continue_independent_failures.json",
+      "kind": "plan_document",
+      "provenance": "build_finalized_document, recording the engine's attempt, which drained with lane 1 failed and its upload blocked",
+      "scenario": "continue_independent, finalized with failures"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/finished_with_failures.json",
+      "kind": "plan_status",
+      "provenance": "the ops consumer's build_plan_snapshot, after the same attempt",
+      "scenario": "finished with failures and blocked steps"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/continue_independent_preflight_rejected.json",
+      "kind": "plan_document",
+      "provenance": "build_finalized_document, recording the engine's preflight rejection",
+      "scenario": "continue_independent, finalized preflight rejection (dependency cycle)"
+    },
+    {
+      "expectation": "invalid",
+      "file": "plan_document/non_string_step_id.json",
+      "kind": "plan_document",
+      "problems": [
+        {
+          "code": "wrong_type",
+          "path": "plan.steps[0].step_id"
+        }
+      ],
+      "provenance": "build_plan_document, storing the realm's plan as given, then build_finalized_document recording the engine's preflight rejection",
+      "scenario": "finalized preflight rejection of a plan with a non-string step ID"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_document/run_once_finalized.json",
+      "kind": "plan_document",
+      "provenance": "build_plan_document with the run-once authority and owner, then build_finalized_document recording the engine's attempt",
+      "scenario": "run-once plan, finalized"
+    },
+    {
+      "by_hand": [
+        "x_ops_ticket"
+      ],
+      "expectation": "valid",
+      "file": "plan_document/finalized_with_extension.json",
+      "kind": "plan_document",
+      "provenance": "build_plan_document, a field a foreign writer added by hand, then build_finalized_document recording the engine's attempt",
+      "scenario": "finalized while carrying x_ops_ticket"
+    },
+    {
+      "by_hand": [
+        "ticket",
+        "x_ops_ticket"
+      ],
+      "derived_from": "plan_document/finalized_with_extension.json",
+      "expectation": "invalid",
+      "file": "plan_document/unprefixed_field.json",
+      "kind": "plan_document",
+      "problems": [
+        {
+          "code": "unexpected_field",
+          "path": "ticket"
+        }
+      ],
+      "provenance": "the finalized document, with the foreign field's x_ prefix removed by hand",
+      "scenario": "unprefixed ticket"
+    },
+    {
+      "by_hand": [
+        "schema_version"
+      ],
+      "derived_from": "plan_document/draft.json",
+      "expectation": "invalid",
+      "file": "plan_document/schema_version_string.json",
+      "kind": "plan_document",
+      "problems": [
+        {
+          "code": "invalid_version",
+          "path": "schema_version"
+        }
+      ],
+      "provenance": "the draft, with schema_version \"1\" set by hand",
+      "scenario": "schema_version: \"1\""
+    },
+    {
+      "by_hand": [
+        "schema_version"
+      ],
+      "derived_from": "plan_document/draft.json",
+      "expectation": "invalid",
+      "file": "plan_document/schema_version_2.json",
+      "kind": "plan_document",
+      "problems": [
+        {
+          "code": "unsupported_version",
+          "path": "schema_version"
+        }
+      ],
+      "provenance": "the draft, with schema_version 2 set by hand",
+      "scenario": "schema_version: 2"
+    },
+    {
+      "by_hand": [
+        "executed_run_token",
+        "run_token"
+      ],
+      "derived_from": "plan_document/draft.json",
+      "expectation": "invalid",
+      "file": "plan_document/executed_above_run.json",
+      "kind": "plan_document",
+      "problems": [
+        {
+          "code": "invalid_tokens",
+          "path": "executed_run_token"
+        }
+      ],
+      "provenance": "the draft, with run_token 4, executed_run_token 5 set by hand",
+      "scenario": "tokens 4 / 5"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/running_with_failure.json",
+      "kind": "plan_status",
+      "provenance": "the ops consumer's build_plan_snapshot, read while lane 2 ran, after lane 1 failed and its upload was blocked",
+      "scenario": "running with a live step failure"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/report_without_start.json",
+      "kind": "plan_status",
+      "provenance": "the ops consumer's build_plan_snapshot over a real attempt's spool, with its plan.attempt_started record removed",
+      "scenario": "report but no start record"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/start_without_report.json",
+      "kind": "plan_status",
+      "provenance": "the ops consumer's build_plan_snapshot over a real attempt's spool, with its plan.attempt_report record removed, as an attempt that crashed before publishing its report leaves it",
+      "scenario": "start record but no report (crashed)"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/cancelled.json",
+      "kind": "plan_status",
+      "provenance": "the ops consumer's build_plan_snapshot of an attempt interrupted (KeyboardInterrupt) while its second step ran",
+      "scenario": "cancelled"
+    },
+    {
+      "expectation": "valid",
+      "file": "plan_status/legacy.json",
+      "kind": "plan_status",
+      "provenance": "the ops consumer's build_plan_snapshot over events published through StepContext outside any attempt, as releases before attempt correlation published them; the second step's only event is a DataAccess write trace",
+      "scenario": "legacy projection"
+    },
+    {
+      "by_hand": [
+        "schema_version"
+      ],
+      "derived_from": "plan_status/finished_success.json",
+      "expectation": "invalid",
+      "file": "plan_status/unversioned.json",
+      "kind": "plan_status",
+      "problems": [
+        {
+          "code": "unversioned",
+          "path": "schema_version"
+        }
+      ],
+      "provenance": "the finished snapshot, with schema_version removed by hand",
+      "scenario": "unversioned snapshot"
+    }
+  ]
+}

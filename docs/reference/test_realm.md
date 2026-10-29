@@ -122,7 +122,7 @@ Available steps (for custom mode):
 - Plan created with `auto_run=false` → `status="draft"`
 - PlanWatcher ignores it (not approved yet)
 - Plan stays in DB indefinitely
-- **Manual step**: Approve plan manually (set `status="approved"`, increment `run_token`)
+- **Manual step**: Approve the plan manually: set `status="approved"`, with `approved_at`, `approved_by` and `updated_at`, and leave both tokens as they are (see [Testing Approval Workflow](#testing-approval-workflow))
 - Then PlanWatcher detects change and executes
 - Demonstrates approval workflow integration
 
@@ -913,16 +913,20 @@ curl http://localhost:5984/yggdrasil_plans/test_scenario:pending_approval | \
 # Should show: status="draft", run_token=0, executed_run_token=-1
 ```
 
-3. **Simulate approval** (increment run_token):
+3. **Simulate approval**. Approval changes only the approval fields: it neither raises nor resets the tokens. The new plan's `run_token=0` and `executed_run_token=-1` already let it run once it is approved.
 ```bash
-# Fetch current doc
-PLAN=$(curl http://localhost:5984/yggdrasil_plans/test_scenario:pending_approval)
+# Fetch the current document, with its _rev
+PLAN=$(curl -s http://localhost:5984/yggdrasil_plans/test_scenario:pending_approval)
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Update with status="approved" and run_token increment
+# Approve it: change the approval fields only, and keep _rev, both tokens
+# and every other field exactly as fetched
 curl -X PUT http://localhost:5984/yggdrasil_plans/test_scenario:pending_approval \
   -H "Content-Type: application/json" \
-  -d "$(echo $PLAN | jq '.status="approved" | .run_token=1')"
+  -d "$(echo "$PLAN" | jq --arg now "$NOW" \
+    '.status="approved" | .approved_at=$now | .approved_by="tester" | .updated_at=$now')"
 ```
+The `_rev` makes the write conditional: a `409 Conflict` means the plan changed after it was fetched. Before approving a real plan, and before retrying after a conflict, check its `schema_version`, generation and status as [Approving or rerunning by hand](document_contract.md#approving-or-rerunning-by-hand) describes.
 
 4. **Watch PlanWatcher execute**:
 ```bash
@@ -985,7 +989,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 
 **Plan created but not executing:**
 - Check plan status: `curl http://localhost:5984/yggdrasil_plans/<plan_id> | jq '.status'`
-- If `status="draft"`, manually approve (increment `run_token`)
+- If `status="draft"`, approve it manually, leaving both tokens as they are (see [Testing Approval Workflow](#testing-approval-workflow))
 - Check PlanWatcher is running: `tail -f yggdrasil.log | grep PlanWatcher`
 
 **Step failures with missing fn_ref:**

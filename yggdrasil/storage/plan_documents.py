@@ -10,19 +10,42 @@ Plan generation:
     approval changes and run-token increments keep it, while regenerating the
     plan replaces it. It is never a stable default, so a plan that is deleted
     and later recreated under the same ID cannot be mistaken for its earlier
-    version. A document written before the field existed gets one lazily, the
-    first time it is needed (see ``yggdrasil/storage/plan_updates.py``).
+    version. A document of a supported family always carries a generation,
+    and one without a usable generation is refused for execution: nothing
+    adds a generation to an existing document.
+
+Replacing a plan:
+    Planning replaces the whole document in a plan's slot. Whether it may,
+    and which ``created_at`` the replacement keeps, is decided by
+    ``check_replaceable`` alone. ``build_plan_document`` applies it whenever
+    it is given the slot's document, so every store that builds before
+    writing refuses the same slots without writing.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from yggdrasil.contract import CURRENT_FAMILIES, PLAN_DOCUMENT, SUPPORTED_FAMILIES
+from yggdrasil.contract.timestamps import (
+    canonical_from_legacy,
+    is_canonical,
+    is_date_time,
+)
+from yggdrasil.contract.versions import (
+    INVALID,
+    SCHEMA_VERSION_FIELD,
+    UNSUPPORTED,
+    UNVERSIONED,
+    version_of,
+)
 from yggdrasil.flow.model import Plan
+from yggdrasil.flow.utils.ygg_time import utcnow_iso
+from yggdrasil.storage.errors import UnsupportedDocumentError
 
 # Valid values for the execution_authority field
 VALID_EXECUTION_AUTHORITIES = frozenset({"daemon", "run_once"})
@@ -33,6 +56,10 @@ PLAN_GENERATION_FIELD = "plan_generation"
 # Document field holding the result recorded when an execution request was
 # finalized; see ExecutionFinalization in yggdrasil/storage/plan_updates.py.
 LAST_FINALIZED_EXECUTION_FIELD = "last_finalized_execution"
+
+# Document field holding the document's creation time, which regeneration
+# keeps.
+CREATED_AT_FIELD = "created_at"
 
 
 def json_safe(value: Any) -> Any:
@@ -60,11 +87,6 @@ def validate_execution_authority(authority: str) -> None:
             f"Invalid execution_authority: {authority!r}. "
             f"Must be one of: {sorted(VALID_EXECUTION_AUTHORITIES)}"
         )
-
-
-def utc_now_iso() -> str:
-    """Return current UTC timestamp in ISO-8601 format."""
-    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def new_plan_generation() -> str:
@@ -96,6 +118,68 @@ def plan_generation_of(doc: dict[str, Any]) -> str | None:
     return None
 
 
+def check_replaceable(doc_id: str, existing: Mapping[str, Any]) -> str:
+    """Return the ``created_at`` that a replacement of a plan's document keeps.
+
+    Planning may replace an unversioned (pre-contract) document or a document
+    of a supported family. It refuses a document whose ``schema_version`` is
+    invalid or names an unsupported family, such as a newer family that the
+    replacement would downgrade. The marker is judged first, so such a
+    document is refused for its family whatever its ``created_at`` holds.
+
+    The replacement keeps the document's creation instant, spelled
+    canonically (``2026-10-22T10:00:00Z``). A supported document's value must
+    already be canonical and is kept verbatim. An unversioned document's
+    value may be either spelling that earlier releases wrote, a whole-second
+    UTC time ending in ``Z`` or ``+00:00``, and is re-spelled with ``Z``. Any
+    other value is refused: the build time is never substituted and
+    precision is never truncated.
+
+    Args:
+        doc_id: ID of the plan whose slot is being replaced.
+        existing: The document in the slot, as read.
+
+    Returns:
+        str: The ``created_at`` the replacement carries.
+
+    Raises:
+        UnsupportedDocumentError: If planning may not replace existing.
+    """
+    supported = SUPPORTED_FAMILIES[PLAN_DOCUMENT]
+    version = version_of(PLAN_DOCUMENT, existing)
+    if version.state in (INVALID, UNSUPPORTED):
+        raise UnsupportedDocumentError(
+            doc_id=doc_id,
+            field=SCHEMA_VERSION_FIELD,
+            recorded=version.recorded,
+            reason=version.state,
+            supported=supported,
+        )
+
+    if CREATED_AT_FIELD not in existing:
+        raise UnsupportedDocumentError(
+            doc_id=doc_id,
+            field=CREATED_AT_FIELD,
+            recorded=None,
+            reason="missing",
+            supported=supported,
+        )
+    recorded = existing[CREATED_AT_FIELD]
+    if version.state == UNVERSIONED:
+        kept = canonical_from_legacy(recorded)
+    else:
+        kept = recorded if is_canonical(recorded) else None
+    if kept is None:
+        raise UnsupportedDocumentError(
+            doc_id=doc_id,
+            field=CREATED_AT_FIELD,
+            recorded=recorded,
+            reason="unsupported" if is_date_time(recorded) else "malformed",
+            supported=supported,
+        )
+    return kept
+
+
 def build_plan_document(
     plan: Plan,
     realm: str,
@@ -115,11 +199,17 @@ def build_plan_document(
     """Build the canonical plan document for persistence.
 
     Every call builds a new plan version: the document gets a fresh
-    ``plan_generation``. On regeneration (``existing`` provided), execution
-    tokens are reset so the new plan is eligible for execution, and any
-    recorded execution result is dropped with them, while ``created_at`` is
-    preserved. Backend-specific fields (``_rev``) are the caller's
-    responsibility.
+    ``plan_generation``, and ``schema_version`` names the family of the
+    release that built it (``CURRENT_FAMILIES`` in
+    ``yggdrasil/contract/__init__.py``). Backend-specific fields (``_rev``)
+    are the caller's responsibility.
+
+    On regeneration (``existing`` provided), only the creation instant
+    carries over, as ``check_replaceable`` decides; everything else is
+    rebuilt. The execution tokens are reset so the new plan is eligible for
+    execution, and approval and request stamps, any recorded execution
+    result and fields written by others are dropped. A slot that planning may
+    not replace is refused before anything is built.
 
     Args:
         plan: The Plan object to persist (plan.plan_id is used as _id).
@@ -132,8 +222,11 @@ def build_plan_document(
         source_doc_id: Optional source document ID that triggered this plan.
         source_doc_rev: Optional source document revision.
         notes: Optional notes about the plan.
-        existing: Previously persisted document, if any (for created_at).
-        now: ISO-8601 timestamp override; defaults to current UTC time.
+        existing: The document currently in the plan's slot, as read, if
+            there is one.
+        now: Timestamp override for ``updated_at``, and for ``created_at``
+            when there is no existing document, written as given; defaults
+            to utcnow_iso().
         plan_generation: Generation ID override; defaults to a fresh one from
             new_plan_generation().
 
@@ -142,16 +235,20 @@ def build_plan_document(
 
     Raises:
         ValueError: If execution_authority is invalid or plan.plan_id missing.
+        UnsupportedDocumentError: If planning may not replace existing (see
+            check_replaceable).
     """
     validate_execution_authority(execution_authority)
     doc_id = plan.plan_id
     if not doc_id:
         raise ValueError("plan.plan_id is required for persistence")
 
-    timestamp = now or utc_now_iso()
+    timestamp = now or utcnow_iso()
+    created_at = timestamp if existing is None else check_replaceable(doc_id, existing)
 
     plan_doc: dict[str, Any] = {
         "_id": doc_id,
+        SCHEMA_VERSION_FIELD: CURRENT_FAMILIES[PLAN_DOCUMENT],
         "realm": realm,
         "scope": scope,
         "status": "approved" if auto_run else "draft",
@@ -162,9 +259,7 @@ def build_plan_document(
         "executed_run_token": -1,
         "execution_authority": execution_authority,
         "execution_owner": execution_owner,
-        "created_at": (
-            existing.get("created_at", timestamp) if existing else timestamp
-        ),
+        CREATED_AT_FIELD: created_at,
         "updated_at": timestamp,
     }
 

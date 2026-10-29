@@ -68,7 +68,7 @@ yggdrasil run-doc DOC_ID [--plan-only | --run-once] [--force] [--timeout SECONDS
 | `DOC_ID`          | The `_id` of the CouchDB project document to process |
 | `-p`, `--plan-only` | Create the plan(s) only, for the daemon to execute once approved. The default when no mode is given |
 | `-r`, `--run-once` | Create the plan(s), execute them in this process once approved, then exit |
-| `-f`, `--force`   | Overwrite an existing plan without asking |
+| `-f`, `--force`   | Overwrite an existing plan without asking. The replacement checks still apply: a stored plan whose `schema_version` is invalid or unsupported, or whose `created_at` cannot be kept, is never replaced (see [When planning replaces a plan](../reference/document_contract.md#when-planning-replaces-a-plan)) |
 | `-t`, `--timeout SECONDS` | With `--run-once`: how long to wait for plans to become executable, such as waiting for approval (default 1800). It never interrupts a running plan |
 | `--manual-submit` | Force manual HPC submission: Yggdrasil writes a submit script but waits for you to run `sbatch` and insert the job ID back into the document |
 

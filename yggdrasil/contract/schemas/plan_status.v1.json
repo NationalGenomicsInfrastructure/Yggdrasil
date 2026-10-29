@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:yggdrasil:contract:plan_status:1",
+  "title": "plan_status snapshot, family 1",
+  "description": "The execution status of one plan, projected by the ops consumer from the event spool: the latest observed attempt with every step it planned, or, for a plan whose spool holds no observed attempt, each step's latest uncorrelated run (a legacy projection). Values a step published are recorded as published, so the fields that copy them are open.",
+  "type": "object",
+  "properties": {
+    "_id": {
+      "description": "<partition>:plan_status:<realm>:<plan_id>",
+      "type": "string",
+      "minLength": 1
+    },
+    "_rev": {
+      "description": "The storage revision: opaque, set by the backend.",
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "description": "The compatibility family.",
+      "type": "integer",
+      "const": 1
+    },
+    "type": {
+      "const": "plan_status"
+    },
+    "realm": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "description": "The scope the attempt's events carry: the plan's, or, for a plan without one, the first a step event carries. kind and id are required; their values and any other keys are kept as the events carry them.",
+      "type": "object",
+      "required": ["kind", "id"]
+    },
+    "projection": {
+      "$ref": "#/$defs/projection"
+    },
+    "attempt": {
+      "description": "The projected attempt; null for a legacy projection.",
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/attempt"}
+      ]
+    },
+    "steps": {
+      "description": "One entry per step, by step ID.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "updated_at": {
+      "description": "When this snapshot was last written; not when its content last changed.",
+      "$ref": "#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "schema_version",
+    "_id",
+    "type",
+    "realm",
+    "plan_id",
+    "scope",
+    "projection",
+    "attempt",
+    "steps",
+    "updated_at"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"projection": {"const": "legacy"}},
+        "required": ["projection"]
+      },
+      "then": {
+        "properties": {"attempt": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"projection": {"const": "attempt"}},
+        "required": ["projection"]
+      },
+      "then": {
+        "properties": {"attempt": {"type": "object"}}
+      }
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "description": "An RFC 3339 date-time in UTC, to the whole second, ending in Z, such as 2026-10-22T10:00:00Z.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "maxLength": 20
+    },
+    "projection": {
+      "description": "attempt: one attempt's status; legacy: each step's latest uncorrelated run, which need not belong to one attempt.",
+      "enum": ["attempt", "legacy"]
+    },
+    "attempt_state": {
+      "enum": ["running", "finished"]
+    },
+    "execution_authority": {
+      "enum": ["daemon", "run_once"]
+    },
+    "step_state": {
+      "description": "The states of a step with no step event to read one from.",
+      "enum": ["pending", "interrupted", "unreached", "unknown"]
+    },
+    "attempt": {
+      "description": "The attempt's identity, from its start record or else its report, and how it ended, from its report. Each field is null when the record it is copied from lacks it; the six fields copied from the report are null while the attempt runs.",
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plan_generation": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "run_token": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "failure_policy": {
+          "description": "As the attempt recorded it."
+        },
+        "execution_authority": {
+          "description": "null when the attempt's start record is missing.",
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/execution_authority"}
+          ]
+        },
+        "execution_owner": {
+          "type": ["string", "null"]
+        },
+        "started_at": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/timestamp"}
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/attempt_state"
+        },
+        "ended_at": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/timestamp"}
+          ]
+        },
+        "termination_reason": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/termination_reason"}
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/outcome"}
+          ]
+        },
+        "is_drained": {
+          "type": ["boolean", "null"]
+        },
+        "counts": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/counts"}
+          ]
+        },
+        "diagnostic": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/diagnostic"}
+          ]
+        }
+      },
+      "required": [
+        "execution_id",
+        "plan_generation",
+        "run_token",
+        "failure_policy",
+        "execution_authority",
+        "execution_owner",
+        "started_at",
+        "state",
+        "ended_at",
+        "termination_reason",
+        "outcome",
+        "is_drained",
+        "counts",
+        "diagnostic"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {"state": {"const": "running"}},
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "ended_at": {"type": "null"},
+              "termination_reason": {"type": "null"},
+              "outcome": {"type": "null"},
+              "is_drained": {"type": "null"},
+              "counts": {"type": "null"},
+              "diagnostic": {"type": "null"}
+            }
+          }
+        }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "properties": {
+        "step_name": {
+          "type": "string"
+        },
+        "state": {
+          "description": "The type of the step event the entry is read from (step.succeeded, step.failed, step.skipped, step.blocked, or the latest step event while the step runs), or a state for a step with none.",
+          "type": "string",
+          "anyOf": [
+            {"pattern": "^step\\."},
+            {"$ref": "#/$defs/step_state"}
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/step_outcome"}
+          ]
+        },
+        "run_id": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "fingerprint": {
+          "description": "As the step's events carry it."
+        },
+        "progress": {
+          "description": "As the step's events carry it; normally a percentage."
+        },
+        "artifacts": {
+          "description": "As the step's events carry it; normally a list."
+        },
+        "metrics": {
+          "description": "As the step's events carry it; normally an object."
+        },
+        "job": {
+          "description": "As the step's events carry it."
+        },
+        "ts": {
+          "description": "The time on the step's events, as they carry it: not a contract timestamp."
+        },
+        "error": {
+          "description": "How the step failed: from its step.failed event while the attempt runs, or the report's failure record once it has ended. null for a step that did not fail.",
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/live_error"},
+            {"$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/step_failure"}
+          ]
+        },
+        "direct_blockers": {
+          "$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/step_id_list"
+        },
+        "failed_ancestors": {
+          "$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/step_id_list"
+        }
+      },
+      "required": [
+        "step_name",
+        "state",
+        "outcome",
+        "run_id",
+        "fingerprint",
+        "progress",
+        "artifacts",
+        "metrics",
+        "job",
+        "ts",
+        "error",
+        "direct_blockers",
+        "failed_ancestors"
+      ],
+      "additionalProperties": false
+    },
+    "live_error": {
+      "description": "A failure as its step.failed event carries it, values unchanged.",
+      "type": "object",
+      "properties": {
+        "error": {},
+        "kind": {},
+        "code": {},
+        "advice": {}
+      },
+      "required": ["error", "kind", "code", "advice"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:yggdrasil:contract:plan_document:1",
+  "title": "Plan document, family 1",
+  "description": "One plan as Yggdrasil stores it: what the realm planned, whether and how it may run, and the last execution request it recorded. The top level holds the contract's fields and fields whose names start with x_, which the contract never defines, so writers it does not cover can add their own. Realm-defined payloads (params, preview) are open.",
+  "type": "object",
+  "properties": {
+    "_id": {
+      "description": "The plan ID.",
+      "type": "string",
+      "minLength": 1
+    },
+    "_rev": {
+      "description": "The storage revision: opaque, set by the backend.",
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "description": "The compatibility family.",
+      "type": "integer",
+      "const": 1
+    },
+    "realm": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    },
+    "plan": {
+      "$ref": "#/$defs/plan"
+    },
+    "preview": {
+      "description": "Realm-defined data for display.",
+      "type": "object"
+    },
+    "plan_generation": {
+      "description": "Identifies one planned version of the plan; regenerating the plan replaces it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "run_token": {
+      "$ref": "#/$defs/run_token"
+    },
+    "executed_run_token": {
+      "description": "The run token of the last execution request recorded as finished; -1 before the first.",
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 9007199254740991
+    },
+    "execution_authority": {
+      "$ref": "#/$defs/execution_authority"
+    },
+    "execution_owner": {
+      "description": "Which run-once process owns the plan; null for the daemon.",
+      "type": ["string", "null"]
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "source_doc_id": {
+      "type": "string"
+    },
+    "source_doc_rev": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "last_executed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "last_finalized_execution": {
+      "$ref": "#/$defs/last_finalized_execution"
+    },
+    "approved_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "run_requested_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "run_requested_by": {
+      "type": "string"
+    },
+    "approvals_required": {
+      "description": "Informational; Yggdrasil does not write it.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "_id",
+    "realm",
+    "scope",
+    "status",
+    "plan",
+    "preview",
+    "plan_generation",
+    "run_token",
+    "executed_run_token",
+    "execution_authority",
+    "execution_owner",
+    "created_at",
+    "updated_at"
+  ],
+  "dependentRequired": {
+    "last_executed_at": ["last_finalized_execution"],
+    "last_finalized_execution": ["last_executed_at"]
+  },
+  "$defs": {
+    "timestamp": {
+      "description": "An RFC 3339 date-time in UTC, to the whole second, ending in Z, such as 2026-10-22T10:00:00Z.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "maxLength": 20
+    },
+    "status": {
+      "enum": ["draft", "approved"]
+    },
+    "execution_authority": {
+      "enum": ["daemon", "run_once"]
+    },
+    "failure_policy": {
+      "enum": ["fail_fast", "continue_independent"]
+    },
+    "run_token": {
+      "description": "Names the latest execution request; raising it requests a new run.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "scope": {
+      "description": "What the plan is about. kind and id are required; other keys are realm-defined.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["kind", "id"]
+    },
+    "plan": {
+      "description": "The execution definition.",
+      "type": "object",
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "realm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "failure_policy": {
+          "$ref": "#/$defs/failure_policy"
+        }
+      },
+      "required": ["plan_id", "realm", "scope", "steps", "failure_policy"],
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "fn_ref": {
+          "description": "Reference to the step function.",
+          "type": "string"
+        },
+        "params": {
+          "description": "Realm-defined arguments of the step function.",
+          "type": "object"
+        },
+        "deps": {
+          "description": "The steps whose success this step requires.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "description": "Realm-defined.",
+          "type": "object"
+        },
+        "inputs": {
+          "description": "Input artifact paths, by artifact key.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "description": "Required output artifact paths, by artifact key.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "step_id",
+        "name",
+        "fn_ref",
+        "params",
+        "deps",
+        "scope",
+        "inputs",
+        "outputs"
+      ],
+      "additionalProperties": false
+    },
+    "last_finalized_execution": {
+      "description": "The last execution request recorded as finished, with the report of the attempt that finished it.",
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plan_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plan_generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_token": {
+          "$ref": "#/$defs/run_token"
+        },
+        "failure_policy": {
+          "$ref": "#/$defs/failure_policy"
+        },
+        "outcome": {
+          "$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/outcome"
+        },
+        "termination_reason": {
+          "$ref": "urn:yggdrasil:contract:attempt_report:1#/$defs/termination_reason"
+        },
+        "finalized_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "report": {
+          "$ref": "urn:yggdrasil:contract:attempt_report:1"
+        }
+      },
+      "required": [
+        "execution_id",
+        "plan_id",
+        "plan_generation",
+        "run_token",
+        "failure_policy",
+        "outcome",
+        "termination_reason",
+        "finalized_at",
+        "report"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,12 +1,17 @@
 """Backend-neutral exceptions raised by internal-storage plan stores.
 
 Both plan-store backends raise these same types, so a caller handles a lost
-race or a failed backend call identically whichever backend is configured.
-Configuration problems are a separate concern and keep using
-``InternalStorageConfigurationError`` (``yggdrasil/errors.py``).
+race, a failed backend call or a refused replacement identically whichever
+backend is configured. Configuration problems are a separate concern and keep
+using ``InternalStorageConfigurationError`` (``yggdrasil/errors.py``).
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
+from yggdrasil.contract.diagnostics import describe_recorded
 
 
 class RevisionConflictError(Exception):
@@ -81,3 +86,70 @@ class PlanStoreError(Exception):
         """
         super().__init__(message)
         self.retryable = retryable
+
+
+class UnsupportedDocumentError(Exception):
+    """Planning refused to replace the document in a plan's slot.
+
+    Planning replaces a plan's whole document, so it first checks what the
+    slot holds. It refuses a document whose ``schema_version`` is invalid or
+    names a family this release does not support (such as a newer family,
+    which a replacement would downgrade), and a document whose ``created_at``
+    the replacement cannot keep. Nothing was written: the stored document,
+    its revision and the plan-change sequence are as they were.
+
+    This is neither a backend failure (:class:`PlanStoreError`) nor a lost
+    race (:class:`RevisionConflictError`), and retrying cannot change the
+    answer. The slot stays as it is until an operator fixes or deletes the
+    stored document.
+
+    Attributes:
+        doc_id: ID of the plan whose slot was not replaced.
+        field: The field that decided the refusal: ``schema_version`` or
+            ``created_at``.
+        recorded: The stored value exactly as read. None when the field is
+            absent (reason ``missing``) as well as when it holds ``null``.
+        reason: Why the value was refused. For ``schema_version``:
+            ``invalid`` (not a positive integer) or ``unsupported`` (a family
+            this release does not support). For ``created_at``: ``missing``
+            (absent), ``malformed`` (not an RFC 3339 date-time naming a real
+            date and time) or ``unsupported`` (a real date-time in a spelling
+            the replacement cannot carry, such as another offset or a
+            fraction of a second).
+        supported: The plan-document families this release supports.
+    """
+
+    def __init__(
+        self,
+        *,
+        doc_id: str,
+        field: str,
+        recorded: Any,
+        reason: str,
+        supported: Iterable[int],
+    ) -> None:
+        """Initialize the refusal; the message names every attribute.
+
+        The message shows recorded through
+        :func:`~yggdrasil.contract.diagnostics.describe_recorded`, a bounded
+        representation that cannot fail whatever recorded holds; the attribute
+        keeps the value itself.
+
+        Args:
+            doc_id: ID of the plan whose slot was not replaced.
+            field: ``schema_version`` or ``created_at``.
+            recorded: The stored value exactly as read, or None if absent.
+            reason: The reason code (see the class docstring).
+            supported: The plan-document families this release supports.
+        """
+        self.doc_id = doc_id
+        self.field = field
+        self.recorded = recorded
+        self.reason = reason
+        self.supported = frozenset(supported)
+        value = "" if reason == "missing" else f" {describe_recorded(recorded)}"
+        super().__init__(
+            f"Planning refused to replace plan {doc_id!r}: its {field}{value} "
+            f"is {reason} (supported plan-document families: "
+            f"{sorted(self.supported)})"
+        )

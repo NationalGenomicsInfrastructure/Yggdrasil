@@ -38,13 +38,14 @@ class PlanStore(Protocol):
     overwritten, and a lost race always surfaces as the backend-neutral
     :class:`~yggdrasil.storage.errors.RevisionConflictError`.
 
-    Backend *failures* are normalized only by the two conditional-update
-    methods, :meth:`ensure_plan_generation` and :meth:`finalize_execution`:
-    they raise :class:`~yggdrasil.storage.errors.PlanStoreError`, which also says
-    whether another attempt could help. The older methods still let their
-    backend's own exceptions through — a CouchDB ``ApiException``, a
-    ``sqlite3.Error`` — so a caller that must behave identically on both
-    backends either uses these two methods or catches broadly.
+    Backend *failures* are normalized only by the strict read and the
+    conditional update that execution relies on, :meth:`read_plan_document`
+    and :meth:`finalize_execution`: they raise
+    :class:`~yggdrasil.storage.errors.PlanStoreError`, which also says whether
+    another attempt could help. The older methods still let their backend's
+    own exceptions through — a CouchDB ``ApiException``, a ``sqlite3.Error`` —
+    so a caller that must behave identically on both backends either uses
+    these two methods or catches broadly.
     """
 
     def save_plan(
@@ -64,13 +65,19 @@ class PlanStore(Protocol):
         """Persist a new or regenerated plan document; returns the document ID.
 
         Every call assigns a fresh ``plan_generation`` and resets execution
-        tokens. The write applies only to the document state that was read,
-        so a lost race raises instead of replaying this call's planning intent
-        over a newer document.
+        tokens. It may replace an empty slot, an unversioned document or a
+        document of a supported family, and refuses an invalid marker, an
+        unsupported family or a ``created_at`` the replacement cannot keep
+        (``check_replaceable`` in ``yggdrasil/storage/plan_documents.py``).
+        The write applies only to the document state that was read, so a lost
+        race raises instead of replaying this call's planning intent over a
+        newer document.
 
         Raises:
             ValueError: If execution_authority is invalid or plan.plan_id is
                 missing.
+            UnsupportedDocumentError: If planning may not replace the document
+                in the slot. Nothing was written.
             RevisionConflictError: If another writer created or changed the
                 plan document first. Nothing was written.
         """
@@ -84,38 +91,24 @@ class PlanStore(Protocol):
         """Fetch a plan document and deserialize its Plan model."""
         ...
 
-    def update_executed_token(
-        self,
-        doc_id: str,
-        run_token: int,
-        *,
-        max_retries: int = 3,
-    ) -> bool:
-        """Record a successful execution of ``run_token`` for the plan.
+    def read_plan_document(self, doc_id: str) -> dict[str, Any] | None:
+        """Return the plan document as stored, for an execution decision.
 
-        Retries lost races by rereading and reapplying the token, up to
-        ``max_retries`` attempts in total. Unlike :meth:`finalize_execution`,
-        it does not check that the plan is still the generation that was
-        executed, and records no outcome.
-        """
-        ...
-
-    def ensure_plan_generation(self, doc_id: str) -> dict[str, Any] | None:
-        """Return the current plan document, giving a legacy one a generation.
-
-        A document that predates ``plan_generation`` gets a fresh generation
-        through a conditional write that changes nothing else. The returned
+        A plain read: it writes nothing. A body counts as the document only
+        when its storage envelope is intact, ``_id`` equal to doc_id and a
+        non-empty string ``_rev`` (``require_storage_envelope`` in
+        ``yggdrasil/storage/plan_updates.py``). Anything else is a storage
+        failure, never a missing or unversioned document. The returned
         document is one consistent snapshot to capture an execution request
-        from.
+        from; its content is not checked.
 
         Returns:
-            The current document with its ``plan_generation``, or None if the
-            plan does not exist.
+            The document with its ``_rev``, or None only when the backend
+            confirms the plan does not exist.
 
         Raises:
-            RevisionConflictError: If the document kept changing without
-                gaining a generation.
-            PlanStoreError: If the storage backend fails.
+            PlanStoreError: If the storage backend fails, or answers with
+                something other than the plan's stored document.
         """
         ...
 
@@ -123,16 +116,23 @@ class PlanStore(Protocol):
         """Record a finished execution request's outcome and executed token.
 
         Both are written together in one conditional write, and only if the
-        plan is still the captured generation, under the captured authority
-        and owner, and has not recorded this request or a newer one. Each
-        call makes one attempt and resolves to one status: COMMITTED,
-        ALREADY_COMMITTED (this execution's completion was already recorded),
-        CONFLICT (still valid, retry), or SUPERSEDED (never retry).
+        plan is still of the captured family (one this release supports) and
+        the captured generation, under the captured authority and owner, with
+        a valid token pair that the write keeps valid, and has not recorded
+        this request or a newer one. Every read the write may go over, the
+        conflict reread included, is strict, like
+        :meth:`read_plan_document`. Each call makes one attempt and resolves
+        to one status: COMMITTED, ALREADY_COMMITTED (this execution's
+        completion was already recorded), CONFLICT (still valid, retry),
+        SUPERSEDED (never retry), or INVALID_CONTROL_STATE (not until the
+        plan's tokens change).
 
         Raises:
-            PlanStoreError: If the storage backend fails. The write may have
-                landed; calling again reports that as ALREADY_COMMITTED. Its
-                ``retryable`` flag says whether another attempt could help.
+            PlanStoreError: If the storage backend fails, or a read answers
+                with something other than the plan's stored document. A
+                failed write may have landed; calling again reports that as
+                ALREADY_COMMITTED. Its ``retryable`` flag says whether another
+                attempt could help.
         """
         ...
 
