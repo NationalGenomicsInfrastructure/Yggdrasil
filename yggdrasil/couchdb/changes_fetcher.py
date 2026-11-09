@@ -45,7 +45,7 @@ class ChangesFetcher:
         include_docs: bool = True,
         retry_delay_sec: float = 2.0,
         max_retries: int = 3,
-        longpoll_timeout_ms: int = 60_000,
+        longpoll_timeout_ms: int = 5_000,
         logger: logging.Logger | None = None,
     ):
         """
@@ -56,7 +56,10 @@ class ChangesFetcher:
             include_docs: Include full documents in _changes feed (default True)
             retry_delay_sec: Delay in seconds before retrying (default 2.0)
             max_retries: Max retry attempts on transient errors (default 3)
-            longpoll_timeout_ms: CouchDB longpoll timeout in ms (default 60000)
+            longpoll_timeout_ms: CouchDB longpoll timeout in ms (default 5000).
+                The in-flight poll is a thread that cannot be cancelled and
+                asyncio shutdown waits for it, so the hold is kept short to
+                bound process shutdown time (see CouchDBBackend).
             logger: Optional logger instance; uses module logger if None
         """
         self.db_handler = db_handler

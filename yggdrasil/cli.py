@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import signal
 from pathlib import Path
 
 from yggdrasil.config.loader import ConfigLoader
@@ -160,6 +161,18 @@ Examples:
                     core = YggdrasilCore(config)
                 core.setup_realms()
                 core.setup_watchers()
+
+                # Map SIGTERM onto the same controlled shutdown as Ctrl+C.
+                # As PID 1 in a container, a signal without an installed
+                # handler is ignored by the kernel, so an unhandled SIGTERM
+                # would make the container stop time out and the daemon get
+                # SIGKILLed (exit 137) on every docker/systemd/k8s stop.
+                def _sigterm_to_interrupt(signum, frame):
+                    raise KeyboardInterrupt
+
+                previous_sigterm = signal.signal(
+                    signal.SIGTERM, _sigterm_to_interrupt
+                )
                 try:
                     asyncio.run(core.start())
                 except KeyboardInterrupt:
@@ -173,6 +186,8 @@ Examples:
                         # RuntimeError: Event loop issues during cleanup (can be ignored)
                         logger.debug(f"Shutdown exception (expected): {e}")
                     logger.info("Yggdrasil daemon stopped.")
+                finally:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
 
         elif args.mode == "run-doc":
             if config_path is not None:

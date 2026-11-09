@@ -54,7 +54,9 @@ class TestChangesFetcher(unittest.TestCase):
         self.assertTrue(fetcher.include_docs)
         self.assertEqual(fetcher.retry_delay_sec, 2.0)
         self.assertEqual(fetcher.max_retries, 3)
-        self.assertEqual(fetcher.longpoll_timeout_ms, 60_000)
+        # Kept short (see ChangesFetcher docstring): the in-flight poll is an
+        # uncancellable thread that asyncio shutdown waits for.
+        self.assertEqual(fetcher.longpoll_timeout_ms, 5_000)
 
     def test_init_custom_params(self):
         """Test fetcher initialization with custom parameters."""

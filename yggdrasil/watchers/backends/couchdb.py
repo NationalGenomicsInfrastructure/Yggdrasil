@@ -59,7 +59,7 @@ class CouchDBBackend(WatcherBackend):
             "poll_interval": float,          # Seconds between normal polls (default 5.0)
             "start_seq": str,                # Starting seq if no checkpoint (default "0")
             "limit": int | None,             # Max changes per poll (default None)
-            "longpoll_timeout_ms": int,      # CouchDB longpoll timeout (default 60000)
+            "longpoll_timeout_ms": int,      # CouchDB longpoll timeout (default 5000)
             "max_observation_retries": int,  # Doc fetch retries (default 3, from global policy)
             "observation_retry_delay_s": float,  # Delay between retries (default 1.0)
         }
@@ -98,7 +98,15 @@ class CouchDBBackend(WatcherBackend):
     DEFAULT_POLL_INTERVAL = 5.0
     DEFAULT_START_SEQ = "0"
     DEFAULT_LIMIT = None
-    DEFAULT_LONGPOLL_TIMEOUT_MS = 60_000
+    #: Per-request longpoll hold time. The in-flight poll runs in a worker
+    #: thread (asyncio.to_thread) and cannot be cancelled, and asyncio's
+    #: shutdown waits for in-flight executor work - so an uncapped hold
+    #: (e.g. 60 s) delays process shutdown (SIGTERM/SIGINT, container stop)
+    #: by the full hold time, typically beyond the stop grace period and
+    #: ending in SIGKILL. 5 s keeps shutdown bounded while preserving
+    #: longpoll semantics: the server still pushes changes immediately,
+    #: idle requests just cycle more frequently.
+    DEFAULT_LONGPOLL_TIMEOUT_MS = 5_000
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_RETRY_DELAY = 1.0
 
