@@ -170,9 +170,7 @@ Examples:
                 def _sigterm_to_interrupt(signum, frame):
                     raise KeyboardInterrupt
 
-                previous_sigterm = signal.signal(
-                    signal.SIGTERM, _sigterm_to_interrupt
-                )
+                previous_sigterm = signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
                 try:
                     asyncio.run(core.start())
                 except KeyboardInterrupt:
