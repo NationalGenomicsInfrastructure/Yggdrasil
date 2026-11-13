@@ -76,6 +76,7 @@ class CouchPlanChangeSource:
 def build_couchdb_bundle(
     cfg: CouchInternalStorageConfig | None,
     *,
+    longpoll_timeout_ms: int = 60_000,
     log: logging.Logger | None = None,
 ) -> InternalStorageBundle:
     """Build the CouchDB internal-storage bundle.
@@ -85,6 +86,8 @@ def build_couchdb_bundle(
             (deprecated): fixed database names resolved through the default
             ``couchdb`` endpoint, with ``OPS_DB`` honored for the operations
             database name.
+        longpoll_timeout_ms: CouchDB hold time of an idle plan ``_changes``
+            longpoll; shutdown can wait this long for the in-flight poll.
         log: Optional logger override.
 
     Returns:
@@ -137,7 +140,11 @@ def build_couchdb_bundle(
         )
 
     plan_changes = CouchPlanChangeSource(
-        ChangesFetcher(db_handler=plans, include_docs=True)
+        ChangesFetcher(
+            db_handler=plans,
+            include_docs=True,
+            longpoll_timeout_ms=longpoll_timeout_ms,
+        )
     )
 
     return InternalStorageBundle(
