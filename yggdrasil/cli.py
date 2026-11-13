@@ -21,6 +21,63 @@ except ImportError:
     __version__ = "unknown"
 
 
+#: Signals that start the daemon's controlled shutdown.
+_SHUTDOWN_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+async def _run_daemon(core: YggdrasilCore) -> None:
+    """Run the daemon until SIGTERM/SIGINT, then stop it on the same event loop.
+
+    The signals are handled by the event loop (``loop.add_signal_handler``),
+    which runs the handler as an ordinary callback between task steps. Nothing
+    is raised from a signal handler, so a signal never interrupts a coroutine
+    or the loop's own code partway through. As PID 1 in a container a signal
+    without an installed handler is ignored by the kernel, so without the
+    SIGTERM handler every docker/systemd/k8s stop would end in SIGKILL.
+
+    ``core.stop()`` runs on this loop, which owns the watchers' tasks and
+    asyncio objects, whether a signal arrived or ``core.start()`` returned on
+    its own. A ``core.start()`` still running afterwards is then cancelled:
+    a watcher blocked in an idle ``_changes`` longpoll does not end its task
+    when asked to stop, and cancelling it lets the daemon shut down without
+    waiting for that task. The longpoll's worker thread itself cannot be
+    cancelled; ``asyncio.run()`` still waits for it before returning.
+
+    Args:
+        core: The configured core, with realms and watchers set up.
+
+    Raises:
+        Exception: Whatever ``core.start()`` raised, after the stop has run.
+    """
+    logger = custom_logger(__name__)
+    loop = asyncio.get_running_loop()
+    stop_requested = asyncio.Event()
+
+    def _request_stop() -> None:
+        """Start the controlled shutdown (later signals change nothing)."""
+        if not stop_requested.is_set():
+            logger.warning("[bold red blink] Shutting down Yggdrasil daemon... [/]")
+            stop_requested.set()
+
+    for sig in _SHUTDOWN_SIGNALS:
+        loop.add_signal_handler(sig, _request_stop)
+
+    start_task = asyncio.create_task(core.start())
+    stop_wait = asyncio.create_task(stop_requested.wait())
+    try:
+        await asyncio.wait({start_task, stop_wait}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        stop_wait.cancel()
+        await core.stop()
+        if not start_task.done():
+            start_task.cancel()
+        try:
+            await start_task
+        except asyncio.CancelledError:
+            if not start_task.cancelled():
+                raise
+
+
 def main():
     parser = argparse.ArgumentParser(prog="yggdrasil")
     # Global flags
@@ -162,30 +219,8 @@ Examples:
                 core.setup_realms()
                 core.setup_watchers()
 
-                # Map SIGTERM onto the same controlled shutdown as Ctrl+C.
-                # As PID 1 in a container, a signal without an installed
-                # handler is ignored by the kernel, so an unhandled SIGTERM
-                # would make the container stop time out and the daemon get
-                # SIGKILLed (exit 137) on every docker/systemd/k8s stop.
-                def _sigterm_to_interrupt(signum, frame):
-                    raise KeyboardInterrupt
-
-                previous_sigterm = signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
-                try:
-                    asyncio.run(core.start())
-                except KeyboardInterrupt:
-                    logger.warning(
-                        "[bold red blink] Shutting down Yggdrasil daemon... [/]"
-                    )
-                    try:
-                        asyncio.run(core.stop())
-                    except (asyncio.CancelledError, RuntimeError) as e:
-                        # CancelledError: Tasks were cancelled during shutdown (expected)
-                        # RuntimeError: Event loop issues during cleanup (can be ignored)
-                        logger.debug(f"Shutdown exception (expected): {e}")
-                    logger.info("Yggdrasil daemon stopped.")
-                finally:
-                    signal.signal(signal.SIGTERM, previous_sigterm)
+                asyncio.run(_run_daemon(core))
+                logger.info("Yggdrasil daemon stopped.")
 
         elif args.mode == "run-doc":
             if config_path is not None:
