@@ -40,6 +40,7 @@ Two key files:
 |---|---|
 | `yggdrasil.log_dir` | Directory where Yggdrasil writes its log files |
 | `yggdrasil.job_monitor_poll_interval` | Seconds between Slurm job status polls |
+| `yggdrasil.plan_watcher_longpoll_timeout_ms` | Milliseconds CouchDB holds an idle plan changes poll (optional, default 60000). Shutdown can wait this long plus 5 s for the in-flight poll |
 | `report_transfer.server` | SSH server for transferring reports |
 | `report_transfer.user` | SSH user |
 | `report_transfer.destination` | Remote destination path |
@@ -102,7 +103,7 @@ Two key files:
 
 | Key | Purpose |
 |---|---|
-| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq`. A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
+| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq` and `longpoll_timeout_ms` (milliseconds CouchDB holds an idle changes poll, default 60000; shutdown can wait this long plus 5 s). A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
 | `data_access` | Used by `DataAccess` for realm data queries. See the table below for sub-keys. |
 
 **`data_access` sub-keys:**
