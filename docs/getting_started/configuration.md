@@ -103,7 +103,7 @@ Two key files:
 
 | Key | Purpose |
 |---|---|
-| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq`. A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
+| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq` and `longpoll_timeout_ms` (milliseconds CouchDB holds an idle changes poll, default 60000; shutdown can wait this long plus 5 s). A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
 | `data_access` | Used by `DataAccess` for realm data queries. See the table below for sub-keys. |
 
 **`data_access` sub-keys:**
