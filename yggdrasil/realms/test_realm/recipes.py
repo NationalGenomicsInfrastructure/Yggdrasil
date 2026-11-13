@@ -13,6 +13,8 @@ Each recipe represents a different test scenario:
   and the metadata update fail, the other branch completes
 - branch_failure_metadata_required: The same plan, with the metadata update
   a declared prerequisite of every branch
+- slurm_job: Submits a SLURM batch job through the configured job manager
+  and waits for it to complete
 
 A recipe's plans run under the fail_fast policy unless
 RECIPE_FAILURE_POLICIES names another (see default_failure_policy).
@@ -91,6 +93,62 @@ def happy_path(
             fn_name="step_echo",
             params={"message": "Happy path complete"},
             deps=["brief_sleep"],
+        ),
+    ]
+
+    # Apply overrides by step_id
+    return _apply_overrides(steps, overrides)
+
+
+# ---------------------------------------------------------------------------
+# Recipe: slurm_job
+# ---------------------------------------------------------------------------
+
+
+def slurm_job(
+    overrides: dict[str, dict[str, Any]] | None = None,
+) -> list[StepSpec]:
+    """
+    Generate a plan that submits a SLURM batch job and waits for it.
+
+    Steps:
+        1. echo_start: Echo "Submitting a SLURM test job"
+        2. slurm_submit: Submit a batch job through the configured job
+           manager and wait for its terminal state (fails the plan unless
+           the job ends COMPLETED)
+        3. echo_end: Echo "SLURM job finished"
+
+    With ``yggdrasil.slurm.backend = "slurm"`` (compose stack) the job
+    runs on the stack's local SLURM cluster; without that setting a dev
+    daemon falls back to the mock job manager.
+
+    Args:
+        overrides: Optional dict mapping step_id to param overrides
+
+    Returns:
+        List of StepSpec for Engine execution
+    """
+    overrides = overrides or {}
+
+    steps = [
+        _make_step(
+            step_id="echo_start",
+            name="Echo Start",
+            fn_name="step_echo",
+            params={"message": "Submitting a SLURM test job"},
+        ),
+        _make_step(
+            step_id="slurm_submit",
+            name="SLURM Job",
+            fn_name="step_slurm_job",
+            deps=["echo_start"],
+        ),
+        _make_step(
+            step_id="echo_end",
+            name="Echo End",
+            fn_name="step_echo",
+            params={"message": "SLURM job finished"},
+            deps=["slurm_submit"],
         ),
     ]
 
@@ -1067,6 +1125,7 @@ def _apply_overrides(
 
 RECIPES: dict[str, Any] = {
     "happy_path": happy_path,
+    "slurm_job": slurm_job,
     "random_fail": random_fail,
     "fail_fast": fail_fast,
     "fail_mid_plan": fail_mid_plan,

@@ -38,6 +38,20 @@ class MockSlurmJobManager:
         asyncio.create_task(self._start_job(mock_job_id))
         return mock_job_id
 
+    async def wait_for_completion(self, job_id, poll_interval=None):
+        """Poll the mock job until it reaches a terminal state.
+
+        Mirrors SlurmJobManager.wait_for_completion so callers can use the
+        same interface against either backend.
+        """
+        interval = self.polling_interval if poll_interval is None else poll_interval
+        while True:
+            state = await self._job_status(job_id)
+            if state in self.slurm_end_states:
+                self._logger.info(f"Mock job {job_id} reached terminal state: {state}")
+                return state
+            await asyncio.sleep(interval)
+
     async def monitor_job(self, job_id, sample):
         self._logger.info(
             f"Monitoring job {job_id} with poll interval {self.polling_interval}..."

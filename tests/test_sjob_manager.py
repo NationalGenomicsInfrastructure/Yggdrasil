@@ -281,5 +281,76 @@ class TestSlurmJobManager(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(job_id)
 
 
+class TestSlurmJobManagerWaitForCompletion(unittest.IsolatedAsyncioTestCase):
+    """wait_for_completion polls _job_status until a terminal state."""
+
+    def setUp(self):
+        self.manager = SlurmJobManager(polling_interval=0.01)
+
+    async def test_returns_terminal_state_immediately(self):
+        with patch.object(
+            self.manager, "_job_status", AsyncMock(return_value="COMPLETED")
+        ):
+            state = await self.manager.wait_for_completion("123", poll_interval=0.01)
+        self.assertEqual(state, "COMPLETED")
+
+    async def test_polls_past_non_terminal_and_none_states(self):
+        # None = sacct does not know the job yet (right after sbatch):
+        # it must be treated as "not terminal", not as an error.
+        mock_status = AsyncMock(side_effect=[None, "PENDING", "RUNNING", "COMPLETED"])
+        with patch.object(self.manager, "_job_status", mock_status):
+            state = await self.manager.wait_for_completion("123", poll_interval=0.01)
+        self.assertEqual(state, "COMPLETED")
+        self.assertEqual(mock_status.await_count, 4)
+
+    async def test_returns_failed_state(self):
+        with patch.object(
+            self.manager, "_job_status", AsyncMock(return_value="FAILED")
+        ):
+            state = await self.manager.wait_for_completion("123", poll_interval=0.01)
+        self.assertEqual(state, "FAILED")
+
+
+class TestSlurmManagerFactoryBackend(unittest.TestCase):
+    """The main.json yggdrasil.slurm.backend setting selects the manager."""
+
+    def test_backend_mock_selected_over_is_dev(self):
+        from yggdrasil.toolkit.mock_sjob_manager import MockSlurmJobManager
+        from yggdrasil.toolkit.sjob_manager import SlurmManagerFactory
+
+        with patch.object(
+            SlurmJobManager, "configs", {"yggdrasil": {"slurm": {"backend": "mock"}}}
+        ):
+            # is_dev=False would normally select SlurmJobManager.
+            self.assertIsInstance(
+                SlurmManagerFactory.get_manager(is_dev=False), MockSlurmJobManager
+            )
+
+    def test_backend_slurm_selected_over_is_dev(self):
+        from yggdrasil.toolkit.sjob_manager import SlurmManagerFactory
+
+        with patch.object(
+            SlurmJobManager,
+            "configs",
+            {"yggdrasil": {"slurm": {"backend": "slurm"}}},
+        ):
+            # is_dev=True would normally select MockSlurmJobManager.
+            self.assertIsInstance(
+                SlurmManagerFactory.get_manager(is_dev=True), SlurmJobManager
+            )
+
+    def test_unset_backend_keeps_is_dev_fallback(self):
+        from yggdrasil.toolkit.mock_sjob_manager import MockSlurmJobManager
+        from yggdrasil.toolkit.sjob_manager import SlurmManagerFactory
+
+        with patch.object(SlurmJobManager, "configs", {"yggdrasil": {}}):
+            self.assertIsInstance(
+                SlurmManagerFactory.get_manager(is_dev=True), MockSlurmJobManager
+            )
+            self.assertIsInstance(
+                SlurmManagerFactory.get_manager(is_dev=False), SlurmJobManager
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

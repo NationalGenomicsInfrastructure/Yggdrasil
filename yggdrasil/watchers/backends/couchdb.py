@@ -98,6 +98,16 @@ class CouchDBBackend(WatcherBackend):
     DEFAULT_POLL_INTERVAL = 5.0
     DEFAULT_START_SEQ = "0"
     DEFAULT_LIMIT = None
+    #: Per-request longpoll hold time, the same default as the PlanWatcher's
+    #: ChangesFetcher. The in-flight poll runs in a worker thread
+    #: (asyncio.to_thread) and cannot be cancelled, and asyncio's shutdown
+    #: waits for in-flight executor work, so process shutdown (SIGTERM/SIGINT,
+    #: container stop) can wait up to this long plus the 5 s socket margin.
+    #: Deployments need a stop grace period above that, or a lower
+    #: ``longpoll_timeout_ms`` (per connection ``watch`` block, or for every
+    #: CouchDB watcher in ``external_systems.defaults.couchdb``). A lower value
+    #: keeps longpoll semantics: the server still returns changes at once,
+    #: idle requests only cycle more often.
     DEFAULT_LONGPOLL_TIMEOUT_MS = 60_000
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_RETRY_DELAY = 1.0

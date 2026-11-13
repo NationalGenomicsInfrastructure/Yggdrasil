@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import signal
 import sys
 import unittest
 from io import StringIO
@@ -8,7 +10,7 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
-from yggdrasil.cli import main
+from yggdrasil.cli import _run_daemon, main
 from yggdrasil.couchdb.connection import CouchDBClientFactory
 from yggdrasil.daemon.lock import DaemonLockError
 from yggdrasil.errors import (
@@ -106,7 +108,7 @@ class TestYggdrasilCLI(unittest.TestCase):
             # Verify daemon mode was processed correctly
             mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
-            mock_asyncio_run.assert_called_once_with(mock_core.start())
+            self._assert_ran_daemon(mock_asyncio_run)
 
     def test_daemon_mode_acquires_local_lock(self):
         """Test daemon mode acquires the local runtime lock before watchers start."""
@@ -645,30 +647,18 @@ class TestYggdrasilCLI(unittest.TestCase):
             # Verify complete daemon setup flow
             mock_core.setup_realms.assert_called_once()
             mock_core.setup_watchers.assert_called_once()
-            mock_asyncio_run.assert_called_once_with(mock_core.start())
+            self._assert_ran_daemon(mock_asyncio_run)
 
-    def test_daemon_mode_keyboard_interrupt(self):
-        """Test daemon mode handling of KeyboardInterrupt."""
-        sys.argv = ["yggdrasil", "daemon"]
+    def _assert_ran_daemon(self, mock_asyncio_run):
+        """Assert daemon mode ran one event loop over ``_run_daemon``.
 
-        with (
-            patch("yggdrasil.cli.ConfigLoader") as mock_config_loader,
-            patch("yggdrasil.cli.YggdrasilCore") as mock_core_class,
-            patch("asyncio.run") as mock_asyncio_run,
-        ):
-
-            mock_config_loader.return_value.load_config.return_value = self.mock_config
-            mock_core = Mock()
-            mock_core_class.return_value = mock_core
-
-            # First call (start) raises KeyboardInterrupt, second call (stop) succeeds
-            mock_asyncio_run.side_effect = [KeyboardInterrupt(), None]
-
-            main()
-
-            # Verify both start and stop were called
-            expected_calls = [call(mock_core.start()), call(mock_core.stop())]
-            mock_asyncio_run.assert_has_calls(expected_calls)
+        Args:
+            mock_asyncio_run: The patched ``asyncio.run``.
+        """
+        mock_asyncio_run.assert_called_once()
+        (coro,), _ = mock_asyncio_run.call_args
+        self.assertEqual(coro.cr_code, _run_daemon.__code__)
+        coro.close()  # never run by the mock
 
     # =====================================================
     # RUN-DOC MODE TESTS
@@ -1366,6 +1356,62 @@ class TestRunDocModeFlags(unittest.TestCase):
                 doc_id="P12345",
                 force_overwrite=True,
             )
+
+
+class _FakeCore:
+    """Core stand-in whose start() can block, return or raise.
+
+    Attributes:
+        mode: ``"block"`` keeps start() running after stop() (a watcher in an
+            idle longpoll), ``"return"`` returns at once, ``"raise"`` raises.
+        send: Signal start() sends to this process once running, or None.
+        events: Ordered record of what happened.
+    """
+
+    def __init__(self, mode, send=None):
+        self.mode = mode
+        self.send = send
+        self.events = []
+
+    async def start(self):
+        """Run like YggdrasilCore.start() in the configured mode."""
+        self.events.append("start")
+        if self.send is not None:
+            asyncio.get_running_loop().call_soon(os.kill, os.getpid(), self.send)
+        if self.mode == "raise":
+            raise RuntimeError("watcher crashed")
+        if self.mode == "block":
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.events.append("start cancelled")
+                raise
+
+    async def stop(self):
+        """Record the stop."""
+        self.events.append("stop")
+
+
+class TestRunDaemon(unittest.TestCase):
+    """The daemon's one-loop run/stop sequence and its signal handling."""
+
+    def test_signal_stops_then_cancels_a_blocked_start(self):
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(signal=sig.name):
+                core = _FakeCore("block", send=sig)
+                asyncio.run(asyncio.wait_for(_run_daemon(core), timeout=5))
+                self.assertEqual(core.events, ["start", "stop", "start cancelled"])
+
+    def test_start_returning_first_still_stops(self):
+        core = _FakeCore("return")
+        asyncio.run(asyncio.wait_for(_run_daemon(core), timeout=5))
+        self.assertEqual(core.events, ["start", "stop"])
+
+    def test_start_error_propagates_after_stop(self):
+        core = _FakeCore("raise")
+        with self.assertRaisesRegex(RuntimeError, "watcher crashed"):
+            asyncio.run(asyncio.wait_for(_run_daemon(core), timeout=5))
+        self.assertEqual(core.events, ["start", "stop"])
 
 
 if __name__ == "__main__":
