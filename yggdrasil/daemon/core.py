@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from yggdrasil.config.runtime_paths import resolve_event_spool, resolve_work_root
+from yggdrasil.contract.problems import ContractProblem
 from yggdrasil.core.engine import Engine
 from yggdrasil.core.realm import RealmDescriptor, discover_realms
 from yggdrasil.couchdb.project_db_manager import ProjectDBManager
@@ -43,6 +44,31 @@ def _generate_run_once_owner() -> str:
     run-once invocations don't interfere with each other.
     """
     return f"run_once:{uuid.uuid4()}"
+
+
+# How many of an existing plan's problems the overwrite box lists by message.
+_SHOWN_PROBLEMS = 3
+
+
+def _shown(value: object) -> object:
+    """Return a plan summary's value for the overwrite box: ``unknown`` for None."""
+    return "unknown" if value is None else value
+
+
+def _problems_text(problems: Sequence[ContractProblem]) -> str:
+    """Join the first problems' messages and count the rest, for the overwrite box.
+
+    Args:
+        problems: The problems of an existing plan's summary.
+
+    Returns:
+        str: At most _SHOWN_PROBLEMS messages, each already bounded by the
+        shared reader, followed by how many more there are.
+    """
+    shown = [problem.message for problem in problems[:_SHOWN_PROBLEMS]]
+    text = "; ".join(shown)
+    hidden = len(problems) - len(shown)
+    return f"{text} (and {hidden} more)" if hidden else text
 
 
 @singleton
@@ -762,6 +788,16 @@ class YggdrasilCore:
         Uses the actual plan_doc_id (from draft.plan.plan_id) to ensure
         the check matches the exact document that will be persisted.
 
+        The store's summary is None only when no document is stored under
+        the ID, and planning then proceeds. Any stored document, readable or
+        not, is shown at WARNING in an "Existing Plan Found" box: its status,
+        origin (execution authority), last update and tokens, as the shared
+        reader recognises them, with ``unknown`` for each value it does not.
+        Only when the reader found problems does the box add a Problems
+        line: the first three messages and how many more there are. Planning
+        then stops unless force is set. Whether a forced replacement may
+        happen is decided when the plan is saved.
+
         Args:
             plan_doc_id: The exact plan document ID to check
             force: Whether to force overwrite
@@ -772,25 +808,32 @@ class YggdrasilCore:
         """
         summary = self.plan_dbm.get_plan_summary(plan_doc_id)
         if summary is None:
-            # No existing plan, proceed
+            # No document under this ID, proceed
             return plan_doc_id, True
 
-        # Plan exists - display warning
-        self._logger.warning(
+        # A document exists, readable or not - display warning
+        box = (
             "\n╭─ Existing Plan Found ─────────────────────────────────────╮\n"
             "│ Plan ID:    %s\n"
             "│ Status:     %s\n"
             "│ Origin:     %s\n"
             "│ Updated:    %s\n"
             "│ Run Token:  %s (executed: %s)\n"
-            "╰───────────────────────────────────────────────────────────╯",
-            plan_doc_id,
-            summary["status"],
-            summary["execution_authority"],
-            summary["updated_at"],
-            summary["run_token"],
-            summary["executed_run_token"],
         )
+        values: list[object] = [
+            plan_doc_id,
+            _shown(summary["status"]),
+            _shown(summary["execution_authority"]),
+            _shown(summary["updated_at"]),
+            _shown(summary["run_token"]),
+            _shown(summary["executed_run_token"]),
+        ]
+        problems = summary.get("problems")
+        if problems:
+            box += "│ Problems:   %s\n"
+            values.append(_problems_text(problems))
+        box += "╰───────────────────────────────────────────────────────────╯"
+        self._logger.warning(box, *values)
 
         if force:
             self._logger.info("--force specified; overwriting existing plan.")

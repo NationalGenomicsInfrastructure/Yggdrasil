@@ -3,8 +3,8 @@
 Single source of truth for the plan document shape so the CouchDB and SQLite
 plan stores cannot drift. Extracted from ``PlanDBManager`` (which now
 delegates here). The document's field names and words are spelled in
-``yggdrasil.contract.fields``, and its generation is read by
-``yggdrasil.contract.read.generation_of``.
+``yggdrasil.contract.fields``, and the display summary is a projection of
+the shared reader's ``yggdrasil.contract.read.read_plan``.
 
 Plan generation:
     Every document written by ``save_plan`` carries a fresh opaque
@@ -43,7 +43,6 @@ from yggdrasil.contract.fields import (
     EXECUTION_AUTHORITY_FIELD,
     EXECUTION_OWNER_FIELD,
     ID_FIELD,
-    LAST_FINALIZED_EXECUTION_FIELD,
     NOTES_FIELD,
     PLAN_FIELD,
     PLAN_GENERATION_FIELD,
@@ -57,6 +56,9 @@ from yggdrasil.contract.fields import (
     SOURCE_DOC_REV_FIELD,
     STATUS_FIELD,
     UPDATED_AT_FIELD,
+)
+from yggdrasil.contract.fields import (
+    LAST_FINALIZED_EXECUTION_FIELD as LAST_FINALIZED_EXECUTION_FIELD,
 )
 from yggdrasil.contract.timestamps import (
     canonical_from_legacy,
@@ -329,24 +331,85 @@ def warn_unsupported_omission(
     )
 
 
-def plan_summary_from_document(doc: dict[str, Any]) -> dict[str, Any]:
-    """Extract the minimal display summary from a plan document.
+# The summary's values, every one None when the reader can use nothing.
+_SUMMARY_VALUES = (
+    "status",
+    "execution_authority",
+    "execution_owner",
+    "updated_at",
+    "realm",
+    "run_token",
+    "executed_run_token",
+    "plan_generation",
+    "last_finalized_outcome",
+)
+
+
+def plan_summary_from_document(document: object, *, plan_id: str) -> dict[str, Any]:
+    """Summarise a stored plan document for display, as the shared reader reads it.
+
+    The summary is a projection of
+    :func:`yggdrasil.contract.read.read_plan`, which reads the document under
+    the ID it was requested by, so a body stored under another ``_id`` is
+    reported rather than shown as the requested plan. Nothing is filled in: a
+    value the reader does not recognise is None, never a display default.
+    When the reader can use nothing, because the document is not an object,
+    is of no supported family or is stored under another ID, every value is
+    None and ``problems`` says why. Every stored document has a summary.
 
     Approval ``status`` and the outcome of the last finalized execution are
-    reported as separate fields: an approved plan whose tokens are equal has
-    finished its last request, not necessarily succeeded at it.
+    separate values: an approved plan whose tokens are equal has finished its
+    last request, not necessarily succeeded at it.
+
+    Args:
+        document: The stored body, of any shape.
+        plan_id: The ID the document was requested under.
+
+    Returns:
+        dict[str, Any]: The summary, with these keys:
+
+        - ``status``: ``draft`` or ``approved``; None for any other value.
+        - ``execution_authority``: ``daemon`` or ``run_once``; None for any
+          other value.
+        - ``execution_owner``: the run-once owner, when it is non-empty text.
+        - ``updated_at``: the recorded text, when it names an instant.
+        - ``realm``: the realm, when it is non-empty text.
+        - ``run_token``, ``executed_run_token``: each token when it is valid
+          on its own, even if the pair is not.
+        - ``plan_generation``: the generation, when it is non-empty text.
+        - ``last_finalized_outcome``: the outcome the last finalized
+          execution records, when the record agrees with its report and the
+          outcome is a known one. It may be an earlier request's.
+        - ``problems``: every problem the reader found, a tuple of
+          ``ContractProblem``; empty for a sound document.
+
+    Raises:
+        TypeError: If plan_id is not a string.
+        ValueError: If plan_id is empty.
     """
-    last_execution = doc.get(LAST_FINALIZED_EXECUTION_FIELD)
-    return {
-        "status": doc.get("status", "unknown"),
-        "execution_authority": doc.get("execution_authority", "daemon"),
-        "execution_owner": doc.get("execution_owner"),
-        "updated_at": doc.get("updated_at", "unknown"),
-        "realm": doc.get("realm", "unknown"),
-        "run_token": doc.get("run_token", 0),
-        "executed_run_token": doc.get("executed_run_token", -1),
-        "plan_generation": read.generation_of(doc),
-        "last_finalized_outcome": (
-            last_execution.get("outcome") if isinstance(last_execution, dict) else None
-        ),
-    }
+    plan = read.read_plan(document, plan_id=plan_id)
+    recorded, tokens = plan.recorded, plan.tokens
+    if recorded is None or tokens is None:
+        # Nothing is derived from a document the reader cannot use.
+        values: dict[str, Any] = dict.fromkeys(_SUMMARY_VALUES)
+    else:
+        finalized = plan.finalized
+        updated_at = recorded.updated_at
+        values = {
+            "status": recorded.status.value,
+            "execution_authority": recorded.execution_authority.value,
+            "execution_owner": recorded.execution_owner.value,
+            "updated_at": (
+                updated_at.recorded if updated_at.value is not None else None
+            ),
+            "realm": recorded.realm.value,
+            "run_token": tokens.run,
+            "executed_run_token": tokens.executed,
+            "plan_generation": plan.generation,
+            "last_finalized_outcome": (
+                finalized.outcome.value
+                if finalized is not None and finalized.usable
+                else None
+            ),
+        }
+    return {**values, "problems": plan.problems}

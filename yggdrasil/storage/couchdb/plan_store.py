@@ -537,20 +537,58 @@ class PlanDBManager(CouchDBHandler):
 
     def get_plan_summary(self, doc_id: str) -> dict[str, Any] | None:
         """
-        Fetch minimal plan summary for display.
+        Fetch the display summary of the plan document stored under doc_id.
 
-        Returns key metadata without the full plan content.
-        Useful for displaying existing plan info during overwrite warnings.
+        Every stored document has a summary, readable or not: the shared
+        reader's view of it, read under doc_id, as
+        :func:`~yggdrasil.storage.plan_documents.plan_summary_from_document`
+        describes. A document the reader cannot use yields a summary whose
+        values are None and whose ``problems`` say why.
+
+        Reads the document directly rather than through
+        :meth:`fetch_document_by_id`, which reports a malformed response as a
+        missing document, while planning fills a slot it believes empty
+        without asking for ``--force``. So only CouchDB's 404 means no
+        document. Any body returned with a success status gets a summary,
+        whatever its shape: another document's body is reported as stored
+        under another ID, and a body that is not an object, JSON ``null``
+        included, as invalid.
 
         Args:
             doc_id: The plan document ID
 
         Returns:
-            dict with keys: status, execution_authority, execution_owner,
-                updated_at, realm, run_token, executed_run_token
-            or None if not found
+            dict[str, Any] | None: The summary; None only when CouchDB
+            reports that no document is stored under doc_id
+
+        Raises:
+            ApiException: If CouchDB answers the read with an error other
+                than 404; it is logged and re-raised unchanged.
+            Exception: Any other failure of the read, such as a
+                ``RequestException``, likewise logged and re-raised.
         """
-        doc = self.fetch_document_by_id(doc_id)
-        if not doc:
-            return None
-        return plan_summary_from_document(doc)
+        try:
+            document = self.server.get_document(
+                db=self.db_name,
+                doc_id=doc_id,
+            ).get_result()
+        except ApiException as exc:
+            if exc.status_code == 404:
+                self._logger.debug(
+                    "Plan '%s' not found in database '%s'", doc_id, self.db_name
+                )
+                return None
+            self._logger.error(
+                "Cloudant API error fetching '%s' from %s: %s %s",
+                doc_id,
+                self.db_name,
+                exc.status_code,
+                exc.message,
+            )
+            raise
+        except Exception as exc:
+            self._logger.error(
+                "Error while accessing database %s: %s", self.db_name, exc
+            )
+            raise
+        return plan_summary_from_document(document, plan_id=doc_id)

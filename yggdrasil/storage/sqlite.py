@@ -895,11 +895,27 @@ class SQLitePlanStore:
         return self._store.get_document(_NS_PLANS, doc_id) is not None
 
     def get_plan_summary(self, doc_id: str) -> dict[str, Any] | None:
-        """Return the minimal display summary, or None."""
+        """Return the display summary of the plan document stored under doc_id.
+
+        Every live document has a summary, readable or not: the shared
+        reader's view of it, read under doc_id, as
+        :func:`~yggdrasil.storage.plan_documents.plan_summary_from_document`
+        describes. A document the reader cannot use yields a summary whose
+        values are None and whose ``problems`` say why, so it is never
+        mistaken for an empty slot.
+
+        Args:
+            doc_id: The plan document ID.
+
+        Returns:
+            dict[str, Any] | None: The summary; None only when no live
+            document is stored under doc_id (none was written, or it was
+            deleted).
+        """
         doc = self._store.get_document(_NS_PLANS, doc_id)
-        if not doc:
+        if doc is None:
             return None
-        return plan_summary_from_document(doc)
+        return plan_summary_from_document(doc, plan_id=doc_id)
 
 
 class SQLitePlanChangeSource:

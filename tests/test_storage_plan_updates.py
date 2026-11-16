@@ -54,6 +54,7 @@ from yggdrasil.storage.plan_updates import (
     FinalizationResult,
     FinalizationStatus,
     SupersessionReason,
+    build_finalized_document,
     check_finalization,
     finalize_execution,
     finishes_request,
@@ -145,15 +146,29 @@ class TestPlanGeneration(ConformingBuilders):
                 self.assertEqual(regenerated["schema_version"], 1)
 
     def test_summary_reports_generation_and_last_outcome_separately(self):
-        doc = _document(last_finalized_execution={"outcome": "failed"})
-        summary = plan_summary_from_document(doc)
+        planned = build_plan_document(
+            continuation_plan(),
+            "test_realm",
+            dict(SCOPE),
+            auto_run=True,
+            plan_generation="g1",
+        )
+        doc = build_finalized_document(
+            planned,
+            finalization_for(planned, ending=DRAINED_FAILURE),
+            now="2026-01-01T01:00:00Z",
+        )
+        summary = plan_summary_from_document(doc, plan_id=doc["_id"])
         self.assertEqual(summary["status"], "approved")
         self.assertEqual(summary["plan_generation"], "g1")
         self.assertEqual(summary["last_finalized_outcome"], "failed")
 
-        legacy = plan_summary_from_document({"_id": "p"})
+        legacy = plan_summary_from_document({"_id": "p"}, plan_id="p")
         self.assertIsNone(legacy["plan_generation"])
         self.assertIsNone(legacy["last_finalized_outcome"])
+        self.assertEqual(
+            [problem.code for problem in legacy["problems"]], ["unversioned"]
+        )
 
 
 class TestBuiltDocumentContract(ConformingBuilders):
