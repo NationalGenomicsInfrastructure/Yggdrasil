@@ -24,7 +24,8 @@ Two key files:
 {
     "yggdrasil": {
         "log_dir": "yggdrasil_workspace/logs",
-        "job_monitor_poll_interval": 5
+        "job_monitor_poll_interval": 5,
+        "plan_watcher_longpoll_timeout_ms": 60000
     },
     "report_transfer": {
         "server": "<server>",
@@ -40,7 +41,7 @@ Two key files:
 |---|---|
 | `yggdrasil.log_dir` | Directory where Yggdrasil writes its log files |
 | `yggdrasil.job_monitor_poll_interval` | Seconds between Slurm job status polls |
-| `yggdrasil.plan_watcher_longpoll_timeout_ms` | Milliseconds CouchDB holds an idle plan changes poll (optional, default 60000). Shutdown can wait this long plus 5 s for the in-flight poll |
+| `yggdrasil.plan_watcher_longpoll_timeout_ms` | Milliseconds CouchDB holds the PlanWatcher's idle `_changes` longpoll on the plans database before returning empty (optional, default 60000). Changes are still delivered as soon as they arrive; the value only sets how often an idle poll cycles. Shutdown can wait this long plus 5 s for the in-flight poll, so the stop grace period of a container or service must exceed it. The realm watchers have their own setting: `longpoll_timeout_ms` under `external_systems` (see below) |
 | `report_transfer.server` | SSH server for transferring reports |
 | `report_transfer.user` | SSH user |
 | `report_transfer.destination` | Remote destination path |
@@ -90,6 +91,7 @@ Two key files:
     },
     "defaults": {
         "couchdb": {
+            "longpoll_timeout_ms": 60000,
             "start_seq": "0",
             "max_limit": 200
         }
@@ -113,7 +115,7 @@ Two key files:
 | `data_access.realms` | Maps realm_id → phase → permission list. Unlisted realms are denied. Each phase (`planning`, `execution`) has its own `permissions` array (`"read"`, `"write"`). |
 | `data_access.options` | Per-connection backend options (e.g. `max_limit`). Overrides the matching key in `defaults.<backend>`. |
 
-**`defaults`** groups all backend defaults under `defaults.<backend>`. Both `WatcherManager` and `DataAccess` read from `defaults.<backend>` — watcher settings (e.g. `start_seq`, `poll_interval`) and data-access settings (e.g. `max_limit`) all live here. Connection-level overrides (`watch` keys and `data_access.options` respectively) take precedence over these defaults.
+**`defaults`** groups all backend defaults under `defaults.<backend>`. Both `WatcherManager` and `DataAccess` read from `defaults.<backend>` — watcher settings (e.g. `start_seq`, `poll_interval`, `longpoll_timeout_ms`) and data-access settings (e.g. `max_limit`) all live here. Connection-level overrides (`watch` keys and `data_access.options` respectively) take precedence over these defaults.
 
 `WatchSpec` entries in a realm's registration reference a connection by logical name (e.g. `connection="projects_db"`). The `WatcherManager` resolves the name to the concrete endpoint at startup.
 
