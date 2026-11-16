@@ -18,7 +18,6 @@ from tests.contract.read_support import (
     plan_document_names,
 )
 from tests.contract.support import ABSENT, changed
-from yggdrasil.contract.fields import APPROVED
 from yggdrasil.contract.read import (
     ALREADY_EXECUTED,
     ELIGIBILITY_CODES,
@@ -35,7 +34,6 @@ from yggdrasil.contract.read import (
     is_eligible,
     read_plan,
 )
-from yggdrasil.storage import plan_eligibility
 
 
 def approved(**fields: Any) -> dict[str, Any]:
@@ -257,12 +255,6 @@ class TestDerivedAnswers(ReaderTestCase):
                 document = plan_document(name)
                 plan = read_plan(document, plan_id=document["_id"])
                 self.assertEqual(plan.eligibility, eligibility(document))
-
-    def test_the_old_names_are_the_reader_s(self):
-        """The storage module's names are kept for one release, as these objects."""
-        self.assertIs(plan_eligibility.is_plan_eligible, is_eligible)
-        self.assertIs(plan_eligibility.get_eligibility_reason, eligibility_reason)
-        self.assertIs(plan_eligibility.APPROVED_STATUS, APPROVED)
 
     def test_an_unsupported_document_is_not_eligible(self):
         """Every other check passes: the family alone refuses it."""
