@@ -16,6 +16,7 @@ from ibmcloudant.cloudant_v1 import Document
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RequestException, SSLError, Timeout
 
+from yggdrasil.contract.read import UNSUPPORTED_DOCUMENT, eligibility
 from yggdrasil.couchdb.connection import CouchDBHandler
 from yggdrasil.couchdb.defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 from yggdrasil.flow.model import Plan
@@ -28,6 +29,7 @@ from yggdrasil.storage.plan_documents import (
     plan_model_from_document,
     plan_summary_from_document,
     validate_execution_authority,
+    warn_unsupported_omission,
 )
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
@@ -433,8 +435,13 @@ class PlanDBManager(CouchDBHandler):
         """
         Query all approved plans that are pending execution.
 
-        Reserved for future daemon-startup recovery.
-        Returns plans where: status='approved' AND run_token > executed_run_token
+        Each document is judged by the shared reader's eligibility decision
+        (``yggdrasil.contract.read.eligibility``): of a supported family,
+        with a valid token pair, approved, and with run_token >
+        executed_run_token. Design documents are skipped first, silently. A
+        plan whose ``schema_version`` is absent, invalid or names an
+        unsupported family is left out with one WARNING, naming it by its
+        document ID; every other ineligible plan is left out silently.
 
         Note: This is a full scan (O(n)). For large databases, consider
         adding a CouchDB view for indexed queries.
@@ -442,8 +449,6 @@ class PlanDBManager(CouchDBHandler):
         Returns:
             list: Plan documents eligible for execution
         """
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
-
         eligible_plans: list[dict[str, Any]] = []
 
         try:
@@ -463,8 +468,13 @@ class PlanDBManager(CouchDBHandler):
                     continue
 
                 # Check eligibility
-                if is_plan_eligible(doc):
+                decision = eligibility(doc)
+                if decision.eligible:
                     eligible_plans.append(doc)
+                elif decision.code == UNSUPPORTED_DOCUMENT:
+                    row_id = row.get("id")
+                    plan_id = row_id if isinstance(row_id, str) else doc.get("_id")
+                    warn_unsupported_omission(self._logger, plan_id, doc)
 
             self._logger.info(
                 "Found %d eligible plans (of %d total) for recovery",
@@ -527,20 +537,58 @@ class PlanDBManager(CouchDBHandler):
 
     def get_plan_summary(self, doc_id: str) -> dict[str, Any] | None:
         """
-        Fetch minimal plan summary for display.
+        Fetch the display summary of the plan document stored under doc_id.
 
-        Returns key metadata without the full plan content.
-        Useful for displaying existing plan info during overwrite warnings.
+        Every stored document has a summary, readable or not: the shared
+        reader's view of it, read under doc_id, as
+        :func:`~yggdrasil.storage.plan_documents.plan_summary_from_document`
+        describes. A document the reader cannot use yields a summary whose
+        values are None and whose ``problems`` say why.
+
+        Reads the document directly rather than through
+        :meth:`fetch_document_by_id`, which reports a malformed response as a
+        missing document, while planning fills a slot it believes empty
+        without asking for ``--force``. So only CouchDB's 404 means no
+        document. Any body returned with a success status gets a summary,
+        whatever its shape: another document's body is reported as stored
+        under another ID, and a body that is not an object, JSON ``null``
+        included, as invalid.
 
         Args:
             doc_id: The plan document ID
 
         Returns:
-            dict with keys: status, execution_authority, execution_owner,
-                updated_at, realm, run_token, executed_run_token
-            or None if not found
+            dict[str, Any] | None: The summary; None only when CouchDB
+            reports that no document is stored under doc_id
+
+        Raises:
+            ApiException: If CouchDB answers the read with an error other
+                than 404; it is logged and re-raised unchanged.
+            Exception: Any other failure of the read, such as a
+                ``RequestException``, likewise logged and re-raised.
         """
-        doc = self.fetch_document_by_id(doc_id)
-        if not doc:
-            return None
-        return plan_summary_from_document(doc)
+        try:
+            document = self.server.get_document(
+                db=self.db_name,
+                doc_id=doc_id,
+            ).get_result()
+        except ApiException as exc:
+            if exc.status_code == 404:
+                self._logger.debug(
+                    "Plan '%s' not found in database '%s'", doc_id, self.db_name
+                )
+                return None
+            self._logger.error(
+                "Cloudant API error fetching '%s' from %s: %s %s",
+                doc_id,
+                self.db_name,
+                exc.status_code,
+                exc.message,
+            )
+            raise
+        except Exception as exc:
+            self._logger.error(
+                "Error while accessing database %s: %s", self.db_name, exc
+            )
+            raise
+        return plan_summary_from_document(document, plan_id=doc_id)

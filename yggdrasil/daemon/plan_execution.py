@@ -24,12 +24,14 @@ recorded":
    not going to run, such as a duplicate, gets no execution ID and leaves no
    trace in reporting.
 3. **Interpretation.** The report's termination reason decides whether the
-   request finished (see ``finishes_request`` in
-   ``yggdrasil/storage/plan_updates.py``); the type of any exception does not, since
-   a step body can raise any exception type itself. A request is consumed when
-   an attempt succeeds, when a ``continue_independent`` attempt drains with
-   failures, and when preflight rejects a ``continue_independent`` plan. Any
-   other ending leaves the token untouched, so the plan stays eligible.
+   request finished, by the rule of ``finishes_request`` in
+   ``yggdrasil.contract.read``, applied through its adapter for the ``flow``
+   enums in ``yggdrasil/storage/plan_updates.py``; the type of any exception
+   does not, since a step body can raise any exception type itself. A
+   request is consumed when an attempt succeeds, when a
+   ``continue_independent`` attempt drains with failures, and when preflight
+   rejects a ``continue_independent`` plan. Any other ending leaves the token
+   untouched, so the plan stays eligible.
 4. **Finalization.** A finished request is recorded through the plan store's
    generation-safe finalizer, with a bounded number of attempts.
 
@@ -95,6 +97,14 @@ Finalization retries:
     and retry nothing. A pending result does not survive a restart; the
     request is then still eligible, so it may run again, and realm
     idempotency remains the protection against repeated side effects.
+
+    The plan is read only when it is handed to the coordinator, and
+    PlanWatcher does not hand over a document outside the supported families:
+    eligibility checks the family first. So the drop above happens only for a
+    document that left the family after the watcher saw it, or one handed
+    over without a watcher. Otherwise the result stays pending until a later
+    change hands the plan over again, and that read settles it by the rules
+    above.
 """
 
 from __future__ import annotations
@@ -116,7 +126,14 @@ from yggdrasil.contract.controls import (
     token_pair,
 )
 from yggdrasil.contract.diagnostics import describe_recorded
-from yggdrasil.contract.versions import SUPPORTED, version_of
+from yggdrasil.contract.fields import EXECUTION_AUTHORITY_FIELD, EXECUTION_OWNER_FIELD
+from yggdrasil.contract.read import eligibility, generation_of
+from yggdrasil.contract.versions import (
+    SUPPORTED,
+    describe_schema_version,
+    version_of,
+    version_sentence,
+)
 from yggdrasil.core.engine import Engine
 from yggdrasil.daemon.worker_futures import outlast_cancellation
 from yggdrasil.flow.attempt import AttemptContext
@@ -125,17 +142,14 @@ from yggdrasil.flow.outcomes import AttemptReport, ExecutionOutcome, Termination
 from yggdrasil.logging_utils import custom_logger
 from yggdrasil.storage.errors import PlanStoreError
 from yggdrasil.storage.plan_documents import (
-    plan_generation_of,
     plan_model_from_document,
     validate_execution_authority,
 )
-from yggdrasil.storage.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     FinalizationResult,
     FinalizationStatus,
     check_finalization,
-    describe_schema_version,
     finishes_request,
 )
 from yggdrasil.storage.protocols import PlanStore
@@ -185,13 +199,13 @@ class ExecutionClaim:
             str | None: The reason the plan is not the caller's to execute, or
             None if it is. Never raises on stored content.
         """
-        authority = doc.get("execution_authority")
+        authority = doc.get(EXECUTION_AUTHORITY_FIELD)
         if authority != self.authority:
             return (
                 f"its execution authority is {describe_recorded(authority)}, "
                 f"not {self.authority!r}"
             )
-        owner = doc.get("execution_owner")
+        owner = doc.get(EXECUTION_OWNER_FIELD)
         if self.owner is not None and owner != self.owner:
             return (
                 f"its execution owner is {describe_recorded(owner)}, "
@@ -413,8 +427,9 @@ def _describe_attempt(report: AttemptReport) -> str:
 # Log level for each resolution; FINALIZED depends on the attempt's outcome.
 _LOG_LEVELS: dict[ExecutionStatus, int] = {
     ExecutionStatus.NOT_FOUND: logging.ERROR,
-    # Every pre-contract plan resolves this way until it is regenerated: an
-    # operator's task, not a malfunction.
+    # A plan cannot run while its stored schema_version is absent, invalid
+    # or unsupported. That is a document for an operator to change, not a
+    # malfunction.
     ExecutionStatus.UNSUPPORTED_DOCUMENT: logging.WARNING,
     ExecutionStatus.NOT_AUTHORIZED: logging.INFO,
     ExecutionStatus.NOT_ELIGIBLE: logging.INFO,
@@ -861,6 +876,16 @@ class PlanExecutionCoordinator:
         write into a document this process cannot interpret, so it is never
         recorded and never retried. Nothing is written either way.
 
+        Eligibility checks the family first, so PlanWatcher, through which
+        both the daemon and run-once hand plans over, refuses such a document
+        itself, with a warning, and never hands it over; so do the stores'
+        recovery listings. This gate is therefore reached by a document that
+        left the family after the watcher saw it, such as one read again
+        after an in-flight attempt, and by any caller that hands a plan over
+        without a watcher. A pending finalization of a plan the watcher
+        refuses stays pending until the plan is handed over again, and is
+        then settled as :meth:`_settle_pending` describes.
+
         Args:
             plan_doc_id: The plan document.
             doc: The document as just read, or None if there is none.
@@ -874,8 +899,6 @@ class PlanExecutionCoordinator:
         version = version_of(PLAN_DOCUMENT, doc)
         if version.state == SUPPORTED:
             return
-        recorded = describe_schema_version(version)
-        supported = sorted(SUPPORTED_FAMILIES[PLAN_DOCUMENT])
         pending = self._pending.pop(plan_doc_id, None)
         if pending is not None:
             self._logger.warning(
@@ -885,17 +908,17 @@ class PlanExecutionCoordinator:
                 "not retried; its report remains in the event spool",
                 pending.request.execution_id,
                 plan_doc_id,
-                recorded,
+                describe_schema_version(version),
                 version.state,
-                supported,
+                sorted(SUPPORTED_FAMILIES[PLAN_DOCUMENT]),
             )
         raise _CycleStopped(
             ExecutionResult(
                 plan_doc_id,
                 ExecutionStatus.UNSUPPORTED_DOCUMENT,
-                f"Plan '{plan_doc_id}' is not executed: its schema_version is "
-                f"{recorded}, so it is {version.state} (supported plan-document "
-                f"families: {supported}); nothing ran and nothing was written",
+                f"Plan '{plan_doc_id}' is not executed: "
+                f"{version_sentence(PLAN_DOCUMENT, version)}; nothing ran and "
+                "nothing was written",
             )
         )
 
@@ -991,11 +1014,12 @@ class PlanExecutionCoordinator:
                 ExecutionStatus.NOT_AUTHORIZED,
                 f"Plan '{plan_doc_id}' is not executed here: {refusal}",
             )
-        if not is_plan_eligible(doc):
+        decision = eligibility(doc)
+        if not decision.eligible:
             raise stop(
                 ExecutionStatus.NOT_ELIGIBLE,
                 f"Plan '{plan_doc_id}' is not eligible; skipping execution "
-                f"({get_eligibility_reason(doc)})",
+                f"({decision.reason})",
             )
         problems = (
             *execution_definition_problems(doc),
@@ -1026,7 +1050,7 @@ class PlanExecutionCoordinator:
                 f"{describe_recorded(plan.plan_id)}; cannot execute a plan stored "
                 "under another ID",
             )
-        generation = plan_generation_of(doc)
+        generation = generation_of(doc)
         if generation is None:
             raise stop(
                 ExecutionStatus.INVALID_DOCUMENT,
@@ -1042,8 +1066,8 @@ class PlanExecutionCoordinator:
             schema_version=family,
             plan_generation=generation,
             run_token=run_token,
-            execution_authority=str(doc["execution_authority"]),
-            execution_owner=doc.get("execution_owner"),
+            execution_authority=str(doc[EXECUTION_AUTHORITY_FIELD]),
+            execution_owner=doc.get(EXECUTION_OWNER_FIELD),
         )
 
     async def _execute(

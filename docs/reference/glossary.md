@@ -73,7 +73,7 @@ Manages backend watcher instances. Resolves `WatchSpec.connection` to a concrete
 Central orchestrator (singleton). Discovers realms via `ygg.realm` entry points, manages handler subscriptions, dispatches `YggdrasilEvent` objects, persists `PlanDraft` outputs to `yggdrasil_plans`, and runs the main async event loop.
 
 ### PlanWatcher
-Watches `yggdrasil_plans`. When a plan transitions to `status="approved"` with an unexecuted run token, hands it to the execution coordinator, which runs it through the Engine and records the result.
+Watches `yggdrasil_plans` and emits an execution event for each change that leaves a plan [eligible](plan_execution.md#the-plan-document), within its scope: plans of `daemon` authority in the daemon, and the session's own plans in run-once.
 
 ---
 

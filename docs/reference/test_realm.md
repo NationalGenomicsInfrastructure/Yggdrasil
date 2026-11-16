@@ -941,7 +941,7 @@ Once retry logic is implemented, use **fail_fast** or **fail_mid_plan** scenario
 
 1. Insert a failing scenario
 2. Observe plan fails (executed_run_token NOT updated)
-3. Verify plan remains eligible: `is_plan_eligible(plan_doc) == True`
+3. Verify plan remains eligible: `is_eligible(plan_doc) == True`, with `is_eligible` from `yggdrasil.contract.read`
 4. Trigger retry (manual re-approval or automatic)
 5. Observe re-execution
 

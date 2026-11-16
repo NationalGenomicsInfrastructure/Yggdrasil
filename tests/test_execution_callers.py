@@ -49,13 +49,13 @@ from tests.execution_support import (
     run_bounded,
     spec,
 )
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.daemon.core import YggdrasilCore
 from yggdrasil.daemon.plan_execution import ExecutionStatus, PlanExecutionCoordinator
 from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, Plan
 from yggdrasil.flow.planner.api import PlanDraft
 from yggdrasil.storage.errors import PlanStoreError
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.protocols import InternalStorageBundle
 from yggdrasil.storage.sqlite import (
     SQLiteCheckpointStore,
@@ -198,7 +198,7 @@ class CallerTestCase(unittest.TestCase):
         doc = self.stored(plan_id)
         self.assertEqual(doc["executed_run_token"], -1)
         self.assertNotIn("last_finalized_execution", doc)
-        self.assertTrue(is_plan_eligible(doc))
+        self.assertTrue(is_eligible(doc))
 
     def assert_unconsumed_draft(self, plan_id: str) -> None:
         doc = self.stored(plan_id)

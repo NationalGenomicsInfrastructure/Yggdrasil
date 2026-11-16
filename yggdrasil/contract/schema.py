@@ -15,6 +15,11 @@ problem. The plan document's top level also allows fields whose names start
 with ``x_``, which the contract never defines. Realm-defined payloads, and
 values a snapshot copies from what a step published, are open.
 
+Problems are reported as :class:`~yggdrasil.contract.problems.ContractProblem`
+records with the codes of :mod:`yggdrasil.contract.problems`. This module
+re-exports the record and the codes validation reports, so they stay
+importable from here, and keeps :class:`ContractError`.
+
 :func:`validate` is a development and test tool: no runtime path calls it,
 and readers never use it as a gate. It needs the ``jsonschema`` package from
 the ``dev`` extra, which it imports only when called; importing this module
@@ -44,43 +49,30 @@ from yggdrasil.contract import (
     SUPPORTED_FAMILIES,
     versions,
 )
-from yggdrasil.contract.controls import (
-    EXECUTED_RUN_TOKEN_FIELD,
-    RUN_TOKEN_FIELD,
-    token_pair,
-)
+from yggdrasil.contract.controls import token_pair
 from yggdrasil.contract.diagnostics import describe_recorded
+from yggdrasil.contract.fields import EXECUTED_RUN_TOKEN_FIELD, RUN_TOKEN_FIELD
+from yggdrasil.contract.problems import (
+    BAD_TIMESTAMP,
+    INVALID_TOKENS,
+    INVALID_VERSION,
+    MISSING_FIELD,
+    NOT_IN_VOCABULARY,
+    OUT_OF_RANGE,
+    SCHEMA_RULE,
+    UNEXPECTED_FIELD,
+    UNSUPPORTED_VERSION,
+    UNVERSIONED,
+    VALIDATION_CODES,
+    WRONG_TYPE,
+    ContractProblem,
+    path_text,
+)
 from yggdrasil.contract.timestamps import is_date_time
 
-# Problem codes. They are stable, so a test or a fixture can name the reason
-# it expects a document to be rejected for.
-UNVERSIONED = "unversioned"
-INVALID_VERSION = "invalid_version"
-UNSUPPORTED_VERSION = "unsupported_version"
-MISSING_FIELD = "missing_field"
-UNEXPECTED_FIELD = "unexpected_field"
-WRONG_TYPE = "wrong_type"
-NOT_IN_VOCABULARY = "not_in_vocabulary"
-OUT_OF_RANGE = "out_of_range"
-BAD_TIMESTAMP = "bad_timestamp"
-INVALID_TOKENS = "invalid_tokens"
-SCHEMA_RULE = "schema"  # any other rule of the schema
-
-PROBLEM_CODES = frozenset(
-    {
-        UNVERSIONED,
-        INVALID_VERSION,
-        UNSUPPORTED_VERSION,
-        MISSING_FIELD,
-        UNEXPECTED_FIELD,
-        WRONG_TYPE,
-        NOT_IN_VOCABULARY,
-        OUT_OF_RANGE,
-        BAD_TIMESTAMP,
-        INVALID_TOKENS,
-        SCHEMA_RULE,
-    }
-)
+# The codes validation reports. The code constants imported above keep the
+# names they always had here; ``problems`` defines them.
+PROBLEM_CODES = VALIDATION_CODES
 
 # The bundled resource of each kind and family.
 _RESOURCES: Mapping[tuple[str, int], str] = {
@@ -99,9 +91,6 @@ _VERSION_CODES = {
     versions.UNSUPPORTED: UNSUPPORTED_VERSION,
 }
 
-# Object keys that a path can show after a dot; any other key is quoted.
-_PLAIN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
 # How each JSON type is named in a problem description.
 _TYPE_NAMES = {
     "null": "null",
@@ -112,24 +101,6 @@ _TYPE_NAMES = {
     "array": "an array",
     "object": "an object",
 }
-
-
-@dataclass(frozen=True)
-class ContractProblem:
-    """One way a document fails its contract schema.
-
-    Attributes:
-        path: Where in the document, such as ``plan.steps[0].deps``; empty for
-            the document itself. A key that is not a plain name is quoted:
-            ``steps["lane_1/demux"].state``.
-        code: Why: one of PROBLEM_CODES.
-        message: A description naming the path and, where it helps, the
-            recorded value, shortened.
-    """
-
-    path: str
-    code: str
-    message: str
 
 
 class ContractError(Exception):
@@ -317,7 +288,10 @@ def _validator(name: str) -> Any:
     ``1.0``, and Python counts ``True`` as an int. ``date-time`` is the one
     format checked, and is checked explicitly, by
     :func:`~yggdrasil.contract.timestamps.is_date_time`: whether the date and
-    time exist. The canonical spelling is each timestamp's ``pattern``.
+    time exist. The canonical spelling, to the whole second or with a fraction
+    of one to six digits, is each timestamp's ``pattern``, which a plain
+    validator applies too. The pattern ends with ``(?![\\s\\S])`` rather than
+    ``$``, so even a validator using Python's ``re`` refuses a final newline.
 
     Args:
         name: The resource's file name in ``schemas/``.
@@ -452,8 +426,9 @@ def _problems_of(error: Any) -> list[_Problem]:
         detail = (
             "is not a date and time that exists"
             if keyword == "format"
-            else "is not a timestamp spelled canonically: whole seconds, in "
-            "UTC, ending in Z, as in 2026-10-22T10:00:00Z"
+            else "is not a timestamp spelled canonically: in UTC, ending in Z, to "
+            "the whole second or with a fraction of 1 to 6 digits not ending in "
+            "0, as in 2026-10-22T10:00:00Z or 2026-10-22T10:00:00.25Z"
         )
         return [_Problem(path, BAD_TIMESTAMP, detail, value)]
     if keyword == "pattern":
@@ -624,30 +599,11 @@ def _reported(problems: Iterable[_Problem]) -> list[ContractProblem]:
 
 def _published(problem: _Problem) -> ContractProblem:
     """Return the public form of a problem, with its message."""
-    path = _path_text(problem.path)
+    path = path_text(problem.path)
     subject = path or "the document"
     if problem.value is not _UNSHOWN:
         subject = f"{subject} {describe_recorded(problem.value)}"
     return ContractProblem(path, problem.code, f"{subject} {problem.detail}")
-
-
-def _path_text(path: Iterable[str | int]) -> str:
-    """Render a path such as ``plan.steps[0].deps`` or ``steps["a/b"].state``.
-
-    A key that is not text, which no JSON object has, is shown as Python
-    renders it.
-    """
-    text = ""
-    for part in path:
-        if isinstance(part, int):
-            text += f"[{part}]"
-        elif not isinstance(part, str):
-            text += f"[{describe_recorded(part)}]"
-        elif _PLAIN_KEY.fullmatch(part):
-            text += f".{part}" if text else part
-        else:
-            text += f"[{json.dumps(part)}]"
-    return text
 
 
 def _path_order(path: Iterable[str | int]) -> tuple[tuple[int, str | int], ...]:

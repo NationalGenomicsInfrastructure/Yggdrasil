@@ -31,9 +31,10 @@ from tests.plan_store_support import (
     finished_attempt,
     make_plan,
 )
-from yggdrasil.contract import PLAN_DOCUMENT
+from yggdrasil.contract import PLAN_DOCUMENT, read
 from yggdrasil.contract.controls import MAX_TOKEN, token_pair
 from yggdrasil.contract.diagnostics import describe_recorded
+from yggdrasil.contract.read import generation_of
 from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.contract.versions import SUPPORTED, version_of
 from yggdrasil.flow.model import CONTINUE_INDEPENDENT_POLICY, FAIL_FAST_POLICY
@@ -46,7 +47,6 @@ from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
 from yggdrasil.storage.plan_documents import (
     build_plan_document,
     new_plan_generation,
-    plan_generation_of,
     plan_summary_from_document,
 )
 from yggdrasil.storage.plan_updates import (
@@ -54,6 +54,7 @@ from yggdrasil.storage.plan_updates import (
     FinalizationResult,
     FinalizationStatus,
     SupersessionReason,
+    build_finalized_document,
     check_finalization,
     finalize_execution,
     finishes_request,
@@ -97,11 +98,11 @@ class TestPlanGeneration(ConformingBuilders):
         self.assertTrue(all(isinstance(g, str) and g for g in generations))
 
     def test_only_a_non_empty_string_counts_as_a_generation(self):
-        self.assertEqual(plan_generation_of({"plan_generation": "g1"}), "g1")
+        self.assertEqual(generation_of({"plan_generation": "g1"}), "g1")
         for value in (None, "", 0, 7, ["g1"]):
             with self.subTest(value=value):
-                self.assertIsNone(plan_generation_of({"plan_generation": value}))
-        self.assertIsNone(plan_generation_of({}))
+                self.assertIsNone(generation_of({"plan_generation": value}))
+        self.assertIsNone(generation_of({}))
 
     def test_every_built_document_gets_a_fresh_generation(self):
         first = build_plan_document(make_plan(), "test_realm", dict(SCOPE))
@@ -145,15 +146,29 @@ class TestPlanGeneration(ConformingBuilders):
                 self.assertEqual(regenerated["schema_version"], 1)
 
     def test_summary_reports_generation_and_last_outcome_separately(self):
-        doc = _document(last_finalized_execution={"outcome": "failed"})
-        summary = plan_summary_from_document(doc)
+        planned = build_plan_document(
+            continuation_plan(),
+            "test_realm",
+            dict(SCOPE),
+            auto_run=True,
+            plan_generation="g1",
+        )
+        doc = build_finalized_document(
+            planned,
+            finalization_for(planned, ending=DRAINED_FAILURE),
+            now="2026-01-01T01:00:00Z",
+        )
+        summary = plan_summary_from_document(doc, plan_id=doc["_id"])
         self.assertEqual(summary["status"], "approved")
         self.assertEqual(summary["plan_generation"], "g1")
         self.assertEqual(summary["last_finalized_outcome"], "failed")
 
-        legacy = plan_summary_from_document({"_id": "p"})
+        legacy = plan_summary_from_document({"_id": "p"}, plan_id="p")
         self.assertIsNone(legacy["plan_generation"])
         self.assertIsNone(legacy["last_finalized_outcome"])
+        self.assertEqual(
+            [problem.code for problem in legacy["problems"]], ["unversioned"]
+        )
 
 
 class TestBuiltDocumentContract(ConformingBuilders):
@@ -212,6 +227,20 @@ class TestFinishesRequest(ConformingBuilders):
             with self.subTest(combination=combination):
                 self.assertEqual(
                     finishes_request(*combination), combination in finishing
+                )
+
+    def test_the_adapter_answers_as_the_shared_rule_on_every_enum_input(self):
+        """The enum signature only converts: the shared rule gives the answer."""
+        policies = (FAIL_FAST_POLICY, CONTINUE_INDEPENDENT_POLICY, "retry_forever", "")
+        for outcome, reason, policy in itertools.product(
+            ExecutionOutcome, TerminationReason, policies
+        ):
+            with self.subTest(
+                outcome=outcome.value, reason=reason.value, policy=policy
+            ):
+                self.assertIs(
+                    finishes_request(outcome, reason, policy),
+                    read.finishes_request(outcome.value, reason.value, policy),
                 )
 
 

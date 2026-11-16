@@ -1,0 +1,102 @@
+{
+  "_id": "pln_cycle",
+  "_rev": "2-corpus",
+  "created_at": "2026-10-22T09:00:00Z",
+  "executed_run_token": 0,
+  "execution_authority": "daemon",
+  "execution_owner": null,
+  "last_executed_at": "2026-10-22T10:00:00Z",
+  "last_finalized_execution": {
+    "execution_id": "20261022T100000000000Z_0001",
+    "failure_policy": "continue_independent",
+    "finalized_at": "2026-10-22T10:00:00Z",
+    "outcome": "failed",
+    "plan_generation": "0d79a621004032a76ab4cbe2ed05d911",
+    "plan_id": "pln_cycle",
+    "report": {
+      "counts": {
+        "blocked": 0,
+        "failed": 0,
+        "reused": 0,
+        "succeeded": 0,
+        "unreached": 2
+      },
+      "diagnostic": {
+        "details": {},
+        "error_type": "PreflightValidationError",
+        "message": "Dependency cycle in plan 'pln_cycle': demux -> qc -> demux. No step in a cycle can ever become runnable."
+      },
+      "direct_blockers": {},
+      "ended_at": "2026-10-22T10:00:00Z",
+      "execution_id": "20261022T100000000000Z_0001",
+      "failed_ancestors": {},
+      "failure_policy": "continue_independent",
+      "failures": {},
+      "is_drained": false,
+      "outcome": "failed",
+      "plan_generation": "0d79a621004032a76ab4cbe2ed05d911",
+      "plan_id": "pln_cycle",
+      "publication_failure": null,
+      "run_token": 0,
+      "started_at": "2026-10-22T10:00:00Z",
+      "step_ids": [
+        "demux",
+        "qc"
+      ],
+      "step_outcomes": {},
+      "termination_reason": "preflight_rejected",
+      "unreached_step_ids": [
+        "demux",
+        "qc"
+      ]
+    },
+    "run_token": 0,
+    "termination_reason": "preflight_rejected"
+  },
+  "plan": {
+    "failure_policy": "continue_independent",
+    "plan_id": "pln_cycle",
+    "realm": "test_realm",
+    "scope": {
+      "id": "P1",
+      "kind": "project"
+    },
+    "steps": [
+      {
+        "deps": [
+          "qc"
+        ],
+        "fn_ref": "tests.execution:scripted",
+        "inputs": {},
+        "name": "demux",
+        "outputs": {},
+        "params": {},
+        "scope": {},
+        "step_id": "demux"
+      },
+      {
+        "deps": [
+          "demux"
+        ],
+        "fn_ref": "tests.execution:scripted",
+        "inputs": {},
+        "name": "qc",
+        "outputs": {},
+        "params": {},
+        "scope": {},
+        "step_id": "qc"
+      }
+    ]
+  },
+  "plan_generation": "0d79a621004032a76ab4cbe2ed05d911",
+  "preview": {},
+  "realm": "test_realm",
+  "run_token": 0,
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "status": "approved",
+  "updated_at": "2026-10-22T10:00:00Z"
+}

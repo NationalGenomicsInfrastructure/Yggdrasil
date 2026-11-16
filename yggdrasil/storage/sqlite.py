@@ -51,6 +51,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from yggdrasil.contract.read import UNSUPPORTED_DOCUMENT, eligibility
 from yggdrasil.errors import InternalStorageConfigurationError
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
@@ -64,8 +65,8 @@ from yggdrasil.storage.plan_documents import (
     plan_model_from_document,
     plan_summary_from_document,
     validate_execution_authority,
+    warn_unsupported_omission,
 )
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     FinalizationResult,
@@ -853,9 +854,26 @@ class SQLitePlanStore:
             raise _plan_store_error(doc_id, "write", exc) from exc
 
     def query_approved_pending(self) -> list[dict[str, Any]]:
-        """Return all plans eligible for execution (recovery)."""
+        """Return all plans eligible for execution (recovery).
+
+        Each document is judged by the shared reader's eligibility decision
+        (``yggdrasil.contract.read.eligibility``). A plan whose
+        ``schema_version`` is absent, invalid or names an unsupported family
+        is left out with one WARNING, naming it by the ``_id`` its body
+        records, since the listing holds the bodies only; every other
+        ineligible plan is left out silently.
+
+        Returns:
+            list[dict[str, Any]]: The eligible plan documents, with ``_rev``.
+        """
         docs = self._store.list_documents(_NS_PLANS)
-        eligible = [doc for doc in docs if is_plan_eligible(doc)]
+        eligible: list[dict[str, Any]] = []
+        for doc in docs:
+            decision = eligibility(doc)
+            if decision.eligible:
+                eligible.append(doc)
+            elif decision.code == UNSUPPORTED_DOCUMENT:
+                warn_unsupported_omission(self._logger, doc.get("_id"), doc)
         self._logger.info(
             "Found %d eligible plans (of %d total) for recovery",
             len(eligible),
@@ -877,11 +895,27 @@ class SQLitePlanStore:
         return self._store.get_document(_NS_PLANS, doc_id) is not None
 
     def get_plan_summary(self, doc_id: str) -> dict[str, Any] | None:
-        """Return the minimal display summary, or None."""
+        """Return the display summary of the plan document stored under doc_id.
+
+        Every live document has a summary, readable or not: the shared
+        reader's view of it, read under doc_id, as
+        :func:`~yggdrasil.storage.plan_documents.plan_summary_from_document`
+        describes. A document the reader cannot use yields a summary whose
+        values are None and whose ``problems`` say why, so it is never
+        mistaken for an empty slot.
+
+        Args:
+            doc_id: The plan document ID.
+
+        Returns:
+            dict[str, Any] | None: The summary; None only when no live
+            document is stored under doc_id (none was written, or it was
+            deleted).
+        """
         doc = self._store.get_document(_NS_PLANS, doc_id)
-        if not doc:
+        if doc is None:
             return None
-        return plan_summary_from_document(doc)
+        return plan_summary_from_document(doc, plan_id=doc_id)
 
 
 class SQLitePlanChangeSource:

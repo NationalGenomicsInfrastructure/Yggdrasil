@@ -51,6 +51,7 @@ from tests.execution_support import (
     run_bounded,
     spec,
 )
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.core.execution_ids import ExecutionIdAllocator, execution_timestamp
 from yggdrasil.daemon.plan_execution import (
     DAEMON_CLAIM,
@@ -84,7 +85,6 @@ from yggdrasil.flow.outcomes import (
 from yggdrasil.ops.consumer import build_plan_snapshot
 from yggdrasil.storage.errors import PlanStoreError
 from yggdrasil.storage.plan_documents import build_plan_document
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
@@ -121,7 +121,7 @@ class ConsumptionScenarios:
                     result.finalization.status, FinalizationStatus.COMMITTED
                 )
                 self.assert_recorded(result)
-                self.assertFalse(is_plan_eligible(self.stored(plan_id)))
+                self.assertFalse(is_eligible(self.stored(plan_id)))
 
     def test_fail_fast_failure_leaves_the_request_eligible(self):
         self.steps.fail("a", RuntimeError("boom"))
@@ -136,7 +136,7 @@ class ConsumptionScenarios:
         self.assertEqual(self.steps.calls, ["a"])
         self.assertEqual(self.store.calls["finalize"], 0)
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_fail_fast_preflight_rejection_leaves_the_request_eligible(self):
         self.save(cyclic_plan(FAIL_FAST))
@@ -149,7 +149,7 @@ class ConsumptionScenarios:
         )
         self.assertEqual(self.steps.calls, [])
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_drained_continuation_failure_consumes_the_request(self):
         # Lane 1 fails and its upload is blocked; lane 2 still completes.
@@ -174,7 +174,7 @@ class ConsumptionScenarios:
         )
         self.assert_recorded(result)
         self.assertEqual(self.stored()["last_finalized_execution"]["outcome"], "failed")
-        self.assertFalse(is_plan_eligible(self.stored()))
+        self.assertFalse(is_eligible(self.stored()))
 
     def test_continuation_preflight_rejection_consumes_the_request(self):
         self.save(cyclic_plan(CONTINUE))
@@ -188,7 +188,7 @@ class ConsumptionScenarios:
         self.assertIn("cycle", result.report.diagnostic.message)
         self.assertEqual(self.steps.calls, [])
         self.assert_recorded(result)
-        self.assertFalse(is_plan_eligible(self.stored()))
+        self.assertFalse(is_eligible(self.stored()))
 
     def test_step_ids_that_are_not_strings_are_rejected_and_recorded(self):
         # A stored document can carry anything as a step ID, and reading the
@@ -227,7 +227,7 @@ class ConsumptionScenarios:
                 if policy == CONTINUE:
                     self.assertEqual(result.status, ExecutionStatus.FINALIZED)
                     self.assert_recorded(result)
-                    self.assertFalse(is_plan_eligible(self.stored(plan_id)))
+                    self.assertFalse(is_eligible(self.stored(plan_id)))
                 else:
                     self.assertEqual(result.status, ExecutionStatus.UNFINISHED)
                     self.assert_unconsumed(plan_id)
@@ -353,7 +353,7 @@ class TestAdmission(ExecutionTestCase):
             with self.subTest(doc_id=doc["_id"]):
                 result = self.execute(doc["_id"])
                 self.assertEqual(result.status, ExecutionStatus.INVALID_DOCUMENT)
-                self.assertTrue(is_plan_eligible(self.stored(doc["_id"])))
+                self.assertTrue(is_eligible(self.stored(doc["_id"])))
         self.assertEqual(self.engine.contexts, [])
 
     def test_failed_admission_read_leaves_the_plan_eligible(self):
@@ -556,7 +556,7 @@ class TestCancellation(ExecutionTestCase):
                 self.assertEqual(context.report.unreached_step_ids, ["b"])
                 self.assertFalse(self.coordinator.is_in_flight(plan_id))
                 self.assert_unconsumed(plan_id)
-                self.assertTrue(is_plan_eligible(self.stored(plan_id)))
+                self.assertTrue(is_eligible(self.stored(plan_id)))
         self.assertEqual(self.store.calls["finalize"], 0)
 
     def test_shutdown_cancelling_the_coordination_waits_for_the_worker(self):
@@ -799,7 +799,7 @@ class TestFinalizationRetries(ExecutionTestCase):
         self.assertIsNone(self.coordinator.pending_finalization(PLAN_ID))
         # The regenerated plan is a new request, still waiting to run.
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_non_retryable_failure_is_not_retried(self):
         self.save()
@@ -826,7 +826,7 @@ class TestFinalizationRetries(ExecutionTestCase):
         self.assertFalse(self.coordinator.is_in_flight(PLAN_ID))
         # Still eligible in storage, yet a duplicate request neither runs the
         # plan nor starts another retry cycle.
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
         duplicate = self.execute()
 
@@ -1464,7 +1464,7 @@ class UnusableNameScenarios:
             with self.subTest(still_eligible=plan_id):
                 self.assertEqual(self.stored(plan_id), document)
                 self.assertEqual(document["executed_run_token"], -1)
-                self.assertTrue(is_plan_eligible(document))
+                self.assertTrue(is_eligible(document))
 
 
 class TestUnusableNamesSQLite(UnusableNameScenarios, ExecutionTestCase):

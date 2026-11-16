@@ -44,6 +44,7 @@ import yggdrasil.ops.consumer
 import yggdrasil.storage.couchdb.plan_store
 import yggdrasil.storage.sqlite
 from tests.execution_support import REALM, WAIT, Gate, make_plan, spec
+from tests.plan_store_support import ABSENT
 from yggdrasil.contract import ATTEMPT_REPORT, PLAN_DOCUMENT, PLAN_STATUS
 from yggdrasil.contract.schema import ContractError, validate
 from yggdrasil.core.engine import Engine
@@ -63,9 +64,6 @@ from yggdrasil.ops.snapshot import (
     snapshot_document,
 )
 from yggdrasil.storage.partitions import partition_key
-
-# Stands for a field removed from a document; see changed().
-ABSENT = object()
 
 # The envelope of a snapshot made from a projection alone.
 PROJECTION_REALM = "test_realm"

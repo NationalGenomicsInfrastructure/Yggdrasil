@@ -137,7 +137,13 @@ class PlanStore(Protocol):
         ...
 
     def query_approved_pending(self) -> list[dict[str, Any]]:
-        """Return all plans eligible for a full recovery scan."""
+        """Return all plans eligible for a full recovery scan.
+
+        Eligibility is the shared reader's decision
+        (``yggdrasil.contract.read.eligibility``). A plan of an unsupported
+        family, or with no or an invalid ``schema_version``, is left out with
+        a WARNING; every other ineligible plan is left out silently.
+        """
         ...
 
     def delete_plan(self, doc_id: str) -> bool:
@@ -149,7 +155,32 @@ class PlanStore(Protocol):
         ...
 
     def get_plan_summary(self, doc_id: str) -> dict[str, Any] | None:
-        """Return a minimal display summary of the plan, or None."""
+        """Return the display summary of the plan document stored under doc_id.
+
+        The summary is the shared reader's view of the document, read under
+        doc_id, with no display defaults
+        (:func:`~yggdrasil.storage.plan_documents.plan_summary_from_document`).
+        Its keys are ``status``, ``execution_authority``,
+        ``execution_owner``, ``updated_at``, ``realm``, ``run_token``,
+        ``executed_run_token``, ``plan_generation`` and
+        ``last_finalized_outcome``, each None when the reader does not
+        recognise it; ``unrecognised_status`` and
+        ``unrecognised_execution_authority``, the recorded text of a status
+        or authority that is text but not a word the reader knows, else None;
+        and ``problems``, the reader's problems as a tuple of
+        ``ContractProblem``. Every stored document has a summary, readable or
+        not: one the reader cannot use, including one stored under another
+        ID or a malformed response to the read, has every value None and
+        problems that say why.
+
+        Args:
+            doc_id: The plan document ID.
+
+        Returns:
+            dict[str, Any] | None: The summary; None only when the store has
+            no document under doc_id. Planning takes None for an empty slot,
+            which it fills without asking for ``--force``.
+        """
         ...
 
 

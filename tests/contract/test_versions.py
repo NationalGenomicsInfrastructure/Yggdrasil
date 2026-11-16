@@ -15,8 +15,10 @@ from yggdrasil.contract.versions import (
     SUPPORTED,
     UNSUPPORTED,
     UNVERSIONED,
+    describe_schema_version,
     supports,
     version_of,
+    version_sentence,
 )
 
 KINDS = (PLAN_DOCUMENT, PLAN_STATUS)
@@ -116,6 +118,67 @@ class TestVersionOf(unittest.TestCase):
                     version_of(kind, {"schema_version": 1})
                 with self.assertRaises(ValueError):
                     supports(kind, {"schema_version": 1})
+
+
+class TestDescribingAVersion(unittest.TestCase):
+    """One description of a recorded ``schema_version``, for every diagnostic."""
+
+    def test_the_recorded_value_or_absent(self):
+        cases = (
+            ({}, "absent"),
+            ({"schema_version": 2}, "2"),
+            ({"schema_version": "1"}, "'1'"),
+            ({"schema_version": None}, "None"),
+            ({"schema_version": 1.0}, "1.0"),
+            ({"schema_version": 10**5000}, "<unrepresentable int>"),
+        )
+        for document, expected in cases:
+            with self.subTest(expected=expected):
+                version = version_of(PLAN_DOCUMENT, document)
+                self.assertEqual(describe_schema_version(version), expected)
+
+    def test_a_long_recorded_value_is_bounded(self):
+        version = version_of(PLAN_DOCUMENT, {"schema_version": "x" * 10_000})
+        self.assertLessEqual(len(describe_schema_version(version)), 200)
+
+    def test_the_sentence_names_the_value_the_state_and_the_families(self):
+        cases = (
+            (
+                PLAN_DOCUMENT,
+                {},
+                "its schema_version is absent, so it is unversioned "
+                "(supported plan-document families: [1])",
+            ),
+            (
+                PLAN_DOCUMENT,
+                {"schema_version": "1"},
+                "its schema_version is '1', so it is invalid "
+                "(supported plan-document families: [1])",
+            ),
+            (
+                PLAN_DOCUMENT,
+                {"schema_version": 2},
+                "its schema_version is 2, so it is unsupported "
+                "(supported plan-document families: [1])",
+            ),
+            (
+                PLAN_STATUS,
+                {"schema_version": 2},
+                "its schema_version is 2, so it is unsupported "
+                "(supported plan-status families: [1])",
+            ),
+        )
+        for kind, document, expected in cases:
+            with self.subTest(kind=kind, expected=expected):
+                version = version_of(kind, document)
+                self.assertEqual(version_sentence(kind, version), expected)
+
+    def test_the_sentence_needs_a_kind_with_a_marker(self):
+        version = version_of(PLAN_DOCUMENT, {})
+        for kind in (ATTEMPT_REPORT, "plan", ""):
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError):
+                    version_sentence(kind, version)
 
 
 if __name__ == "__main__":

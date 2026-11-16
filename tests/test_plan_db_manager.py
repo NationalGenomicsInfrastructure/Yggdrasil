@@ -26,6 +26,7 @@ from requests.exceptions import (
     TooManyRedirects,
 )
 
+from tests.plan_store_support import ABSENT, supported_plan_document
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.outcomes import StepOutcome, TerminationReason
@@ -325,28 +326,28 @@ class TestPlanDBManager(unittest.TestCase):
         all_docs_result = {
             "rows": [
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P1_v1",
-                        "status": "approved",
-                        "run_token": 0,
-                        "executed_run_token": -1,
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P1_v1",
+                        status="approved",
+                        run_token=0,
+                        executed_run_token=-1,
+                    )
                 },
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P2_v1",
-                        "status": "draft",
-                        "run_token": 0,
-                        "executed_run_token": -1,
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P2_v1",
+                        status="draft",
+                        run_token=0,
+                        executed_run_token=-1,
+                    )
                 },
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P3_v1",
-                        "status": "approved",
-                        "run_token": 0,
-                        "executed_run_token": 0,  # already executed
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P3_v1",
+                        status="approved",
+                        run_token=0,
+                        executed_run_token=0,  # already executed
+                    )
                 },
             ]
         }
@@ -365,12 +366,12 @@ class TestPlanDBManager(unittest.TestCase):
             "rows": [
                 {"doc": {"_id": "_design/views", "views": {}}},
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P1_v1",
-                        "status": "approved",
-                        "run_token": 0,
-                        "executed_run_token": -1,
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P1_v1",
+                        status="approved",
+                        run_token=0,
+                        executed_run_token=-1,
+                    )
                 },
             ]
         }
@@ -562,19 +563,20 @@ class TestPlanDBManager(unittest.TestCase):
 
     def test_get_plan_summary_returns_expected_fields(self):
         """Test get_plan_summary returns correct subset of fields."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "_rev": "2-xyz",
-            "status": "approved",
-            "execution_authority": "run_once",
-            "execution_owner": "run_once:test-uuid",
-            "updated_at": "2025-01-15T10:30:00Z",
-            "realm": "tenx",
-            "run_token": 1,
-            "executed_run_token": 0,
-            "plan": {"large": "data", "not": "included"},
-        }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
+        existing_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            _rev="2-xyz",
+            status="approved",
+            execution_authority="run_once",
+            execution_owner="run_once:test-uuid",
+            updated_at="2025-01-15T10:30:00Z",
+            realm="tenx",
+            run_token=1,
+            executed_run_token=0,
+        )
+        self.manager.server.get_document.return_value.get_result.return_value = (
+            existing_doc
+        )
 
         result = self.manager.get_plan_summary("pln_tenx_P12345_v1")
 
@@ -586,34 +588,47 @@ class TestPlanDBManager(unittest.TestCase):
         self.assertEqual(result["realm"], "tenx")
         self.assertEqual(result["run_token"], 1)
         self.assertEqual(result["executed_run_token"], 0)
+        self.assertEqual(result["problems"], ())
         # Should NOT include full plan data
         self.assertNotIn("plan", result)
         self.assertNotIn("_rev", result)
 
+    @patch("yggdrasil.storage.couchdb.plan_store.ApiException", MockApiException)
     def test_get_plan_summary_returns_none_for_missing(self):
         """Test get_plan_summary returns None for non-existent plan."""
-        self.manager.fetch_document_by_id = Mock(return_value=None)
+        self.manager.server.get_document.side_effect = MockApiException(404)
 
         result = self.manager.get_plan_summary("pln_nonexistent_v1")
 
         self.assertIsNone(result)
 
-    def test_get_plan_summary_handles_missing_fields(self):
-        """Test get_plan_summary provides defaults for missing fields."""
-        existing_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            # Missing: execution_authority, execution_owner, etc.
-        }
-        self.manager.fetch_document_by_id = Mock(return_value=existing_doc)
+    def test_get_plan_summary_has_no_defaults_for_missing_fields(self):
+        """Missing fields are None, never a display default, and each is named."""
+        absent = (
+            "status",
+            "execution_authority",
+            "execution_owner",
+            "updated_at",
+            "realm",
+            "run_token",
+            "executed_run_token",
+        )
+        existing_doc = supported_plan_document(
+            "pln_tenx_P12345_v1", **dict.fromkeys(absent, ABSENT)
+        )
+        self.manager.server.get_document.return_value.get_result.return_value = (
+            existing_doc
+        )
 
         result = self.manager.get_plan_summary("pln_tenx_P12345_v1")
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["status"], "unknown")
-        self.assertEqual(result["execution_authority"], "daemon")  # default
-        self.assertIsNone(result["execution_owner"])  # default
-        self.assertEqual(result["run_token"], 0)
-        self.assertEqual(result["executed_run_token"], -1)
+        for field in absent:
+            with self.subTest(field=field):
+                self.assertIsNone(result[field])
+        self.assertEqual(
+            sorted(problem.path for problem in result["problems"]), sorted(absent)
+        )
 
     # ==========================================
     # Plan generation, conflicts and finalization

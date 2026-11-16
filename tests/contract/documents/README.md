@@ -67,8 +67,8 @@ Negative examples stay in `current/` only. A released entry may name a
 `derived_from` file or a `sequence` whose other steps were not released:
 those fields describe `current/` and are not checked in a released edition.
 
-`released/` does not exist until the first baseline is prepared, while
-preparing the first release with the contract.
+The first baseline is `released/v0.6.0/`, prepared for the first release
+with the contract. Earlier releases have none.
 
 ## Releasing a baseline
 
