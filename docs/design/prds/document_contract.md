@@ -806,7 +806,12 @@ were decided and built. The rule in effect is:
   with the timezone-aware ISO 8601 forms that Python 3.11's
   `datetime.fromisoformat` reads, numeric offsets converted to UTC. At most
   six fractional digits are read, never truncated, and a fraction is read
-  only after `.` or `,`. No timezone is guessed.
+  only after `.` or `,`. No timezone is guessed. A few forms that Python
+  reads are unknown all the same: text containing a NUL, digits after the
+  seconds of the time or of the offset that neither `.` nor `,` introduces,
+  and a colon or a digit between the date and the time, which looks like
+  them. The maintained reference page, `docs/reference/document_contract.md`,
+  lists these exceptions with the other unknown forms under "Timestamps".
 
 Producer conformance and reader interpretation stay distinct: a reader
 reads values that no producer may write, and a canonical spelling is not a
