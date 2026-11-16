@@ -1,0 +1,111 @@
+{
+  "_id": "pln_lifecycle",
+  "_rev": "4-corpus",
+  "approvals_required": [
+    "lab",
+    "bioinformatics"
+  ],
+  "approved_at": "2026-10-22T09:30:00Z",
+  "approved_by": "alice",
+  "created_at": "2026-10-22T09:00:00Z",
+  "executed_run_token": 0,
+  "execution_authority": "daemon",
+  "execution_owner": null,
+  "last_executed_at": "2026-10-22T10:00:00Z",
+  "last_finalized_execution": {
+    "execution_id": "20261022T100000000000Z_0001",
+    "failure_policy": "fail_fast",
+    "finalized_at": "2026-10-22T10:00:00Z",
+    "outcome": "succeeded",
+    "plan_generation": "19ba8ec8e02efe85c36b6a8b3f8c39fe",
+    "plan_id": "pln_lifecycle",
+    "report": {
+      "counts": {
+        "blocked": 0,
+        "failed": 0,
+        "reused": 0,
+        "succeeded": 2,
+        "unreached": 0
+      },
+      "diagnostic": null,
+      "direct_blockers": {},
+      "ended_at": "2026-10-22T10:00:00Z",
+      "execution_id": "20261022T100000000000Z_0001",
+      "failed_ancestors": {},
+      "failure_policy": "fail_fast",
+      "failures": {},
+      "is_drained": true,
+      "outcome": "succeeded",
+      "plan_generation": "19ba8ec8e02efe85c36b6a8b3f8c39fe",
+      "plan_id": "pln_lifecycle",
+      "publication_failure": null,
+      "run_token": 0,
+      "started_at": "2026-10-22T10:00:00Z",
+      "step_ids": [
+        "demux",
+        "qc"
+      ],
+      "step_outcomes": {
+        "demux": "succeeded",
+        "qc": "succeeded"
+      },
+      "termination_reason": "completed",
+      "unreached_step_ids": []
+    },
+    "run_token": 0,
+    "termination_reason": "completed"
+  },
+  "plan": {
+    "failure_policy": "fail_fast",
+    "plan_id": "pln_lifecycle",
+    "realm": "test_realm",
+    "scope": {
+      "id": "P1",
+      "kind": "project"
+    },
+    "steps": [
+      {
+        "deps": [],
+        "fn_ref": "tests.execution:scripted",
+        "inputs": {},
+        "name": "demux",
+        "outputs": {},
+        "params": {
+          "lanes": [
+            1,
+            2
+          ]
+        },
+        "scope": {},
+        "step_id": "demux"
+      },
+      {
+        "deps": [
+          "demux"
+        ],
+        "fn_ref": "tests.execution:scripted",
+        "inputs": {},
+        "name": "qc",
+        "outputs": {},
+        "params": {
+          "min_reads": 1000
+        },
+        "scope": {},
+        "step_id": "qc"
+      }
+    ]
+  },
+  "plan_generation": "19ba8ec8e02efe85c36b6a8b3f8c39fe",
+  "preview": {},
+  "realm": "test_realm",
+  "run_requested_at": "2026-10-22T11:00:00Z",
+  "run_requested_by": "bob",
+  "run_token": 1,
+  "schema_version": 1,
+  "scope": {
+    "id": "P1",
+    "kind": "project"
+  },
+  "status": "approved",
+  "updated_at": "2026-10-22T11:00:00Z"
+}

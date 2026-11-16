@@ -7,9 +7,8 @@ hold the files to those declarations and to a rebuild.
 
 ``released/<tag>/`` holds a released version's positive examples, frozen.
 Each must keep validating against its family's current schema, and nothing
-the corpus does changes them. No version has been released with the contract
-yet, so those tests also run against an edition released, as the README
-describes, from the current one.
+the corpus does changes them. Those tests also run against an edition
+released, as the README describes, from the current one.
 """
 
 from __future__ import annotations
