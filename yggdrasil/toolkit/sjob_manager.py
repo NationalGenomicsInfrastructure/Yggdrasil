@@ -15,6 +15,19 @@ logger = custom_logger(__name__)
 class SlurmManagerFactory:
     @staticmethod
     def get_manager(is_dev: bool):
+        # Explicit backend selection from main.json
+        # (yggdrasil.slurm.backend: "mock" | "slurm"). This takes precedence
+        # over the is_dev default so e.g. a dev daemon in the compose stack
+        # can submit to a real (local) SLURM cluster.
+        backend = (
+            SlurmJobManager.configs.get("yggdrasil", {}).get("slurm", {}).get("backend")
+        )
+        if backend == "mock":
+            from yggdrasil.toolkit.mock_sjob_manager import MockSlurmJobManager
+
+            return MockSlurmJobManager()
+        if backend == "slurm":
+            return SlurmJobManager()
         if is_dev:
             from yggdrasil.toolkit.mock_sjob_manager import MockSlurmJobManager
 
@@ -117,6 +130,35 @@ class SlurmJobManager:
             self._logger.error(f"Unexpected error: {e}")
 
         return None
+
+    async def wait_for_completion(
+        self, job_id: str, poll_interval: float | None = None
+    ) -> str | None:
+        """Poll the job until it reaches a terminal state.
+
+        Unlike monitor_job, this method does not act on a sample object: it
+        simply waits and returns the terminal state, so callers (e.g. test
+        realm steps) can decide how to react.
+
+        A None return from _job_status (e.g. the job is not visible to
+        sacct yet right after sbatch) is treated as "not terminal" and the
+        polling continues.
+
+        Args:
+            job_id (str): The job ID.
+            poll_interval (float, optional): Seconds between status checks.
+                Defaults to self.polling_interval.
+
+        Returns:
+            Optional[str]: The terminal state (a member of slurm_end_states).
+        """
+        interval = self.polling_interval if poll_interval is None else poll_interval
+        while True:
+            status = await self._job_status(job_id)
+            if status in self.slurm_end_states:
+                self._logger.info(f"Job {job_id} reached terminal state: {status}")
+                return status
+            await asyncio.sleep(interval)
 
     async def monitor_job(self, job_id: str, sample: Any) -> None:
         """Monitor the specified job and handle its status accordingly.
