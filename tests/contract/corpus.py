@@ -61,7 +61,7 @@ from yggdrasil.contract.controls import (
     failure_policy_of,
     token_pair,
 )
-from yggdrasil.contract.read import generation_of
+from yggdrasil.contract.read import generation_of, is_eligible
 from yggdrasil.contract.versions import SCHEMA_VERSION_FIELD, SUPPORTED, version_of
 from yggdrasil.core.engine import Engine
 from yggdrasil.flow.attempt import AttemptContext
@@ -85,7 +85,6 @@ from yggdrasil.flow.step import StepContext, step
 from yggdrasil.flow.utils import ygg_time
 from yggdrasil.ops.consumer import build_plan_snapshot
 from yggdrasil.storage.plan_documents import build_plan_document
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     build_finalized_document,
@@ -759,7 +758,7 @@ def _admitted(document: Mapping[str, Any]) -> tuple[Plan, int]:
     ]
     if version.state != SUPPORTED or version.family is None:
         problems.append(f"schema_version is {version.state}")
-    if not is_plan_eligible(dict(document)):
+    if not is_eligible(dict(document)):
         problems.append("it is not eligible")
     if generation_of(dict(document)) is None:
         problems.append("it has no generation")

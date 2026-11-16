@@ -34,9 +34,9 @@ from tests.plan_store_support import (
     patch_api_exception,
     plan_db_manager_on,
 )
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.contract.timestamps import is_canonical
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 from yggdrasil.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 
@@ -217,7 +217,7 @@ class PlanStoreContract:
         )
         self.assertEqual(record["report"], request.report)
         self.assertEqual(stored["last_executed_at"], record["finalized_at"])
-        self.assertFalse(is_plan_eligible(stored))
+        self.assertFalse(is_eligible(stored))
         self.assertEqual(
             self.plans.get_plan_summary(PLAN_ID)["last_finalized_outcome"], "succeeded"
         )
@@ -232,13 +232,13 @@ class PlanStoreContract:
         stored = self.plans.fetch_plan(PLAN_ID)
         self.assertEqual(stored["executed_run_token"], 0)
         self.assertEqual(stored["last_finalized_execution"]["outcome"], "failed")
-        self.assertFalse(is_plan_eligible(stored))
+        self.assertFalse(is_eligible(stored))
         self.assertEqual(stored["status"], "approved")
 
         # Only an explicit new request makes it eligible again, same generation.
         self.external_update(run_token=1)
         rerun = self.plans.fetch_plan(PLAN_ID)
-        self.assertTrue(is_plan_eligible(rerun))
+        self.assertTrue(is_eligible(rerun))
         self.assertEqual(rerun["plan_generation"], doc["plan_generation"])
 
     def test_preflight_rejection_consumes_request_with_its_diagnostic(self):
@@ -249,7 +249,7 @@ class PlanStoreContract:
 
         self.assertEqual(result.status, FinalizationStatus.COMMITTED)
         stored = self.plans.fetch_plan(PLAN_ID)
-        self.assertFalse(is_plan_eligible(stored))
+        self.assertFalse(is_eligible(stored))
         record = stored["last_finalized_execution"]
         self.assertEqual(record["termination_reason"], "preflight_rejected")
         self.assertEqual(
@@ -268,7 +268,7 @@ class PlanStoreContract:
         stored = self.plans.fetch_plan(PLAN_ID)
         self.assertEqual(stored["run_token"], 1)
         self.assertEqual(stored["executed_run_token"], 0)
-        self.assertTrue(is_plan_eligible(stored))
+        self.assertTrue(is_eligible(stored))
 
     # ----- finalization: idempotency -----
 

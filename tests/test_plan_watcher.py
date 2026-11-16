@@ -10,6 +10,7 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
+from tests.plan_store_support import ABSENT, supported_plan_document
 from yggdrasil.watchers.backends.base import RawWatchEvent
 from yggdrasil.watchers.events import EventType
 from yggdrasil.watchers.plan_watcher import PlanWatcher
@@ -144,13 +145,13 @@ class TestPlanWatcher(unittest.TestCase):
 
     def test_evaluate_change_emits_eligible_plan(self):
         """Test that eligible plans trigger event emission."""
-        eligible_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "daemon",  # Required field
-        }
+        eligible_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="daemon",  # Required field
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": eligible_doc}
 
         asyncio.run(self.watcher._evaluate_change(_raw(change)))
@@ -164,13 +165,13 @@ class TestPlanWatcher(unittest.TestCase):
 
     def test_evaluate_change_skips_ineligible_draft(self):
         """Test that draft plans are skipped."""
-        draft_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "draft",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "daemon",
-        }
+        draft_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="draft",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="daemon",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": draft_doc}
 
         asyncio.run(self.watcher._evaluate_change(_raw(change)))
@@ -179,13 +180,13 @@ class TestPlanWatcher(unittest.TestCase):
 
     def test_evaluate_change_skips_already_executed(self):
         """Test that already-executed plans are skipped."""
-        executed_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": 0,  # tokens equal
-            "execution_authority": "daemon",
-        }
+        executed_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=0,  # tokens equal
+            execution_authority="daemon",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": executed_doc}
 
         asyncio.run(self.watcher._evaluate_change(_raw(change)))
@@ -194,13 +195,13 @@ class TestPlanWatcher(unittest.TestCase):
 
     def test_evaluate_change_emits_rerun(self):
         """Test that manual re-run (incremented token) triggers emission."""
-        rerun_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 1,  # incremented
-            "executed_run_token": 0,
-            "execution_authority": "daemon",
-        }
+        rerun_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=1,  # incremented
+            executed_run_token=0,
+            execution_authority="daemon",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": rerun_doc}
 
         asyncio.run(self.watcher._evaluate_change(_raw(change)))
@@ -209,13 +210,13 @@ class TestPlanWatcher(unittest.TestCase):
 
     def test_evaluate_change_logs_the_stored_tokens_of_an_eligible_plan(self):
         """Test that the eligible-plan log line shows the tokens as stored."""
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 7,
-            "executed_run_token": 6,
-            "execution_authority": "daemon",
-        }
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=7,
+            executed_run_token=6,
+            execution_authority="daemon",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": doc}
 
         with self.assertLogs(self.watcher._logger, level="INFO") as logs:
@@ -230,18 +231,18 @@ class TestPlanWatcher(unittest.TestCase):
     def test_evaluate_change_skips_tokens_that_are_not_a_valid_pair(self):
         """Test that missing or non-integer tokens are never read as numbers."""
         for case, tokens in (
-            ("both missing", {}),
-            ("executed missing", {"run_token": 1}),
+            ("both missing", {"run_token": ABSENT, "executed_run_token": ABSENT}),
+            ("executed missing", {"run_token": 1, "executed_run_token": ABSENT}),
             ("strings", {"run_token": "1", "executed_run_token": "0"}),
             ("floats", {"run_token": 1.0, "executed_run_token": 0.0}),
         ):
             with self.subTest(case=case):
-                doc = {
-                    "_id": "pln_tenx_P12345_v1",
-                    "status": "approved",
-                    "execution_authority": "daemon",
+                doc = supported_plan_document(
+                    "pln_tenx_P12345_v1",
+                    status="approved",
+                    execution_authority="daemon",
                     **tokens,
-                }
+                )
                 change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": doc}
 
                 asyncio.run(self.watcher._evaluate_change(_raw(change)))
@@ -264,20 +265,20 @@ class TestPlanWatcher(unittest.TestCase):
     def test_recover_pending_plans_emits_for_each(self):
         """Test that recovery emits events for all eligible plans."""
         eligible_plans = [
-            {
-                "_id": "pln_tenx_P1_v1",
-                "status": "approved",
-                "run_token": 0,
-                "executed_run_token": -1,
-                "execution_authority": "daemon",
-            },
-            {
-                "_id": "pln_tenx_P2_v1",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "daemon",
-            },
+            supported_plan_document(
+                "pln_tenx_P1_v1",
+                status="approved",
+                run_token=0,
+                executed_run_token=-1,
+                execution_authority="daemon",
+            ),
+            supported_plan_document(
+                "pln_tenx_P2_v1",
+                status="approved",
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="daemon",
+            ),
         ]
         self.mock_plan_db.query_approved_pending.return_value = eligible_plans
 
@@ -306,38 +307,38 @@ class TestPlanWatcher(unittest.TestCase):
             execution_owner_filter=owner,
         )
         documents = {
-            "matching": {
-                "_id": "matching",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "run_once",
-                "execution_owner": owner,
-            },
-            "ineligible": {
-                "_id": "ineligible",
-                "status": "draft",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "run_once",
-                "execution_owner": owner,
-            },
-            "wrong-owner": {
-                "_id": "wrong-owner",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "run_once",
-                "execution_owner": "run_once:other-session",
-            },
-            "wrong-authority": {
-                "_id": "wrong-authority",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "daemon",
-                "execution_owner": owner,
-            },
+            "matching": supported_plan_document(
+                "matching",
+                status="approved",
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="run_once",
+                execution_owner=owner,
+            ),
+            "ineligible": supported_plan_document(
+                "ineligible",
+                status="draft",
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="run_once",
+                execution_owner=owner,
+            ),
+            "wrong-owner": supported_plan_document(
+                "wrong-owner",
+                status="approved",
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="run_once",
+                execution_owner="run_once:other-session",
+            ),
+            "wrong-authority": supported_plan_document(
+                "wrong-authority",
+                status="approved",
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="daemon",
+                execution_owner=owner,
+            ),
         }
 
         def _fetch_plan(plan_id):
@@ -420,24 +421,24 @@ class TestPlanWatcher(unittest.TestCase):
             {
                 "id": "pln_dmx_ASDFGG",
                 "seq": "101-aaa",
-                "doc": {
-                    "_id": "pln_dmx_ASDFGG",
-                    "status": "draft",
-                    "run_token": 0,
-                    "executed_run_token": -1,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_dmx_ASDFGG",
+                    status="draft",
+                    run_token=0,
+                    executed_run_token=-1,
+                    execution_authority="daemon",
+                ),
             },
             {
                 "id": "pln_dmx_ASDFGG_2",
                 "seq": "102-bbb",
-                "doc": {
-                    "_id": "pln_dmx_ASDFGG_2",
-                    "status": "draft",
-                    "run_token": 0,
-                    "executed_run_token": -1,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_dmx_ASDFGG_2",
+                    status="draft",
+                    run_token=0,
+                    executed_run_token=-1,
+                    execution_authority="daemon",
+                ),
             },
         ]
 
@@ -452,6 +453,35 @@ class TestPlanWatcher(unittest.TestCase):
 
         self.assertEqual(self.mock_checkpoint.save.call_count, 2)
         self.mock_on_event.assert_not_called()
+
+    def test_an_emitted_change_is_checkpointed_after_its_event(self):
+        """Test start() emits an eligible change, then saves its sequence."""
+        change = {
+            "id": "pln_dmx_ASDFGG",
+            "seq": "103-ccc",
+            "doc": supported_plan_document("pln_dmx_ASDFGG"),
+        }
+
+        async def mock_stream_changes_continuously(since=None, poll_interval_sec=5.0):
+            yield change
+
+        self.mock_fetcher.stream_changes_continuously = mock_stream_changes_continuously
+        saves_when_emitted = []
+        self.mock_on_event.side_effect = lambda event: saves_when_emitted.append(
+            self.mock_checkpoint.save.call_count
+        )
+
+        asyncio.run(self.watcher.start())
+
+        (event,) = [call.args[0] for call in self.mock_on_event.call_args_list]
+        self.assertEqual(event.payload["plan_doc_id"], "pln_dmx_ASDFGG")
+        # Nothing was saved when the event was emitted; the sequence was
+        # saved once, afterwards.
+        self.assertEqual(saves_when_emitted, [0])
+        (call,) = self.mock_checkpoint.save.call_args_list
+        checkpoint = call.args[0]
+        self.assertEqual(checkpoint.backend_key, "watcher:PlanWatcher")
+        self.assertEqual(checkpoint.value, "103-ccc")
 
     def test_stop_sets_running_false(self):
         """Test that stop() sets _running to False."""
@@ -541,35 +571,35 @@ class TestPlanWatcherIntegration(unittest.TestCase):
             {
                 "id": "pln_tenx_P1_v1",
                 "seq": "1",
-                "doc": {
-                    "_id": "pln_tenx_P1_v1",
-                    "status": "approved",
-                    "run_token": 0,
-                    "executed_run_token": -1,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_tenx_P1_v1",
+                    status="approved",
+                    run_token=0,
+                    executed_run_token=-1,
+                    execution_authority="daemon",
+                ),
             },
             {
                 "id": "pln_tenx_P2_v1",
                 "seq": "2",
-                "doc": {
-                    "_id": "pln_tenx_P2_v1",
-                    "status": "draft",
-                    "run_token": 0,
-                    "executed_run_token": -1,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_tenx_P2_v1",
+                    status="draft",
+                    run_token=0,
+                    executed_run_token=-1,
+                    execution_authority="daemon",
+                ),
             },
             {
                 "id": "pln_tenx_P3_v1",
                 "seq": "3",
-                "doc": {
-                    "_id": "pln_tenx_P3_v1",
-                    "status": "approved",
-                    "run_token": 0,
-                    "executed_run_token": 0,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_tenx_P3_v1",
+                    status="approved",
+                    run_token=0,
+                    executed_run_token=0,
+                    execution_authority="daemon",
+                ),
             },
         ]
 
@@ -597,24 +627,24 @@ class TestPlanWatcherIntegration(unittest.TestCase):
             {
                 "id": "pln_tenx_P1_v1",
                 "seq": "100-abc",
-                "doc": {
-                    "_id": "pln_tenx_P1_v1",
-                    "status": "approved",
-                    "run_token": 0,
-                    "executed_run_token": -1,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_tenx_P1_v1",
+                    status="approved",
+                    run_token=0,
+                    executed_run_token=-1,
+                    execution_authority="daemon",
+                ),
             },
             {
                 "id": "pln_tenx_P2_v1",
                 "seq": "101-def",
-                "doc": {
-                    "_id": "pln_tenx_P2_v1",
-                    "status": "approved",
-                    "run_token": 0,
-                    "executed_run_token": -1,
-                    "execution_authority": "daemon",
-                },
+                "doc": supported_plan_document(
+                    "pln_tenx_P2_v1",
+                    status="approved",
+                    run_token=0,
+                    executed_run_token=-1,
+                    execution_authority="daemon",
+                ),
             },
         ]
 
@@ -697,14 +727,14 @@ class TestPlanWatcherFiltering(unittest.TestCase):
             execution_authority_filter="daemon",
         )
 
-        run_once_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "run_once",
-            "execution_owner": "run_once:test-uuid",
-        }
+        run_once_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="run_once",
+            execution_owner="run_once:test-uuid",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": run_once_doc}
 
         asyncio.run(watcher._evaluate_change(_raw(change)))
@@ -719,13 +749,13 @@ class TestPlanWatcherFiltering(unittest.TestCase):
             execution_authority_filter="daemon",
         )
 
-        daemon_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "daemon",
-        }
+        daemon_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="daemon",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": daemon_doc}
 
         asyncio.run(watcher._evaluate_change(_raw(change)))
@@ -742,14 +772,14 @@ class TestPlanWatcherFiltering(unittest.TestCase):
             execution_owner_filter=my_owner,
         )
 
-        my_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "run_once",
-            "execution_owner": my_owner,
-        }
+        my_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="run_once",
+            execution_owner=my_owner,
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": my_doc}
 
         asyncio.run(watcher._evaluate_change(_raw(change)))
@@ -766,14 +796,14 @@ class TestPlanWatcherFiltering(unittest.TestCase):
             execution_owner_filter=my_owner,
         )
 
-        other_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "run_once",
-            "execution_owner": "run_once:other-session-uuid",
-        }
+        other_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="run_once",
+            execution_owner="run_once:other-session-uuid",
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": other_doc}
 
         asyncio.run(watcher._evaluate_change(_raw(change)))
@@ -788,13 +818,13 @@ class TestPlanWatcherFiltering(unittest.TestCase):
             execution_authority_filter="daemon",
         )
 
-        legacy_doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            # no execution_authority field
-        }
+        legacy_doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority=ABSENT,  # no execution_authority field
+        )
         change = {"id": "pln_tenx_P12345_v1", "seq": "1", "doc": legacy_doc}
 
         asyncio.run(watcher._evaluate_change(_raw(change)))
@@ -810,20 +840,20 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         )
 
         # Note: without filters, missing execution_authority still skips
-        daemon_doc = {
-            "_id": "pln_tenx_P1_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "daemon",
-        }
-        run_once_doc = {
-            "_id": "pln_tenx_P2_v1",
-            "status": "approved",
-            "run_token": 0,
-            "executed_run_token": -1,
-            "execution_authority": "run_once",
-        }
+        daemon_doc = supported_plan_document(
+            "pln_tenx_P1_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="daemon",
+        )
+        run_once_doc = supported_plan_document(
+            "pln_tenx_P2_v1",
+            status="approved",
+            run_token=0,
+            executed_run_token=-1,
+            execution_authority="run_once",
+        )
 
         asyncio.run(
             watcher._evaluate_change(
@@ -852,20 +882,20 @@ class TestPlanWatcherFiltering(unittest.TestCase):
 
         # Simulate mixed plans from DB
         all_plans = [
-            {
-                "_id": "pln_tenx_P1_v1",
-                "status": "approved",
-                "run_token": 0,
-                "executed_run_token": -1,
-                "execution_authority": "daemon",
-            },
-            {
-                "_id": "pln_tenx_P2_v1",
-                "status": "approved",
-                "run_token": 0,
-                "executed_run_token": -1,
-                "execution_authority": "run_once",
-            },
+            supported_plan_document(
+                "pln_tenx_P1_v1",
+                status="approved",
+                run_token=0,
+                executed_run_token=-1,
+                execution_authority="daemon",
+            ),
+            supported_plan_document(
+                "pln_tenx_P2_v1",
+                status="approved",
+                run_token=0,
+                executed_run_token=-1,
+                execution_authority="run_once",
+            ),
         ]
         self.mock_plan_db.query_approved_pending.return_value = all_plans
 
@@ -887,16 +917,16 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         )
 
         all_plans = [
-            {
-                "_id": "pln_tenx_P1_v1",
-                "execution_authority": "run_once",
-                "execution_owner": my_owner,
-            },
-            {
-                "_id": "pln_tenx_P2_v1",
-                "execution_authority": "run_once",
-                "execution_owner": "run_once:other-session",
-            },
+            supported_plan_document(
+                "pln_tenx_P1_v1",
+                execution_authority="run_once",
+                execution_owner=my_owner,
+            ),
+            supported_plan_document(
+                "pln_tenx_P2_v1",
+                execution_authority="run_once",
+                execution_owner="run_once:other-session",
+            ),
         ]
         self.mock_plan_db.query_approved_pending.return_value = all_plans
 
@@ -915,14 +945,14 @@ class TestPlanWatcherFiltering(unittest.TestCase):
         )
 
         all_plans = [
-            {
-                "_id": "pln_tenx_P1_v1",
-                "execution_authority": "daemon",
-            },
-            {
-                "_id": "pln_tenx_P2_v1",
-                # No execution_authority (legacy)
-            },
+            supported_plan_document(
+                "pln_tenx_P1_v1",
+                execution_authority="daemon",
+            ),
+            supported_plan_document(
+                "pln_tenx_P2_v1",
+                execution_authority=ABSENT,  # No execution_authority (legacy)
+            ),
         ]
         self.mock_plan_db.query_approved_pending.return_value = all_plans
 

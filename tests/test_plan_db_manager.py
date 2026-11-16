@@ -26,6 +26,7 @@ from requests.exceptions import (
     TooManyRedirects,
 )
 
+from tests.plan_store_support import supported_plan_document
 from yggdrasil.flow.attempt import AttemptContext
 from yggdrasil.flow.model import Plan, StepSpec
 from yggdrasil.flow.outcomes import StepOutcome, TerminationReason
@@ -325,28 +326,28 @@ class TestPlanDBManager(unittest.TestCase):
         all_docs_result = {
             "rows": [
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P1_v1",
-                        "status": "approved",
-                        "run_token": 0,
-                        "executed_run_token": -1,
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P1_v1",
+                        status="approved",
+                        run_token=0,
+                        executed_run_token=-1,
+                    )
                 },
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P2_v1",
-                        "status": "draft",
-                        "run_token": 0,
-                        "executed_run_token": -1,
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P2_v1",
+                        status="draft",
+                        run_token=0,
+                        executed_run_token=-1,
+                    )
                 },
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P3_v1",
-                        "status": "approved",
-                        "run_token": 0,
-                        "executed_run_token": 0,  # already executed
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P3_v1",
+                        status="approved",
+                        run_token=0,
+                        executed_run_token=0,  # already executed
+                    )
                 },
             ]
         }
@@ -365,12 +366,12 @@ class TestPlanDBManager(unittest.TestCase):
             "rows": [
                 {"doc": {"_id": "_design/views", "views": {}}},
                 {
-                    "doc": {
-                        "_id": "pln_tenx_P1_v1",
-                        "status": "approved",
-                        "run_token": 0,
-                        "executed_run_token": -1,
-                    }
+                    "doc": supported_plan_document(
+                        "pln_tenx_P1_v1",
+                        status="approved",
+                        run_token=0,
+                        executed_run_token=-1,
+                    )
                 },
             ]
         }

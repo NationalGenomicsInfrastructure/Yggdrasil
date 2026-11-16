@@ -42,6 +42,7 @@ from tests.integration_support import (
     SQLiteStorage,
     scenario,
 )
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.core.execution_ids import execution_order_key
 from yggdrasil.daemon.plan_execution import ExecutionResult, ExecutionStatus
 from yggdrasil.flow.outcomes import (
@@ -50,7 +51,6 @@ from yggdrasil.flow.outcomes import (
     StepOutcome,
     TerminationReason,
 )
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 
 SUCCEEDED = StepOutcome.SUCCEEDED
 REUSED = StepOutcome.REUSED
@@ -187,7 +187,7 @@ class BranchExecutionTestCase(CoreTestCase):
         self.assertEqual(record["run_token"], run_token)
         self.assertEqual(record["outcome"], "failed")
         self.assertEqual(record["report"], report.to_dict())
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def assert_correlated(self, *reports: AttemptReport) -> None:
         """Assert every spooled event belongs to one of these attempts.
@@ -503,7 +503,7 @@ class DaemonScenarios:
         stored = self.stored()
         self.assertEqual(stored["executed_run_token"], -1)
         self.assertNotIn("last_finalized_execution", stored)
-        self.assertTrue(is_plan_eligible(stored))
+        self.assertTrue(is_eligible(stored))
 
         self.assert_correlated(report)
         self.assert_one_record_each(report)

@@ -35,9 +35,9 @@ from tests.execution_support import (
 )
 from yggdrasil.contract.controls import PLAN_DEFINITION_FIELDS, STEP_DEFINITION_FIELDS
 from yggdrasil.contract.diagnostics import describe_recorded
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.daemon.plan_execution import ExecutionClaim, ExecutionStatus
 from yggdrasil.storage.errors import PlanStoreError
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 
 # Stands for a field removed from the stored document.
@@ -157,7 +157,7 @@ class ControlScenarios:
                 # Refused at admission, not by preflight: no report is
                 # published, and the request stays eligible.
                 self.assert_refused(plan_id, ExecutionStatus.INVALID_DOCUMENT, problem)
-                self.assertTrue(is_plan_eligible(self.stored(plan_id)))
+                self.assertTrue(is_eligible(self.stored(plan_id)))
         self.assert_a_valid_plan_still_runs()
 
     # ----- execution fields -----
@@ -206,7 +206,7 @@ class ControlScenarios:
         )
 
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_every_problem_is_named_once_in_one_refusal(self):
         def edit(doc: dict[str, Any]) -> None:

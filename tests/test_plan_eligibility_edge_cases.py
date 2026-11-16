@@ -1,12 +1,14 @@
 """
 Exhaustive edge case tests for plan eligibility logic.
 
-These tests ensure 100% coverage of the is_plan_eligible() function
+These tests ensure 100% coverage of the is_eligible() function
 with boundary conditions, invalid inputs, and unusual but valid cases.
 """
 
 import unittest
 from typing import Any
+
+from tests.plan_store_support import ABSENT, supported_plan_document
 
 
 class TestPlanEligibilityStatusEdgeCases(unittest.TestCase):
@@ -14,74 +16,84 @@ class TestPlanEligibilityStatusEdgeCases(unittest.TestCase):
 
     def test_status_approved_lowercase(self):
         """Test approved status (lowercase)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 1, "executed_run_token": 0}
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=1, executed_run_token=0
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_status_approved_uppercase(self):
         """Test APPROVED status (uppercase) - should be case-sensitive."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "APPROVED", "run_token": 1, "executed_run_token": 0}
+        doc = supported_plan_document(
+            status="APPROVED", run_token=1, executed_run_token=0
+        )
         # Implementation is case-sensitive; uppercase should NOT be eligible
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_status_draft(self):
         """Test draft status."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "draft", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(status="draft", run_token=1, executed_run_token=0)
+        self.assertFalse(is_eligible(doc))
 
     def test_status_pending(self):
         """Test pending status (legacy, treated as draft)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "pending", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="pending", run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_status_rejected(self):
         """Test rejected status."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "rejected", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="rejected", run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_status_empty_string(self):
         """Test empty status string."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(status="", run_token=1, executed_run_token=0)
+        self.assertFalse(is_eligible(doc))
 
     def test_status_missing(self):
         """Test missing status field."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(run_token=1, executed_run_token=0, status=ABSENT)
+        self.assertFalse(is_eligible(doc))
 
     def test_status_none(self):
         """Test None status."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": None, "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(status=None, run_token=1, executed_run_token=0)
+        self.assertFalse(is_eligible(doc))
 
     def test_status_whitespace(self):
         """Test whitespace-only status."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "  ", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(status="  ", run_token=1, executed_run_token=0)
+        self.assertFalse(is_eligible(doc))
 
     def test_status_unknown_value(self):
         """Test unknown status value."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "processing", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="processing", run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
 
 class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
@@ -89,142 +101,174 @@ class TestPlanEligibilityTokenEdgeCases(unittest.TestCase):
 
     def test_tokens_equal_zero(self):
         """Test both tokens at zero (never run, never requested)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 0, "executed_run_token": 0}
+        doc = supported_plan_document(
+            status="approved", run_token=0, executed_run_token=0
+        )
         # Tokens equal = not eligible (already run or never started)
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_tokens_equal_one(self):
         """Test both tokens at 1 (run once)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 1, "executed_run_token": 1}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=1, executed_run_token=1
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_tokens_equal_large(self):
         """Test both tokens at large value."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 999, "executed_run_token": 999}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=999, executed_run_token=999
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_run_token_greater_by_one(self):
         """Test run_token exactly one greater than executed_run_token."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 1, "executed_run_token": 0}
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=1, executed_run_token=0
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_run_token_greater_by_many(self):
         """Test run_token much greater than executed_run_token."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 10, "executed_run_token": 0}
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=10, executed_run_token=0
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_run_token_missing(self):
         """Test missing run_token field."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "executed_run_token": 0}
+        doc = supported_plan_document(
+            status="approved", executed_run_token=0, run_token=ABSENT
+        )
         # A missing run_token is invalid, never defaulted
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_executed_run_token_missing(self):
         """Test missing executed_run_token field."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 1}
+        doc = supported_plan_document(
+            status="approved", run_token=1, executed_run_token=ABSENT
+        )
         # A missing executed_run_token is invalid, never defaulted
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_both_tokens_missing(self):
         """Test both tokens missing."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved"}
+        doc = supported_plan_document(
+            status="approved", run_token=ABSENT, executed_run_token=ABSENT
+        )
         # Both missing: neither is defaulted, so not eligible
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_run_token_none(self):
         """Test run_token is None."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": None, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=None, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_executed_run_token_none(self):
         """Test executed_run_token is None."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 1, "executed_run_token": None}
+        doc = supported_plan_document(
+            status="approved", run_token=1, executed_run_token=None
+        )
         # null is not a token
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_run_token_negative(self):
         """Test negative run_token (invalid but defensible)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": -1, "executed_run_token": 0}
+        doc = supported_plan_document(
+            status="approved", run_token=-1, executed_run_token=0
+        )
         # -1 is below run_token's minimum of 0, so not eligible
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_executed_run_token_negative(self):
         """Test negative executed_run_token (invalid but defensible)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 0, "executed_run_token": -1}
+        doc = supported_plan_document(
+            status="approved", run_token=0, executed_run_token=-1
+        )
         # -1 means no request was executed yet, so the first one is eligible
-        self.assertTrue(is_plan_eligible(doc))
+        self.assertTrue(is_eligible(doc))
 
     def test_executed_run_token_greater_than_run_token(self):
         """Test executed_run_token > run_token (should never happen)."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # This is an invalid state but should be handled gracefully
-        doc = {"status": "approved", "run_token": 1, "executed_run_token": 5}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=1, executed_run_token=5
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_tokens_as_strings(self):
         """Test tokens as string values: never converted."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": "1", "executed_run_token": "0"}
+        doc = supported_plan_document(
+            status="approved", run_token="1", executed_run_token="0"
+        )
         # A string is not a JSON integer, whatever it spells
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_tokens_as_floats(self):
         """Test tokens as float values: never converted, even whole ones."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": 1.0, "executed_run_token": 0.0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=1.0, executed_run_token=0.0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_tokens_as_booleans(self):
         """Test tokens as booleans: never read as 1 and 0."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved", "run_token": True, "executed_run_token": False}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved", run_token=True, executed_run_token=False
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_tokens_very_large(self):
         """Test very large token values: valid up to 2**53 - 1, invalid above."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "status": "approved",
-            "run_token": 2**53 - 1,
-            "executed_run_token": 2**53 - 2,
-        }
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved",
+            run_token=2**53 - 1,
+            executed_run_token=2**53 - 2,
+        )
+        self.assertTrue(is_eligible(doc))
 
-        doc = {
-            "status": "approved",
-            "run_token": 10**18,
-            "executed_run_token": 10**18 - 1,
-        }
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved",
+            run_token=10**18,
+            executed_run_token=10**18 - 1,
+        )
+        self.assertFalse(is_eligible(doc))
 
 
 class TestPlanEligibilityDocumentEdgeCases(unittest.TestCase):
@@ -232,18 +276,18 @@ class TestPlanEligibilityDocumentEdgeCases(unittest.TestCase):
 
     def test_empty_document(self):
         """Test empty document."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         doc: dict[str, Any] = {}
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_none_document(self):
         """Test None as document."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # Should handle None gracefully
         try:
-            result = is_plan_eligible(None)  # type: ignore
+            result = is_eligible(None)  # type: ignore
             self.assertFalse(result)
         except (TypeError, AttributeError):
             # Raising is also acceptable
@@ -251,75 +295,76 @@ class TestPlanEligibilityDocumentEdgeCases(unittest.TestCase):
 
     def test_document_with_extra_fields(self):
         """Test document with extra fields."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "status": "approved",
-            "run_token": 1,
-            "executed_run_token": 0,
-            "extra_field": "ignored",
-            "another": 12345,
-        }
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved",
+            run_token=1,
+            executed_run_token=0,
+            extra_field="ignored",
+            another=12345,
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_document_with_nested_status(self):
         """Test document with status in wrong location."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "metadata": {"status": "approved"},  # Wrong location
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
+        doc = supported_plan_document(
+            metadata={"status": "approved"},  # Wrong location
+            run_token=1,
+            executed_run_token=0,
+            status=ABSENT,
+        )
         # Status at root level is missing
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_document_with_plan_field(self):
         """Test that plan field doesn't affect eligibility."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "status": "approved",
-            "run_token": 1,
-            "executed_run_token": 0,
-            "plan": {
+        doc = supported_plan_document(
+            status="approved",
+            run_token=1,
+            executed_run_token=0,
+            plan={
                 "plan_id": "test",
                 "steps": [],
             },
-        }
+        )
         # Plan content is irrelevant for eligibility
-        self.assertTrue(is_plan_eligible(doc))
+        self.assertTrue(is_eligible(doc))
 
     def test_document_with_auto_run_field(self):
         """Test that auto_run field doesn't directly affect eligibility."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # auto_run=True with status=approved
-        doc1 = {
-            "status": "approved",
-            "auto_run": True,
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
-        self.assertTrue(is_plan_eligible(doc1))
+        doc1 = supported_plan_document(
+            status="approved",
+            auto_run=True,
+            run_token=1,
+            executed_run_token=0,
+        )
+        self.assertTrue(is_eligible(doc1))
 
         # auto_run=False with status=approved
-        doc2 = {
-            "status": "approved",
-            "auto_run": False,
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
-        self.assertTrue(is_plan_eligible(doc2))
+        doc2 = supported_plan_document(
+            status="approved",
+            auto_run=False,
+            run_token=1,
+            executed_run_token=0,
+        )
+        self.assertTrue(is_eligible(doc2))
 
         # auto_run=True with status=draft (still not eligible)
-        doc3 = {
-            "status": "draft",
-            "auto_run": True,
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
-        self.assertFalse(is_plan_eligible(doc3))
+        doc3 = supported_plan_document(
+            status="draft",
+            auto_run=True,
+            run_token=1,
+            executed_run_token=0,
+        )
+        self.assertFalse(is_eligible(doc3))
 
 
 class TestPlanEligibilityTableDriven(unittest.TestCase):
@@ -327,7 +372,7 @@ class TestPlanEligibilityTableDriven(unittest.TestCase):
 
     def test_eligibility_matrix(self):
         """Test all combinations of status and token states."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         test_cases = [
             # (status, run_token, executed_run_token, expected, description)
@@ -350,12 +395,12 @@ class TestPlanEligibilityTableDriven(unittest.TestCase):
 
         for status, run_token, executed_token, expected, desc in test_cases:
             with self.subTest(description=desc):
-                doc = {
-                    "status": status,
-                    "run_token": run_token,
-                    "executed_run_token": executed_token,
-                }
-                result = is_plan_eligible(doc)
+                doc = supported_plan_document(
+                    status=status,
+                    run_token=run_token,
+                    executed_run_token=executed_token,
+                )
+                result = is_eligible(doc)
                 self.assertEqual(
                     result,
                     expected,
@@ -368,54 +413,64 @@ class TestPlanEligibilityDefensiveProgramming(unittest.TestCase):
 
     def test_status_with_leading_trailing_spaces(self):
         """Test status with whitespace that might slip through."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": " approved ", "run_token": 1, "executed_run_token": 0}
+        doc = supported_plan_document(
+            status=" approved ", run_token=1, executed_run_token=0
+        )
         # Strict comparison: " approved " != "approved"
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_status_with_newline(self):
         """Test status with embedded newline."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "approved\n", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="approved\n", run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_unicode_status(self):
         """Test status with unicode characters."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": "αpproved", "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status="αpproved", run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_status_as_number(self):
         """Test status as numeric value."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": 1, "run_token": 1, "executed_run_token": 0}
+        doc = supported_plan_document(status=1, run_token=1, executed_run_token=0)
         # 1 != "approved"
-        self.assertFalse(is_plan_eligible(doc))
+        self.assertFalse(is_eligible(doc))
 
     def test_status_as_boolean(self):
         """Test status as boolean."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": True, "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(status=True, run_token=1, executed_run_token=0)
+        self.assertFalse(is_eligible(doc))
 
     def test_status_as_list(self):
         """Test status as list."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": ["approved"], "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status=["approved"], run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_status_as_dict(self):
         """Test status as dict."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {"status": {"value": "approved"}, "run_token": 1, "executed_run_token": 0}
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            status={"value": "approved"}, run_token=1, executed_run_token=0
+        )
+        self.assertFalse(is_eligible(doc))
 
 
 class TestPlanEligibilityRealWorldScenarios(unittest.TestCase):
@@ -423,97 +478,97 @@ class TestPlanEligibilityRealWorldScenarios(unittest.TestCase):
 
     def test_freshly_created_auto_run_plan(self):
         """Test plan just created with auto_run=True."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "realm": "tenx",
-            "scope": {"kind": "project", "id": "P12345"},
-            "status": "approved",  # auto_run plans get approved status
-            "auto_run": True,
-            "run_token": 1,
-            "executed_run_token": 0,
-            "created_at": "2026-01-16T10:00:00Z",
-        }
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            status="approved",  # auto_run plans get approved status
+            auto_run=True,
+            run_token=1,
+            executed_run_token=0,
+            created_at="2026-01-16T10:00:00Z",
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_freshly_created_approval_required_plan(self):
         """Test plan just created with auto_run=False."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "realm": "tenx",
-            "scope": {"kind": "project", "id": "P12345"},
-            "status": "draft",  # non-auto_run plans start as draft
-            "auto_run": False,
-            "run_token": 1,
-            "executed_run_token": 0,
-            "created_at": "2026-01-16T10:00:00Z",
-        }
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            status="draft",  # non-auto_run plans start as draft
+            auto_run=False,
+            run_token=1,
+            executed_run_token=0,
+            created_at="2026-01-16T10:00:00Z",
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_plan_after_external_approval(self):
         """Test a plan after an external actor approves it."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "realm": "tenx",
-            "scope": {"kind": "project", "id": "P12345"},
-            "status": "approved",  # Changed by an external approval actor
-            "auto_run": False,
-            "run_token": 1,
-            "executed_run_token": 0,
-            "approved_at": "2026-01-16T11:00:00Z",
-            "approved_by": "user@example.com",
-        }
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            status="approved",  # Changed by an external approval actor
+            auto_run=False,
+            run_token=1,
+            executed_run_token=0,
+            approved_at="2026-01-16T11:00:00Z",
+            approved_by="user@example.com",
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_plan_after_successful_execution(self):
         """Test plan after successful execution."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "realm": "tenx",
-            "scope": {"kind": "project", "id": "P12345"},
-            "status": "approved",
-            "auto_run": True,
-            "run_token": 1,
-            "executed_run_token": 1,  # Updated by Yggdrasil
-        }
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            status="approved",
+            auto_run=True,
+            run_token=1,
+            executed_run_token=1,  # Updated by Yggdrasil
+        )
+        self.assertFalse(is_eligible(doc))
 
     def test_plan_after_rerun_request(self):
         """Test a plan after an external actor requests a re-run."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "realm": "tenx",
-            "scope": {"kind": "project", "id": "P12345"},
-            "status": "approved",
-            "auto_run": True,
-            "run_token": 2,  # Incremented by an external approval actor
-            "executed_run_token": 1,  # Still at previous value
-            "run_requested_at": "2026-01-16T14:00:00Z",
-            "run_requested_by": "user@example.com",
-        }
-        self.assertTrue(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            realm="tenx",
+            scope={"kind": "project", "id": "P12345"},
+            status="approved",
+            auto_run=True,
+            run_token=2,  # Incremented by an external approval actor
+            executed_run_token=1,  # Still at previous value
+            run_requested_at="2026-01-16T14:00:00Z",
+            run_requested_by="user@example.com",
+        )
+        self.assertTrue(is_eligible(doc))
 
     def test_plan_with_multiple_reruns(self):
         """Test plan that has been re-run multiple times."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        doc = {
-            "_id": "pln_tenx_P12345_v1",
-            "realm": "tenx",
-            "status": "approved",
-            "run_token": 5,
-            "executed_run_token": 5,  # All runs completed
-        }
-        self.assertFalse(is_plan_eligible(doc))
+        doc = supported_plan_document(
+            "pln_tenx_P12345_v1",
+            realm="tenx",
+            status="approved",
+            run_token=5,
+            executed_run_token=5,  # All runs completed
+        )
+        self.assertFalse(is_eligible(doc))
 
 
 if __name__ == "__main__":

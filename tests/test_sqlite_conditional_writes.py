@@ -19,8 +19,8 @@ from typing import Any
 from unittest.mock import patch
 
 from tests.plan_store_support import SCOPE, finalization_for, make_plan
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.storage.errors import PlanStoreError, RevisionConflictError
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus
 from yggdrasil.storage.sqlite import SQLiteInternalStore, SQLitePlanStore
 
@@ -388,7 +388,7 @@ class TestPlanStoreThreadRaces(_SQLiteTestBase):
         self.assertEqual(
             doc["last_finalized_execution"]["execution_id"], request.execution_id
         )
-        self.assertTrue(is_plan_eligible(doc))  # the newer request is pending
+        self.assertTrue(is_eligible(doc))  # the newer request is pending
 
 
 class TestBackendFailureClassification(_SQLiteTestBase):
