@@ -65,6 +65,41 @@ def eligibility(document: object) -> Eligibility:
     Raises:
         TypeError: If document is a NoDocument, which no store returns as a
             body.
+
+    Examples:
+        Only the fields the decision reads are shown; a stored document has
+        every field of its family.
+
+        >>> approved = {"schema_version": 1, "status": "approved"}
+
+        An initial run, and a manual re-run with its run_token incremented:
+
+        >>> eligibility({**approved, "run_token": 0, "executed_run_token": -1}).code
+        'eligible'
+        >>> eligibility({**approved, "run_token": 1, "executed_run_token": 0}).code
+        'eligible'
+
+        A request already executed (equal tokens), and one awaiting approval:
+
+        >>> eligibility({**approved, "run_token": 0, "executed_run_token": 0}).code
+        'already_executed'
+        >>> draft = {**approved, "status": "draft"}
+        >>> eligibility({**draft, "run_token": 0, "executed_run_token": -1}).code
+        'not_approved'
+
+        A token that is not a JSON integer, or that is missing, is never read
+        as a number:
+
+        >>> eligibility({**approved, "run_token": "1", "executed_run_token": 0}).code
+        'invalid_tokens'
+        >>> eligibility({**approved, "run_token": 0}).code
+        'invalid_tokens'
+
+        Without a supported ``schema_version``, nothing else is judged:
+
+        >>> unversioned = {"status": "approved", "run_token": 0, "executed_run_token": -1}
+        >>> eligibility(unversioned).code
+        'unsupported_document'
     """
     if isinstance(document, NoDocument):
         raise TypeError(f"eligibility needs a document body, not {document}")

@@ -97,6 +97,14 @@ Finalization retries:
     and retry nothing. A pending result does not survive a restart; the
     request is then still eligible, so it may run again, and realm
     idempotency remains the protection against repeated side effects.
+
+    The plan is read only when it is handed to the coordinator, and
+    PlanWatcher does not hand over a document outside the supported families:
+    eligibility checks the family first. So the drop above happens only for a
+    document that left the family after the watcher saw it, or one handed
+    over without a watcher. Otherwise the result stays pending until a later
+    change hands the plan over again, and that read settles it by the rules
+    above.
 """
 
 from __future__ import annotations
@@ -119,7 +127,7 @@ from yggdrasil.contract.controls import (
 )
 from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.contract.fields import EXECUTION_AUTHORITY_FIELD, EXECUTION_OWNER_FIELD
-from yggdrasil.contract.read import generation_of
+from yggdrasil.contract.read import eligibility, generation_of
 from yggdrasil.contract.versions import (
     SUPPORTED,
     describe_schema_version,
@@ -137,7 +145,6 @@ from yggdrasil.storage.plan_documents import (
     plan_model_from_document,
     validate_execution_authority,
 )
-from yggdrasil.storage.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
     FinalizationResult,
@@ -420,7 +427,7 @@ def _describe_attempt(report: AttemptReport) -> str:
 # Log level for each resolution; FINALIZED depends on the attempt's outcome.
 _LOG_LEVELS: dict[ExecutionStatus, int] = {
     ExecutionStatus.NOT_FOUND: logging.ERROR,
-    # Every pre-contract plan resolves this way until it is regenerated: an
+    # A plan outside the supported families has to be regenerated: an
     # operator's task, not a malfunction.
     ExecutionStatus.UNSUPPORTED_DOCUMENT: logging.WARNING,
     ExecutionStatus.NOT_AUTHORIZED: logging.INFO,
@@ -868,6 +875,16 @@ class PlanExecutionCoordinator:
         write into a document this process cannot interpret, so it is never
         recorded and never retried. Nothing is written either way.
 
+        Eligibility checks the family first, so PlanWatcher, through which
+        both the daemon and run-once hand plans over, refuses such a document
+        itself, with a warning, and never hands it over; so do the stores'
+        recovery listings. This gate is therefore reached by a document that
+        left the family after the watcher saw it, such as one read again
+        after an in-flight attempt, and by any caller that hands a plan over
+        without a watcher. A pending finalization of a plan the watcher
+        refuses stays pending until the plan is handed over again, and is
+        then settled as :meth:`_settle_pending` describes.
+
         Args:
             plan_doc_id: The plan document.
             doc: The document as just read, or None if there is none.
@@ -996,11 +1013,12 @@ class PlanExecutionCoordinator:
                 ExecutionStatus.NOT_AUTHORIZED,
                 f"Plan '{plan_doc_id}' is not executed here: {refusal}",
             )
-        if not is_plan_eligible(doc):
+        decision = eligibility(doc)
+        if not decision.eligible:
             raise stop(
                 ExecutionStatus.NOT_ELIGIBLE,
                 f"Plan '{plan_doc_id}' is not eligible; skipping execution "
-                f"({get_eligibility_reason(doc)})",
+                f"({decision.reason})",
             )
         problems = (
             *execution_definition_problems(doc),

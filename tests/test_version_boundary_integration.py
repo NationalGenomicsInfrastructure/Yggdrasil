@@ -124,8 +124,12 @@ class BoundaryTestCase(CoreTestCase):
 
         self.assert_named(logs.output, f"its schema_version {shown} is {reason}")
 
-    def run_once_session(self) -> int:
+    def run_once_session(self, *, timeout_seconds: int = 10) -> int:
         """Run a run-once session for the stored plan, as ``SESSION``.
+
+        Args:
+            timeout_seconds: How long the session waits, after its recovery
+                pass, for the plan to become executable.
 
         Returns:
             int: The session's exit code.
@@ -134,7 +138,7 @@ class BoundaryTestCase(CoreTestCase):
             self.core._run_once_watcher_loop(
                 pending_plan_ids=[PLAN_ID],
                 execution_owner=SESSION,
-                timeout_seconds=10,
+                timeout_seconds=timeout_seconds,
             )
         )
 
@@ -203,16 +207,30 @@ class BoundaryScenarios:
                     marker, execution_authority="run_once", execution_owner=SESSION
                 )
 
+                # The session's recovery pass refuses the plan, and nothing
+                # would hand it over later, so the session is given no time
+                # to wait for it.
                 with (
                     self.unchanged(),
                     self.assertLogs("yggdrasil", level=logging.WARNING) as logs,
                 ):
-                    exit_code = self.run_once_session()
+                    exit_code = self.run_once_session(timeout_seconds=0)
 
                 self.assertEqual(exit_code, 1)
                 self.assertNotIn("last_finalized_execution", self.stored())
                 self.assert_named(
-                    logs.output, f"its schema_version is {shown}, so it is {state}"
+                    logs.output,
+                    "Recovery: Plan",
+                    f"its schema_version is {shown}, so it is {state}",
+                    "no execution event is emitted for it",
+                )
+                # The watcher held it back: the coordinator never refused it.
+                self.assertFalse(
+                    any(
+                        "nothing ran and nothing was written" in line
+                        for line in logs.output
+                    ),
+                    logs.output,
                 )
                 # The next marker is written over this one.
                 if marker is ABSENT:

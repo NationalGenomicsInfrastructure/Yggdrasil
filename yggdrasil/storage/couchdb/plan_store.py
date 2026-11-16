@@ -16,6 +16,7 @@ from ibmcloudant.cloudant_v1 import Document
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RequestException, SSLError, Timeout
 
+from yggdrasil.contract.read import UNSUPPORTED_DOCUMENT, eligibility
 from yggdrasil.couchdb.connection import CouchDBHandler
 from yggdrasil.couchdb.defaults import DEFAULT_ENDPOINT, resolve_couchdb_params
 from yggdrasil.flow.model import Plan
@@ -28,6 +29,7 @@ from yggdrasil.storage.plan_documents import (
     plan_model_from_document,
     plan_summary_from_document,
     validate_execution_authority,
+    warn_unsupported_omission,
 )
 from yggdrasil.storage.plan_updates import (
     ExecutionFinalization,
@@ -433,8 +435,14 @@ class PlanDBManager(CouchDBHandler):
         """
         Query all approved plans that are pending execution.
 
-        Reserved for future daemon-startup recovery.
-        Returns plans where: status='approved' AND run_token > executed_run_token
+        Reserved for future daemon-startup recovery. Each document is judged
+        by the shared reader's eligibility decision
+        (``yggdrasil.contract.read.eligibility``): of a supported family,
+        with a valid token pair, approved, and with run_token >
+        executed_run_token. Design documents are skipped first, silently. A
+        plan whose ``schema_version`` is absent, invalid or names an
+        unsupported family is left out with one WARNING, naming it by its
+        document ID; every other ineligible plan is left out silently.
 
         Note: This is a full scan (O(n)). For large databases, consider
         adding a CouchDB view for indexed queries.
@@ -442,8 +450,6 @@ class PlanDBManager(CouchDBHandler):
         Returns:
             list: Plan documents eligible for execution
         """
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
-
         eligible_plans: list[dict[str, Any]] = []
 
         try:
@@ -463,8 +469,13 @@ class PlanDBManager(CouchDBHandler):
                     continue
 
                 # Check eligibility
-                if is_plan_eligible(doc):
+                decision = eligibility(doc)
+                if decision.eligible:
                     eligible_plans.append(doc)
+                elif decision.code == UNSUPPORTED_DOCUMENT:
+                    row_id = row.get("id")
+                    plan_id = row_id if isinstance(row_id, str) else doc.get("_id")
+                    warn_unsupported_omission(self._logger, plan_id, doc)
 
             self._logger.info(
                 "Found %d eligible plans (of %d total) for recovery",

@@ -16,15 +16,24 @@ the finalizer writes only into a document still of that family. A supported
 document without a generation is refused, and nothing gives it one. Every
 refusal leaves the stored document as it was, and other plans in the same
 store keep running.
+
+Eligibility checks the family first, so PlanWatcher, in front of the
+coordinator in the daemon, refuses such a document itself, with a warning,
+and never hands it over. A pending result for it then stays pending until a
+later read by the coordinator settles it under the same rules: restored to
+its family, generation and token, it is still pending; regenerated and then
+approved, it is superseded without being written into the new generation.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import unittest
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import Mock
 
 from tests.execution_support import (
     COORDINATOR_LOGGER,
@@ -35,7 +44,9 @@ from tests.execution_support import (
     CouchBackend,
     SQLiteBackend,
     chain_plan,
+    run_bounded,
 )
+from yggdrasil.contract.read import UNSUPPORTED_DOCUMENT, eligibility
 from yggdrasil.daemon.plan_execution import (
     DAEMON_CLAIM,
     ExecutionClaim,
@@ -49,8 +60,12 @@ from yggdrasil.flow.events.attempt_records import (
 )
 from yggdrasil.storage.errors import PlanStoreError
 from yggdrasil.storage.plan_documents import build_plan_document
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import SupersessionReason
+from yggdrasil.storage.protocols import PlanChangeSource
+from yggdrasil.watchers.backends.base import RawWatchEvent
+from yggdrasil.watchers.backends.checkpoint_store import InMemoryCheckpointStore
+from yggdrasil.watchers.events import YggdrasilEvent
+from yggdrasil.watchers.plan_watcher import PlanWatcher
 
 # Stands for a field removed from the stored document.
 ABSENT = object()
@@ -73,6 +88,8 @@ SUPPORTED = "(supported plan-document families: [1])"
 
 # How a read that is not the plan's stored document is reported.
 NOT_THE_DOCUMENT = "not the plan's stored document"
+
+WATCHER_LOGGER = "yggdrasil.watchers.plan_watcher.PlanWatcher"
 
 
 def _marked(marker: Any) -> Callable[[dict[str, Any]], None]:
@@ -119,6 +136,40 @@ class VersionTestCase(ControlTestCase):
         # The family the request was admitted under travels with it.
         self.assertEqual(pending.schema_version, 1)
         return result
+
+    def observe(self, plan_id: str = PLAN_ID) -> list[ExecutionResult]:
+        """Have the daemon's PlanWatcher evaluate the stored plan as a change.
+
+        The watcher hands each event it emits to the coordinator, as the
+        daemon's handler does, and the cycles it starts are awaited.
+
+        Args:
+            plan_id: The plan whose stored document changed.
+
+        Returns:
+            list[ExecutionResult]: How each request the watcher handed over
+            was resolved; empty when it handed none over.
+        """
+        submitted: list[asyncio.Future[ExecutionResult]] = []
+
+        def on_event(event: YggdrasilEvent) -> None:
+            plan_doc_id = event.payload["plan_doc_id"]
+            submitted.append(self.coordinator.submit(plan_doc_id, DAEMON_CLAIM))
+
+        watcher = PlanWatcher(
+            on_event=on_event,
+            plan_store=self.backend.plans,
+            change_source=Mock(spec=PlanChangeSource),
+            checkpoint_store=InMemoryCheckpointStore(),
+            execution_authority_filter="daemon",
+        )
+        change = RawWatchEvent(id=plan_id, doc=self.raw(plan_id), seq=None)
+
+        async def scenario() -> list[ExecutionResult]:
+            await watcher._evaluate_change(change)
+            return [await asyncio.shield(future) for future in submitted]
+
+        return run_bounded(scenario())
 
     def published_report(self, result: ExecutionResult) -> dict[str, Any]:
         """Return the report that result's attempt published to the spool."""
@@ -224,8 +275,12 @@ class VersionScenarios:
                     f"its schema_version is {shown}, so it is {state}",
                     SUPPORTED,
                 )
-                # Eligibility does not look at the family: the boundary does.
-                self.assertTrue(is_plan_eligible(self.stored(plan_id)))
+                # Eligibility checks the family first, so the watcher and the
+                # recovery listings never hand such a document over; the
+                # coordinator's own gate refuses it for callers that bypass
+                # them.
+                decision = eligibility(self.stored(plan_id))
+                self.assertEqual(decision.code, UNSUPPORTED_DOCUMENT)
         # A family-1 plan in the same store runs.
         self.assert_a_valid_plan_still_runs()
 
@@ -421,6 +476,108 @@ class VersionScenarios:
         self.assertEqual(self.plan_seq(), regenerated["seq"])
         # The attempt's report was still published.
         self.assertEqual(self.published_report(result), result.report.to_dict())
+        self.assert_a_valid_plan_still_runs()
+
+    # ----- pending results, with the watcher in front -----
+
+    def test_a_pending_result_waits_while_the_watcher_refuses_its_plan(self):
+        pending = self.pending_result(PLAN_ID)
+        request = self.coordinator.pending_finalization(PLAN_ID)
+        captured = self.stored()
+        self.remark(PLAN_ID, 2)
+        del self.journal[:]
+
+        # The watcher refuses the unsupported document itself: the
+        # coordinator is not called, so nothing settles the pending result.
+        with (
+            self.nothing_changes(PLAN_ID),
+            self.assertLogs(WATCHER_LOGGER, level=logging.WARNING) as logs,
+        ):
+            self.assertEqual(self.observe(), [])
+        (warning,) = logs.records
+        self.assertIn(
+            f"Plan '{PLAN_ID}' is not executed: its schema_version is 2, so it is "
+            f"unsupported {SUPPORTED}",
+            warning.getMessage(),
+        )
+        self.assertEqual(self.journal, [])
+        self.assertEqual(self.coordinator.pending_finalization(PLAN_ID), request)
+
+        # Restored to the family, generation and token the result was
+        # captured under, the plan is handed over again, and its result is
+        # still pending: the same request is not run twice.
+        self.remark(PLAN_ID, 1)
+        restored = self.stored()
+        for field in ("plan_generation", "run_token", "executed_run_token"):
+            self.assertEqual(restored[field], captured[field], field)
+        with self.nothing_changes(PLAN_ID):
+            (result,) = self.observe()
+        self.assertEqual(
+            result.status, ExecutionStatus.FINALIZATION_PENDING, result.message
+        )
+        self.assertEqual(result.report, pending.report)
+        self.assertEqual(self.journal, ["read"])
+        self.assertEqual(self.coordinator.pending_finalization(PLAN_ID), request)
+        self.assert_a_valid_plan_still_runs()
+
+    def test_a_pending_result_is_superseded_once_its_regenerated_plan_is_approved(
+        self,
+    ):
+        pending = self.pending_result(PLAN_ID)
+        request = self.coordinator.pending_finalization(PLAN_ID)
+        assert request is not None and pending.report is not None
+        old_execution = pending.report.execution_id
+        self.remark(PLAN_ID, ABSENT)
+        del self.journal[:]
+
+        # Unversioned: the watcher refuses it, and the result stays pending.
+        with (
+            self.nothing_changes(PLAN_ID),
+            self.assertLogs(WATCHER_LOGGER, level=logging.WARNING) as logs,
+        ):
+            self.assertEqual(self.observe(), [])
+        (warning,) = logs.records
+        self.assertIn(
+            "its schema_version is absent, so it is unversioned", warning.getMessage()
+        )
+        self.assertEqual(self.journal, [])
+        self.assertEqual(self.coordinator.pending_finalization(PLAN_ID), request)
+
+        # Planning may replace an unversioned slot. The new generation's draft
+        # is skipped at DEBUG, and nothing calls the coordinator yet.
+        draft = self.save(chain_plan(), auto_run=False)
+        self.assertEqual((draft["schema_version"], draft["status"]), (1, "draft"))
+        self.assertNotEqual(draft["plan_generation"], request.plan_generation)
+        with (
+            self.nothing_changes(PLAN_ID),
+            self.assertLogs(WATCHER_LOGGER, level=logging.DEBUG) as logs,
+        ):
+            self.assertEqual(self.observe(), [])
+        self.assertEqual([r for r in logs.records if r.levelno >= logging.WARNING], [])
+        self.assertIn(
+            f"Skipping ineligible plan: {PLAN_ID} (Not eligible: status 'draft' "
+            "(must be 'approved'))",
+            [r.getMessage() for r in logs.records],
+        )
+        self.assertEqual(self.journal, [])
+        self.assertEqual(self.coordinator.pending_finalization(PLAN_ID), request)
+
+        # Approved, as an approval actor does. The watcher hands the plan
+        # over; the coordinator's read supersedes the pending result without
+        # writing it into the new generation, then runs the new request.
+        self.update(PLAN_ID, status="approved")
+        with self.assertLogs(COORDINATOR_LOGGER, level=logging.WARNING) as logs:
+            (result,) = self.observe()
+        self.assertEqual(result.status, ExecutionStatus.FINALIZED, result.message)
+        (dropped,) = [line for line in logs.output if "settled without writing" in line]
+        self.assertIn("the plan's generation is now", dropped)
+        self.assertIsNone(self.coordinator.pending_finalization(PLAN_ID))
+        self.assert_recorded(result)
+        stored = self.stored()
+        self.assertEqual(stored["plan_generation"], draft["plan_generation"])
+        assert result.report is not None
+        self.assertNotEqual(result.report.execution_id, old_execution)
+        self.assertNotIn(old_execution, json.dumps(stored))
         self.assert_a_valid_plan_still_runs()
 
     # ----- reads that are not the plan's stored document -----

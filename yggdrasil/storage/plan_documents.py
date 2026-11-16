@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from yggdrasil.contract import CURRENT_FAMILIES, PLAN_DOCUMENT, SUPPORTED_FAMILIES, read
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.contract.fields import (
     APPROVED,
     CREATED_AT_FIELD,
@@ -67,6 +68,7 @@ from yggdrasil.contract.versions import (
     UNSUPPORTED,
     UNVERSIONED,
     version_of,
+    version_sentence,
 )
 from yggdrasil.flow.model import Plan
 from yggdrasil.flow.utils.ygg_time import utcnow_iso
@@ -301,6 +303,29 @@ def plan_model_from_document(
     except (KeyError, TypeError) as e:
         logger.error("Failed to deserialize plan '%s': %s", doc_id, e)
         return None
+
+
+def warn_unsupported_omission(
+    logger: logging.Logger, plan_id: object, document: Mapping[str, Any]
+) -> None:
+    """Report that a recovery listing leaves out a plan of an unsupported family.
+
+    Eligibility checks the family first, so a listing omits such a plan
+    whatever its status and tokens say, and it cannot run until it is
+    regenerated. The line names the plan, what its ``schema_version``
+    records and the supported families, in the words every refusal of a
+    family uses.
+
+    Args:
+        logger: The listing store's logger.
+        plan_id: The plan's ID as the store holds it, shown bounded.
+        document: The omitted plan document.
+    """
+    logger.warning(
+        "Plan %s is not executed: %s; it is left out of the recovery listing",
+        describe_recorded(plan_id),
+        version_sentence(PLAN_DOCUMENT, version_of(PLAN_DOCUMENT, document)),
+    )
 
 
 def plan_summary_from_document(doc: dict[str, Any]) -> dict[str, Any]:

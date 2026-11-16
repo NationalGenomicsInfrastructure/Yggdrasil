@@ -18,6 +18,7 @@ from tests.contract.read_support import (
     plan_document_names,
 )
 from tests.contract.support import ABSENT, changed
+from yggdrasil.contract.fields import APPROVED
 from yggdrasil.contract.read import (
     ALREADY_EXECUTED,
     ELIGIBILITY_CODES,
@@ -34,7 +35,7 @@ from yggdrasil.contract.read import (
     is_eligible,
     read_plan,
 )
-from yggdrasil.storage.plan_eligibility import get_eligibility_reason, is_plan_eligible
+from yggdrasil.storage import plan_eligibility
 
 
 def approved(**fields: Any) -> dict[str, Any]:
@@ -257,19 +258,11 @@ class TestDerivedAnswers(ReaderTestCase):
                 plan = read_plan(document, plan_id=document["_id"])
                 self.assertEqual(plan.eligibility, eligibility(document))
 
-    def test_the_decision_on_a_supported_document_is_today_s(self):
-        documents = [(name, document) for name, document, _ in SUPPORTED_CASES]
-        documents += [
-            (name, plan_document(name))
-            for name in plan_document_names()
-            if name not in ("pre_contract", "schema_version_2", "schema_version_string")
-        ]
-        for name, document in documents:
-            with self.subTest(name):
-                self.assertIs(is_eligible(document), is_plan_eligible(document))
-                self.assertEqual(
-                    eligibility_reason(document), get_eligibility_reason(document)
-                )
+    def test_the_old_names_are_the_reader_s(self):
+        """The storage module's names are kept for one release, as these objects."""
+        self.assertIs(plan_eligibility.is_plan_eligible, is_eligible)
+        self.assertIs(plan_eligibility.get_eligibility_reason, eligibility_reason)
+        self.assertIs(plan_eligibility.APPROVED_STATUS, APPROVED)
 
     def test_an_unsupported_document_is_not_eligible(self):
         """Every other check passes: the family alone refuses it."""

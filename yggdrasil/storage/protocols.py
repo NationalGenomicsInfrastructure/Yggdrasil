@@ -137,7 +137,13 @@ class PlanStore(Protocol):
         ...
 
     def query_approved_pending(self) -> list[dict[str, Any]]:
-        """Return all plans eligible for a full recovery scan."""
+        """Return all plans eligible for a full recovery scan.
+
+        Eligibility is the shared reader's decision
+        (``yggdrasil.contract.read.eligibility``). A plan of an unsupported
+        family, or with no or an invalid ``schema_version``, is left out with
+        a WARNING; every other ineligible plan is left out silently.
+        """
         ...
 
     def delete_plan(self, doc_id: str) -> bool:
