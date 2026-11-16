@@ -13,7 +13,13 @@ as they were. Covered here:
   rules;
 - the planning callers of ``YggdrasilCore`` (daemon planning,
   ``--plan-only`` and run-once) on both backends: each logs a refusal once
-  and goes on with its other drafts.
+  and goes on with its other drafts;
+- the check ``--plan-only`` and run-once make before they write, on both
+  backends: any document already in the slot, readable or not, is shown
+  and kept unless ``--force`` is given, and with it the rule above decides.
+  On CouchDB, a malformed answer to the read is shown like an unreadable
+  document, never taken for an empty slot, and a failed read writes
+  nothing.
 """
 
 from __future__ import annotations
@@ -29,9 +35,11 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
+from requests.exceptions import ConnectionError as RequestsConnectionError
+
 from tests.contract.support import ConformingBuilders
 from tests.execution_support import CouchBackend, SQLiteBackend
-from tests.plan_store_support import SCOPE, make_plan
+from tests.plan_store_support import SCOPE, FakeApiException, make_plan
 from yggdrasil.daemon.core import YggdrasilCore
 from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.flow.model import Plan
@@ -586,12 +594,12 @@ class DraftingHandler:
         return f"{__name__}.DraftingHandler"
 
 
-class CallerTestCase(ConformingBuilders):
-    """A real ``YggdrasilCore`` planning two drafts, one into a refused slot.
+class PlanningTestCase(ConformingBuilders):
+    """A real ``YggdrasilCore`` whose project handler drafts the plans a test sets.
 
-    The first draft's slot holds a family-2 document, which this release must
-    not replace; the second draft's slot is empty. Subclasses choose the
-    backend with ``backend_type``.
+    The handler drafts no plan until a test or subclass sets
+    ``self.handler.plans``. Subclasses choose the backend with
+    ``backend_type``.
     """
 
     backend_type: type[SQLiteSlots] | type[CouchSlots] = SQLiteSlots
@@ -624,11 +632,24 @@ class CallerTestCase(ConformingBuilders):
         self.core.pdm = Mock()
         self.core.pdm.fetch_document_by_id.return_value = {"project_id": "P1"}
 
-        self.backend.raw_put(slot_document(REFUSED_ID, schema_version=2))
-        self.newer = self.backend.stored(REFUSED_ID)
-        handler: Any = DraftingHandler(make_plan(REFUSED_ID), make_plan(ACCEPTED_ID))
+        handler: Any = DraftingHandler()
         self.handler = handler
         self.core.subscriptions[EventType.PROJECT_CHANGE] = [handler]
+
+
+class CallerTestCase(PlanningTestCase):
+    """A real ``YggdrasilCore`` planning two drafts, one into a refused slot.
+
+    The first draft's slot holds a family-2 document, which this release must
+    not replace; the second draft's slot is empty. Subclasses choose the
+    backend with ``backend_type``.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.backend.raw_put(slot_document(REFUSED_ID, schema_version=2))
+        self.newer = self.backend.stored(REFUSED_ID)
+        self.handler.plans = (make_plan(REFUSED_ID), make_plan(ACCEPTED_ID))
 
     def assert_only_the_refused_draft_was_skipped(
         self, records: list[logging.LogRecord]
@@ -728,6 +749,234 @@ class TestCouchCallers(CallerScenarios, CallerTestCase):
     """The planning callers over PlanDBManager on a revision-enforcing fake client."""
 
     backend_type = CouchSlots
+
+
+# The planning callers that check a plan's slot before they write.
+PLAN_ONLY = "plan_only"
+RUN_ONCE = "run_once"
+CHECKING_CALLERS = (PLAN_ONLY, RUN_ONCE)
+
+# Slots holding a document the shared reader cannot use: how a builder-made
+# document is changed into one, and the version state its problem names.
+UNREADABLE_SLOTS = (
+    ("unversioned", {"schema_version": ABSENT}, "unversioned"),
+    ("invalid", {"schema_version": "1"}, "invalid"),
+    ("unsupported", {"schema_version": 2}, "unsupported"),
+)
+
+# What the overwrite check shows of a document it cannot read.
+UNKNOWN_LINES = (
+    "│ Status:     unknown",
+    "│ Origin:     unknown",
+    "│ Updated:    unknown",
+    "│ Run Token:  unknown (executed: unknown)",
+)
+
+# The title of the box in which planning shows an existing document.
+BOX_TITLE = "Existing Plan Found"
+
+
+class OverwriteTestCase(PlanningTestCase):
+    """Planning through plan-only and run-once, into slots tests fill directly."""
+
+    def put(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """Store doc as given, bypassing the plan store; return it as stored."""
+        self.backend.raw_put(doc)
+        stored = self.backend.stored(doc["_id"])
+        assert stored is not None
+        return stored
+
+    def plan(
+        self, caller: str, *plan_ids: str, force: bool
+    ) -> tuple[list[str], list[logging.LogRecord]]:
+        """Have caller plan plan_ids; return the IDs it persisted and what it logged.
+
+        Args:
+            caller: PLAN_ONLY or RUN_ONCE.
+            *plan_ids: The plans the handler drafts, in order.
+            force: Whether ``--force`` is given.
+
+        Returns:
+            tuple[list[str], list[logging.LogRecord]]: The plans persisted,
+            which run-once watches, and everything the yggdrasil loggers
+            logged at INFO or above.
+        """
+        self.handler.plans = tuple(make_plan(plan_id) for plan_id in plan_ids)
+        if caller == PLAN_ONLY:
+            with self.assertLogs("yggdrasil", level=logging.INFO) as logs:
+                persisted = self.core.create_plan_from_doc("P1", force_overwrite=force)
+            return persisted, logs.records
+        watch = AsyncMock(return_value=0)
+        with (
+            patch.object(self.core, "_run_once_watcher_loop", watch),
+            patch("yggdrasil.ops.consumer.FileSpoolConsumer"),
+            self.assertLogs("yggdrasil", level=logging.INFO) as logs,
+        ):
+            exit_code = self.core.run_once_with_watcher("P1", force_overwrite=force)
+        if watch.await_args is None:
+            self.assertEqual(exit_code, 1)
+            return [], logs.records
+        self.assertEqual(exit_code, 0)
+        return list(watch.await_args.kwargs["pending_plan_ids"]), logs.records
+
+    def boxes(self, records: list[logging.LogRecord]) -> list[list[str]]:
+        """Return each "Existing Plan Found" box logged, as its lines."""
+        found = [record for record in records if BOX_TITLE in record.getMessage()]
+        for record in found:
+            self.assertEqual(record.levelno, logging.WARNING)
+        return [record.getMessage().splitlines() for record in found]
+
+    def problems_line(self, box: list[str]) -> str:
+        """Return a box's one Problems line."""
+        (line,) = [line for line in box if line.startswith("│ Problems:")]
+        return line
+
+
+class OverwriteScenarios:
+    """Plan-only and run-once over a slot that already holds a document.
+
+    The check shows any stored document, readable or not, and stops planning
+    without ``--force``; with it, the replace rule decides. Mixed into one
+    test case per plan-store backend.
+    """
+
+    def test_an_unreadable_document_is_shown_and_kept_without_force(self):
+        stored = {
+            name: self.put(slot_document(f"pln_test_P1_{name}", **changes))
+            for name, changes, _ in UNREADABLE_SLOTS
+        }
+        sequence = self.backend.plan_seq()
+        for caller in CHECKING_CALLERS:
+            for name, _, state in UNREADABLE_SLOTS:
+                slot_id = f"pln_test_P1_{name}"
+                with self.subTest(caller=caller, slot=name):
+                    persisted, records = self.plan(caller, slot_id, force=False)
+
+                    self.assertEqual(persisted, [])
+                    self.assertEqual(self.backend.stored(slot_id), stored[name])
+                    self.assertEqual(self.backend.plan_seq(), sequence)
+                    (box,) = self.boxes(records)
+                    for line in UNKNOWN_LINES:
+                        self.assertIn(line, box)
+                    self.assertIn(f"so it is {state}", self.problems_line(box))
+                    self.assertIn(
+                        f"Plan '{slot_id}' already exists. Use --force to overwrite.",
+                        [record.getMessage() for record in records],
+                    )
+
+    def test_a_readable_document_is_shown_as_stored_and_kept_without_force(self):
+        stored = self.put(slot_document(PLAN_ID))
+        sequence = self.backend.plan_seq()
+        for caller in CHECKING_CALLERS:
+            with self.subTest(caller=caller):
+                persisted, records = self.plan(caller, PLAN_ID, force=False)
+
+                self.assertEqual(persisted, [])
+                self.assertEqual(self.backend.stored(PLAN_ID), stored)
+                self.assertEqual(self.backend.plan_seq(), sequence)
+                (box,) = self.boxes(records)
+                for line in (
+                    "│ Status:     draft",
+                    "│ Origin:     daemon",
+                    f"│ Updated:    {CREATED}",
+                    "│ Run Token:  0 (executed: -1)",
+                ):
+                    self.assertIn(line, box)
+                self.assertFalse([line for line in box if "Problems" in line])
+
+    def test_with_force_the_replace_rule_decides(self):
+        for caller in CHECKING_CALLERS:
+            with self.subTest(caller=caller):
+                unversioned_id = f"pln_test_{caller}_unversioned"
+                unsupported_id = f"pln_test_{caller}_unsupported"
+                unversioned = self.put(
+                    slot_document(unversioned_id, schema_version=ABSENT)
+                )
+                unsupported = self.put(slot_document(unsupported_id, schema_version=2))
+
+                persisted, records = self.plan(
+                    caller, unversioned_id, unsupported_id, force=True
+                )
+
+                # The unversioned slot is replaced by a new family-1 generation.
+                self.assertEqual(persisted, [unversioned_id])
+                replaced = self.backend.stored(unversioned_id)
+                assert replaced is not None
+                self.assertEqual(replaced["schema_version"], 1)
+                self.assertNotEqual(replaced["_rev"], unversioned["_rev"])
+                # The unsupported one is shown, then refused as before.
+                self.assertEqual(self.backend.stored(unsupported_id), unsupported)
+                boxes = self.boxes(records)
+                self.assertEqual(len(boxes), 2)
+                for box in boxes:
+                    self.assertIn("so it is", self.problems_line(box))
+                errors = [
+                    record.getMessage()
+                    for record in records
+                    if record.levelno >= logging.ERROR
+                ]
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("its schema_version 2 is unsupported", errors[0])
+
+
+class TestSQLiteOverwriteCheck(OverwriteScenarios, OverwriteTestCase):
+    """Plan-only and run-once over SQLitePlanStore."""
+
+
+class TestCouchOverwriteCheck(OverwriteScenarios, OverwriteTestCase):
+    """Plan-only and run-once over PlanDBManager on a revision-enforcing fake client."""
+
+    backend_type = CouchSlots
+
+    def test_a_malformed_response_is_never_taken_for_an_empty_slot(self):
+        stored = self.put(slot_document(PLAN_ID))
+        empty_id = "pln_test_P1_empty"
+        for caller in CHECKING_CALLERS:
+            for slot_id in (empty_id, PLAN_ID):
+                for name, body in (
+                    ("JSON null", None),
+                    ("a list", []),
+                    ("text", "not found"),
+                ):
+                    with self.subTest(caller=caller, slot=slot_id, body=name):
+                        # The read of the slot is answered with body, as a
+                        # proxy or a misrouted request might answer it.
+                        self.backend.server.read_responses.append(body)
+
+                        persisted, records = self.plan(caller, slot_id, force=False)
+
+                        self.assertEqual(persisted, [])
+                        (box,) = self.boxes(records)
+                        for line in UNKNOWN_LINES:
+                            self.assertIn(line, box)
+                        self.assertIn("not an object", self.problems_line(box))
+        self.assertIsNone(self.backend.stored(empty_id))
+        self.assertEqual(self.backend.stored(PLAN_ID), stored)
+
+    def test_a_failed_read_writes_nothing_and_shows_nothing(self):
+        stored = self.put(slot_document(PLAN_ID))
+        for caller in CHECKING_CALLERS:
+            for force in (False, True):
+                for name, error in (
+                    ("server error", FakeApiException(500, "Internal Server Error")),
+                    ("connection refused", RequestsConnectionError("refused")),
+                ):
+                    with self.subTest(caller=caller, force=force, error=name):
+                        self.backend.server.fail_next_read = error
+
+                        persisted, records = self.plan(caller, PLAN_ID, force=force)
+
+                        self.assertEqual(persisted, [])
+                        self.assertEqual(self.backend.stored(PLAN_ID), stored)
+                        self.assertEqual(self.boxes(records), [])
+                        # The caller reports the failure itself, unchanged.
+                        self.assertTrue(
+                            [
+                                record
+                                for record in records
+                                if record.exc_info and record.exc_info[1] is error
+                            ]
+                        )
 
 
 if __name__ == "__main__":
