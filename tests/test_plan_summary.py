@@ -43,6 +43,7 @@ from tests.plan_store_support import (
     make_plan,
 )
 from yggdrasil.contract import read
+from yggdrasil.contract.diagnostics import MAX_LENGTH, describe_recorded
 from yggdrasil.daemon.core import YggdrasilCore
 from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.storage.plan_documents import plan_summary_from_document
@@ -56,7 +57,9 @@ CORPUS_ID = "pln_lifecycle"
 # Every key of a summary, whatever the document.
 SUMMARY_KEYS = {
     "status",
+    "unrecognised_status",
     "execution_authority",
+    "unrecognised_execution_authority",
     "execution_owner",
     "updated_at",
     "realm",
@@ -152,7 +155,9 @@ class TestProjection(SummaryAssertions):
                     summary,
                     {
                         "status": doc["status"],
+                        "unrecognised_status": None,
                         "execution_authority": doc["execution_authority"],
+                        "unrecognised_execution_authority": None,
                         "execution_owner": doc["execution_owner"],
                         "updated_at": doc["updated_at"],
                         "realm": doc["realm"],
@@ -204,11 +209,23 @@ class TestNoDefaults(SummaryAssertions):
         self.shown = summarise(self.draft)
 
     def assert_only_unknown(
-        self, summary: dict[str, Any], field: str, problems: list[tuple[str, str]]
+        self,
+        summary: dict[str, Any],
+        field: str,
+        problems: list[tuple[str, str]],
+        **unrecognised: str,
     ) -> None:
-        """Assert only field differs from the draft's summary, as None, with problems."""
+        """Assert only field differs from the draft's summary, as None, with problems.
+
+        Args:
+            summary: The summary of the changed draft.
+            field: The field changed.
+            problems: The summary's problems, as (path, code).
+            **unrecognised: Unrecognised-text keys the change also sets.
+        """
         self.assertEqual(
-            {**summary, "problems": ()}, {**self.shown, field: None, "problems": ()}
+            {**summary, "problems": ()},
+            {**self.shown, field: None, **unrecognised, "problems": ()},
         )
         self.assertEqual(problem_sites(summary), problems)
 
@@ -260,7 +277,28 @@ class TestNoDefaults(SummaryAssertions):
             with self.subTest(field=field):
                 summary = summarise(changed(self.draft, field, word))
 
-                self.assert_only_unknown(summary, field, [])
+                # The word is kept beside the None, for display only.
+                self.assert_only_unknown(
+                    summary, field, [], **{f"unrecognised_{field}": word}
+                )
+
+    def test_only_text_outside_the_vocabulary_is_kept_as_unrecognised(self):
+        cases = (
+            ("an unknown word", "pending", "pending", []),
+            ("empty text", "", "", []),
+            ("another case", "Approved", "Approved", []),
+            ("a recognised word", "approved", None, []),
+            ("a number", 1, None, [("status", "wrong_type")]),
+            ("null", None, None, [("status", "wrong_type")]),
+            ("absent", ABSENT, None, [("status", "missing_field")]),
+        )
+        for case, value, kept, problems in cases:
+            with self.subTest(status=case):
+                summary = summarise(changed(self.draft, "status", value))
+
+                self.assertEqual(summary["unrecognised_status"], kept)
+                self.assertEqual(problem_sites(summary), problems)
+                self.assertIsNone(summary["unrecognised_execution_authority"])
 
     def test_no_owner_is_none_without_a_problem(self):
         for case, value in (("null", None), ("empty text", "")):
@@ -419,7 +457,9 @@ class StoreScenarios:
             summary,
             {
                 "status": "approved",
+                "unrecognised_status": None,
                 "execution_authority": "daemon",
+                "unrecognised_execution_authority": None,
                 "execution_owner": None,
                 "updated_at": stored["updated_at"],
                 "realm": REALM,
@@ -502,6 +542,10 @@ UNKNOWN_LINES = (
     "│ Run Token:  unknown (executed: unknown)",
 )
 
+# The lines of a box without a Problems line: the blank first line, the two
+# borders, and the plan ID, status, origin, update and tokens.
+BOX_LINES = 8
+
 
 class TestOverwriteBox(unittest.TestCase):
     """The "Existing Plan Found" box shows a summary, and planning stops without force."""
@@ -583,6 +627,58 @@ class TestOverwriteBox(unittest.TestCase):
 
         self.assertIn("│ Status:     draft", box)
         self.assertIn("│ Run Token:  unknown (executed: -1)", box)
+        (problem,) = summary["problems"]
+        self.assertIn(f"│ Problems:   {problem.message}", box)
+
+    def test_an_unrecognised_word_is_shown_beside_unknown_bounded_and_escaped(self):
+        long_text = "pending " * 500
+        cases = (
+            (
+                "a status",
+                "status",
+                "pending",
+                "│ Status:     unknown (recorded 'pending')",
+            ),
+            (
+                "an authority",
+                "execution_authority",
+                "cron",
+                "│ Origin:     unknown (recorded 'cron')",
+            ),
+            (
+                "control characters",
+                "status",
+                "held\n\x1b[31mred",
+                "│ Status:     unknown (recorded 'held\\n\\x1b[31mred')",
+            ),
+            (
+                "long text",
+                "status",
+                long_text,
+                f"│ Status:     unknown (recorded {describe_recorded(long_text)})",
+            ),
+            ("empty text", "status", "", "│ Status:     unknown (recorded '')"),
+        )
+        for case, field, value, expected in cases:
+            with self.subTest(case=case):
+                summary = summarise(changed(plan_document("draft"), field, value))
+
+                proceed, box, _ = self.check(summary)
+
+                self.assertFalse(proceed)
+                self.assertIn(expected, box)
+                self.assertLessEqual(
+                    len(expected), len("│ Status:     unknown (recorded )") + MAX_LENGTH
+                )
+                # One line, and still no problem: the box has no other lines.
+                self.assertEqual(len(box), BOX_LINES)
+
+    def test_a_status_that_is_not_text_is_shown_as_unknown_with_its_problem(self):
+        summary = summarise(changed(plan_document("draft"), "status", 1))
+
+        _, box, _ = self.check(summary)
+
+        self.assertIn("│ Status:     unknown", box)
         (problem,) = summary["problems"]
         self.assertIn(f"│ Problems:   {problem.message}", box)
 

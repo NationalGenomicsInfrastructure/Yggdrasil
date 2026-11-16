@@ -164,7 +164,10 @@ class PlanStore(Protocol):
         ``execution_owner``, ``updated_at``, ``realm``, ``run_token``,
         ``executed_run_token``, ``plan_generation`` and
         ``last_finalized_outcome``, each None when the reader does not
-        recognise it, and ``problems``, the reader's problems as a tuple of
+        recognise it; ``unrecognised_status`` and
+        ``unrecognised_execution_authority``, the recorded text of a status
+        or authority that is text but not a word the reader knows, else None;
+        and ``problems``, the reader's problems as a tuple of
         ``ContractProblem``. Every stored document has a summary, readable or
         not: one the reader cannot use, including one stored under another
         ID or a malformed response to the read, has every value None and

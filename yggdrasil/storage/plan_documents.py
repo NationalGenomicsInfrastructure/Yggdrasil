@@ -334,7 +334,9 @@ def warn_unsupported_omission(
 # The summary's values, every one None when the reader can use nothing.
 _SUMMARY_VALUES = (
     "status",
+    "unrecognised_status",
     "execution_authority",
+    "unrecognised_execution_authority",
     "execution_owner",
     "updated_at",
     "realm",
@@ -369,8 +371,15 @@ def plan_summary_from_document(document: object, *, plan_id: str) -> dict[str, A
         dict[str, Any]: The summary, with these keys:
 
         - ``status``: ``draft`` or ``approved``; None for any other value.
+        - ``unrecognised_status``: the recorded ``status``, when it is text
+          that is neither word, such as ``pending``; else None. It is shown
+          for information only: ``status`` stays None, and the reader does
+          not count an unrecognised word as a problem.
         - ``execution_authority``: ``daemon`` or ``run_once``; None for any
           other value.
+        - ``unrecognised_execution_authority``: the recorded
+          ``execution_authority``, when it is text that is neither word;
+          else None, as for ``unrecognised_status``.
         - ``execution_owner``: the run-once owner, when it is non-empty text.
         - ``updated_at``: the recorded text, when it names an instant.
         - ``realm``: the realm, when it is non-empty text.
@@ -397,7 +406,11 @@ def plan_summary_from_document(document: object, *, plan_id: str) -> dict[str, A
         updated_at = recorded.updated_at
         values = {
             "status": recorded.status.value,
+            "unrecognised_status": _unrecognised(recorded.status),
             "execution_authority": recorded.execution_authority.value,
+            "unrecognised_execution_authority": _unrecognised(
+                recorded.execution_authority
+            ),
             "execution_owner": recorded.execution_owner.value,
             "updated_at": (
                 updated_at.recorded if updated_at.value is not None else None
@@ -413,3 +426,19 @@ def plan_summary_from_document(document: object, *, plan_id: str) -> dict[str, A
             ),
         }
     return {**values, "problems": plan.problems}
+
+
+def _unrecognised(word: read.Recorded[str]) -> str | None:
+    """Return a word field's recorded text when it is text the reader does not know.
+
+    Args:
+        word: The field, as the reader recorded and recognised it.
+
+    Returns:
+        str | None: The recorded text, when the field holds text outside its
+        vocabulary; None when it is absent, null, not text or recognised.
+    """
+    recorded = word.recorded
+    if word.value is None and isinstance(recorded, str):
+        return recorded
+    return None

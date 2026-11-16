@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from yggdrasil.config.runtime_paths import resolve_event_spool, resolve_work_root
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.contract.problems import ContractProblem
 from yggdrasil.core.engine import Engine
 from yggdrasil.core.realm import RealmDescriptor, discover_realms
@@ -50,9 +51,24 @@ def _generate_run_once_owner() -> str:
 _SHOWN_PROBLEMS = 3
 
 
-def _shown(value: object) -> object:
-    """Return a plan summary's value for the overwrite box: ``unknown`` for None."""
-    return "unknown" if value is None else value
+def _shown(value: object, unrecognised: object = None) -> object:
+    """Return a plan summary's value for the overwrite box.
+
+    Args:
+        value: The value the shared reader recognised; None for none.
+        unrecognised: The recorded text the reader did not recognise in the
+            same field, if the summary has one.
+
+    Returns:
+        object: The value; for None, ``unknown``, followed by the
+        unrecognised text, if any, bounded and escaped by
+        ``describe_recorded`` so that it stays on one line.
+    """
+    if value is not None:
+        return value
+    if unrecognised is None:
+        return "unknown"
+    return f"unknown (recorded {describe_recorded(unrecognised)})"
 
 
 def _problems_text(problems: Sequence[ContractProblem]) -> str:
@@ -793,10 +809,13 @@ class YggdrasilCore:
         not, is shown at WARNING in an "Existing Plan Found" box: its status,
         origin (execution authority), last update and tokens, as the shared
         reader recognises them, with ``unknown`` for each value it does not.
-        Only when the reader found problems does the box add a Problems
-        line: the first three messages and how many more there are. Planning
-        then stops unless force is set. Whether a forced replacement may
-        happen is decided when the plan is saved.
+        A status or origin recorded as text the reader does not know, such
+        as ``pending``, is shown beside ``unknown``, bounded and escaped:
+        ``unknown (recorded 'pending')``. It is shown for information only,
+        and decides nothing. Only when the reader found problems does the box
+        add a Problems line: the first three messages and how many more there
+        are. Planning then stops unless force is set. Whether a forced
+        replacement may happen is decided when the plan is saved.
 
         Args:
             plan_doc_id: The exact plan document ID to check
@@ -822,8 +841,11 @@ class YggdrasilCore:
         )
         values: list[object] = [
             plan_doc_id,
-            _shown(summary["status"]),
-            _shown(summary["execution_authority"]),
+            _shown(summary["status"], summary.get("unrecognised_status")),
+            _shown(
+                summary["execution_authority"],
+                summary.get("unrecognised_execution_authority"),
+            ),
             _shown(summary["updated_at"]),
             _shown(summary["run_token"]),
             _shown(summary["executed_run_token"]),
