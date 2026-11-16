@@ -6,10 +6,11 @@ This release provides:
 
 - JSON Schemas for the plan document, the `plan_status` snapshot and the attempt report, and `validate` to check a document against them (see [Checking a document](#checking-a-document));
 - `schema_version`, written on every plan document and snapshot that Yggdrasil builds;
-- small runtime checks in `yggdrasil.contract`: the version reader (`versions.version_of`), the token rule (`controls.token_pair`), the failure-policy and execution-field checks (`controls`) and the canonical timestamp check (`timestamps`);
-- their enforcement wherever Yggdrasil acts on a stored plan document: when planning replaces a plan's document, on both stores and in run-once too; when the daemon or run-once admits a plan for execution; and when a result is recorded.
+- the shared reader, `yggdrasil.contract.read`, which gives every program that reads these documents the same interpretation of them (see [The shared reader](#the-shared-reader));
+- small runtime checks in `yggdrasil.contract`: the version reader (`versions.version_of`), the token rule (`controls.token_pair`), the failure-policy and execution-field checks (`controls`), and the timestamp check, reader and formatter (`timestamps.is_canonical`, `parse_timestamp` and `canonical_text`);
+- their enforcement wherever Yggdrasil acts on a stored plan document: when planning replaces a plan's document, on both stores and in run-once too; when PlanWatcher and the plan stores' recovery listing judge whether a plan is eligible; when the daemon or run-once admits a plan for execution; and when a result is recorded.
 
-It provides no library for reading these documents, and no helpers for approving or rerunning a plan. A program that reads or changes them applies the rules on this page itself. A direct `Engine.run(plan)` call receives a `Plan` model, not a stored document, so no version check applies to it.
+Any program that reads these documents can use the shared reader instead of applying the rules on this page itself. There are no helpers for approving or rerunning a plan: a program that changes a document applies the rules of [Approving or rerunning by hand](#approving-or-rerunning-by-hand) itself. A direct `Engine.run(plan)` call receives a `Plan` model, not a stored document, so no version check applies to it.
 
 ---
 
@@ -18,12 +19,12 @@ It provides no library for reading these documents, and no helpers for approving
 | Document | Store and ID | Written by | Read by | Schema |
 |---|---|---|---|---|
 | Plan document | `yggdrasil_plans` on CouchDB, or the `plans` namespace of the dev SQLite file; `_id` is the plan ID | Yggdrasil planning, which creates and regenerates it; Yggdrasil's finalizer, which records results; approval and rerun actors | PlanWatcher, the execution coordinator, the engine, approval integrations and interfaces | `plan_document`, family 1 |
-| `plan_status` snapshot | `yggdrasil_ops` on CouchDB, or the `operations_snapshots` namespace of the dev SQLite file; `_id` is `<partition>:plan_status:<realm>:<plan_id>` | the ops consumer | interfaces that display execution status | `plan_status`, family 1 |
+| `plan_status` snapshot | `yggdrasil_ops` on CouchDB, or the `operations_snapshots` namespace of the dev SQLite file; `_id` is `<partition>:plan_status:<realm>:<plan_id>`, where the partition is the plan's scope, `<kind>-<id>` (see [The `plan_status` snapshot](#the-plan_status-snapshot)) | the ops consumer | interfaces that display execution status | `plan_status`, family 1 |
 | Attempt report | Inside the plan document, as `last_finalized_execution.report`; also in the event spool, as the attempt's `plan.attempt_report` event | the engine | the finalizer, the ops consumer, interfaces | `attempt_report`, a component that the plan-document schema references. It has no `schema_version` of its own |
 
 The snapshot does not embed the report. Its `attempt` copies six of the report's fields (`ended_at`, `termination_reason`, `outcome`, `is_drained`, `counts` and `diagnostic`), and its step entries are derived from the report's outcomes and failures.
 
-These have no published shape and are not part of the contract: the event records in the spool, whose only reader is the ops consumer (the report a `plan.attempt_report` event carries is the attempt report above, but the event around it is not); watcher checkpoints and store metadata; the source documents that realms watch, such as project documents; work directories and their `success.fingerprint` markers; the SQLite file's table layout; and the plan summary that the plan stores return (`get_plan_summary`), which fills in display defaults for missing fields.
+These have no published shape and are not part of the contract: the event records in the spool, whose only reader is the ops consumer (the report a `plan.attempt_report` event carries is the attempt report above, but the event around it is not); watcher checkpoints and store metadata; the source documents that realms watch, such as project documents; work directories and their `success.fingerprint` markers; the SQLite file's table layout; and the plan summary that the plan stores return (`get_plan_summary`). That summary is a projection of the shared reader's `read_plan`, made for planning's "Existing Plan Found" warning, and it has no display defaults: a value the reader cannot use is `None`, and the summary's `problems` say why.
 
 ---
 
@@ -129,7 +130,7 @@ Family 1. The ops consumer's projection of one plan's latest observed attempt. H
 | Field | Content |
 |---|---|
 | `schema_version` | `1` |
-| `_id` | `<partition>:plan_status:<realm>:<plan_id>` |
+| `_id` | `<partition>:plan_status:<realm>:<plan_id>`. The partition is `<kind>-<id>`, from the plan's scope, with its kind as recorded, for every kind: `project-P1`, `flowcell-FC1`, `test_scenario-S1`. So a project plan's snapshot is `project-P1:plan_status:test_realm:pln_example` |
 | `type` | `"plan_status"` |
 | `realm`, `plan_id` | The plan |
 | `scope` | The scope the attempt's events carry, with `kind` and `id` |
@@ -137,6 +138,8 @@ Family 1. The ops consumer's projection of one plan's latest observed attempt. H
 | `attempt` | `null` for a legacy projection. Otherwise `execution_id`, `plan_generation`, `run_token`, `failure_policy`, `execution_authority`, `execution_owner`, `started_at` and `state` (`"running"` or `"finished"`), then the six fields copied from the report: `ended_at`, `termination_reason`, `outcome`, `is_drained`, `counts` and `diagnostic` |
 | `steps` | One entry per step, keyed by step ID: `step_name`, `state`, `outcome`, `run_id`, `fingerprint`, `progress`, `artifacts`, `metrics`, `job`, `ts`, `error`, `direct_blockers` and `failed_ancestors` |
 | `updated_at` | When the snapshot was last written |
+
+A program that looks a snapshot up derives its ID with `yggdrasil.contract.read.snapshot_id(realm, scope_kind, scope_id, plan_id)`, or with `snapshot_id_for(plan_document, plan_id=...)` from the plan document, never with its own copy of the rule. Both return `None` when the realm, the scope's kind or ID, or the plan ID is not a non-empty string. Earlier releases wrote `proj-<id>` and `fc-<id>` for the scope kinds `project` and `flowcell` (see [Upgrading and rolling back](#upgrading-and-rolling-back)).
 
 A step's `state` is the type of the step event its entry was read from (`step.succeeded`, `step.skipped`, `step.failed`, `step.blocked`, or the latest event of a step still running). A step without one is `pending`, `interrupted` or `unreached`, or, in a legacy projection, `unknown`.
 
@@ -288,13 +291,110 @@ Strict means honest, not idealized. The schemas describe what producers delibera
 
 Suppose a later release adds an optional field to snapshot step entries. A reader built for this release ignores it and shows everything else. Validating that snapshot against this release's closed schema would reject it, which is why readers do not validate.
 
+**What invalidates a snapshot as a whole.** A few faults leave nothing in a snapshot to read, and no step inventory comes from it, not even in part. A snapshot read for a plan or realm that its `plan_id` or `realm` does not name is `identity_mismatch`. One with a structural fault is `invalid_structure`. The structure is:
+
+- `projection` is `"attempt"` or `"legacy"`;
+- an attempt projection's `attempt` is an object with a non-empty `execution_id`, and a legacy projection records no attempt;
+- `steps` is an object of entries keyed by non-empty step IDs, each entry an object;
+- every step entry, whatever its status, carries both blocker lists, `direct_blockers` and `failed_ancestors`, each a list of step IDs.
+
+**Every other problem costs only the answers that depend on it.** It is a problem with a path and a code, and the answers that do not depend on that field stay available. A bad step time leaves the step's status, the other steps, the attempt and the plan's request state. An unreadable progress value, error or step name leaves the step's status. An attempt field of the wrong type leaves the attempt's other fields and the steps. No snapshot problem makes a supported plan unreadable, or blocks approving or rerunning it. An absent required key is `missing_field`, never read as `null`. A step entry without its `state` or its `outcome` key gets its own `missing_field` problem for each absent key: its status is `unknown`, no contradiction is flagged, and its other fields are still read, each with its own problems.
+
 **Control state is explicit.** A family-1 plan document carries every control field listed under [Required fields](#required-fields). A missing, `null` or malformed control field is invalid control state, never a default: there is no "an absent `run_token` means 0" and no "an absent failure policy means `fail_fast`". A reader keeps the diagnostic and refuses the conclusions and actions that depend on the field. The execution tokens follow one rule, the same everywhere, including in Yggdrasil's executor (see [When a plan is admitted for execution](#when-a-plan-is-admitted-for-execution)).
+
+### The shared reader
+
+`yggdrasil.contract.read` applies the rules of this page as code. Yggdrasil decides with it: PlanWatcher, the plan stores' recovery listing and admission judge eligibility through it, and the plan summary is built from it. Any program that reads these documents can call it too, so that two readers of the same document reach the same conclusions.
+
+| Function | What it gives | Checks the version |
+|---|---|---|
+| `read_plan(document, *, plan_id)` | `PlanRead`: what a plan document establishes on its own. Its version state, its recorded fields, its generation, token pair and failure policy, its approval, the current request's state, the last finalized record, eligibility, the planned steps and the snapshot's ID | First |
+| `read_snapshot(document, *, plan_id, realm)` | `SnapshotRead`: what a `plan_status` snapshot establishes on its own. Its projection, when it was written, the observed attempt, and each step's status and observations | First |
+| `correlate(plan, snapshot)` | `Correlation`: what a plan and its snapshot establish together | Through its two reads |
+| `request_state(document, *, plan_id)` | The current request's state, as `read_plan` gives it | First |
+| `eligibility(document)`, `is_eligible(document)`, `eligibility_reason(document)` | Whether Yggdrasil would execute the plan: the decision, with its code, reason and problems; the decision as a boolean; its reason | First |
+| `generation_of`, `finishes_request`, `step_status`, `partition_name`, `snapshot_id`, `snapshot_id_for` | Value helpers: a plan's generation, whether an attempt's ending finishes its request, a step's status from its recorded state and outcome, and snapshot IDs | No |
+
+**Version first.** Every whole-document read starts with `schema_version`. An unversioned, invalid or unsupported document is inspect-only: the result carries its version state, one problem at `schema_version` and the body as given, and nothing is derived from it. A body that is not a JSON object is invalid, and nothing is derived from it either. The value helpers check no version: they are for a caller that has already established the family, as Yggdrasil's gates do.
+
+**What a caller passes.** The stored body, as the store returned it, whatever its shape. When the store gave no body, the caller passes a sentinel that says why: `MISSING` when the store confirmed that there is no document, `UNAVAILABLE` when the read failed. For a snapshot whose ID cannot be derived, it passes `LOOKUP_IMPOSSIBLE` to `correlate`. A missing document, an unavailable one, one that cannot be looked up and an invalid one are four different answers, and none is taken for another.
+
+**Typed equality.** An ID, a generation, a policy, an outcome or a termination reason matches only as a non-empty string, and a token only as an integer that is not a boolean: `true` never equals `1`, and `"5"` never equals `5`. A value of the wrong type is a `wrong_type` problem, and every comparison treats it as missing, so it neither confirms nor contradicts anything.
+
+**What comes back.**
+
+- `PlanRead`, `SnapshotRead` and `Correlation`, frozen dataclasses holding tuples. Each answer the reader derives sits beside the value it came from. A field it interprets is a `Recorded` value: `value`, the recognised value or `None`; `recorded`, what the document holds there; and `present`, whether the key is there at all. A `status` of `"pending"` is `value` `None` with `recorded` `"pending"`. The body itself is kept as given, as `document`.
+- `problems`, a tuple of `ContractProblem`, each with a `path` such as `plan.steps[0].deps` or `steps["lane_1/demux"].state`, a `code` and a `message`. The codes are those of `validate` (see [Checking a document](#checking-a-document)) and the reader's own: `identity_mismatch`, `invalid_structure`, `record_report_disagree`, `conflicting_endings`, `identity_conflict`, `step_record_contradiction`, `invalid_failure_policy` and `invalid_execution_definition`.
+- A `RequestState`, which says whether the current request is `finished`. It gives the request's `outcome` and `termination_reason` only when its completion is recorded (`executed_run_token` equals `run_token`) and the last finalized record is usable, agreeing with its report, and belongs to that request. `finalized_is_current` says whether that record belongs to the current request. `request_state` returns `None` when the plan cannot supply a request state: it is missing, unavailable, not an object, inspect-only, or stored under another ID.
+- An `Eligibility`, with `eligible`, a `code` and a `reason`. The codes are checked in this order: `invalid_document` (not a JSON object), `unsupported_document` (the `schema_version` is absent, invalid or unsupported), `invalid_tokens`, `status_missing`, `not_approved`, `already_executed`, and otherwise `eligible`. `read_plan` adds `identity_mismatch`, for a document stored under another ID than the one it was read for. The reason is for people; a program decides on the code.
+
+A `Correlation` holds three verdicts, each with a reason from a closed set:
+
+| Verdict | Question | Values | Reasons |
+|---|---|---|---|
+| `plan_and_observation` | Did the observed attempt run the plan's generation? | `same_generation`, `different_generation`, `unknown` | `generations_equal`, `generations_differ`, `plan_generation_missing`, `attempt_generation_missing` |
+| `finalized_and_observation` | Is the observed attempt the execution that the plan's finalized record describes? | `same_execution`, `different_execution`, `unknown` | `execution_ids_equal`, `execution_ids_differ`, `identity_conflict`, `execution_id_missing`, `nothing_finalized`, `finalized_unusable` |
+| `request_and_observation` | Does the observed attempt belong to the plan's current request? | `current`, `other`, `unknown` | `generation_and_run_token_equal`, `generations_differ`, `run_tokens_differ`, `plan_generation_missing`, `attempt_generation_missing`, `plan_run_token_missing`, `attempt_run_token_missing` |
+
+Each verdict can also be `unknown` because there is no attempt to compare, with one of the reasons `plan_not_usable`, `lookup_impossible`, `no_observation`, `observation_unavailable`, `observation_inspect_only`, `observation_invalid` or `legacy_projection`. The sets are exported as `PLAN_OBSERVATION_REASONS`, `FINALIZED_OBSERVATION_REASONS` and `REQUEST_OBSERVATION_REASONS`, for a program to map onto its own words.
+
+An observed attempt is `current` only when the generation and the run token are each valid on both sides, and equal. A difference in either makes it `other`, even when the other value is missing; anything less is `unknown`, since missing information is never a mismatch. `finalized_is_current` follows the same rule for the finalized record, which also has to name the plan's ID. `conflicting_endings` holds both endings when the observed attempt is the execution the finalized record describes, has finished with a recognised outcome, and records another outcome or termination reason than the record.
+
+**Guarantees.**
+
+- *Pure*: the reader reads no storage, clock or configuration. Everything comes from its arguments.
+- *Silent*: it never logs. A caller that refuses, skips or leaves out a document on its answer reports that itself, as Yggdrasil does (see [Log lines](#log-lines)).
+- *Never raising on stored content*: no stored value, of any shape, makes it raise. Whatever is wrong with a body is a problem in the result.
+- *Immutable results that carry the recorded values*, as above.
+- *Bounded diagnostics*: messages show recorded values through `yggdrasil.contract.diagnostics.describe_recorded`, shortened. Only the body a caller passed in is unbounded.
+- *Standard library only*: importing `yggdrasil.contract.read` loads neither the CouchDB client, nor the daemon, nor any third-party library.
+- *Typed*: the results are typed dataclasses, and the package ships `py.typed`, so a caller's type checker covers its calls into the reader.
+
+**Reading a plan with its snapshot.** Read the plan under the ID it was looked up by. Its `snapshot_id` names its snapshot. When that is `None`, the snapshot cannot be looked up, and `correlate` takes `LOOKUP_IMPOSSIBLE` as it is. Otherwise, read what the store returns for that ID with `read_snapshot`, for the plan's ID and under the realm the plan records, passing `MISSING` or `UNAVAILABLE` when the store has no body, and correlate the two reads. How a program fetches the documents is its own:
+
+```python
+from yggdrasil.contract.read import LOOKUP_IMPOSSIBLE, correlate, read_plan, read_snapshot
+
+plan = read_plan(plan_body, plan_id=plan_id)
+realm = plan.recorded.realm.value if plan.recorded is not None else None
+if plan.snapshot_id is None or realm is None:
+    correlation = correlate(plan, LOOKUP_IMPOSSIBLE)
+else:
+    snapshot_body = ...  # the body stored under plan.snapshot_id, or MISSING or UNAVAILABLE
+    snapshot = read_snapshot(snapshot_body, plan_id=plan.plan_id, realm=realm)
+    correlation = correlate(plan, snapshot)
+```
+
+A plan has a `snapshot_id` only when it records a realm, so the second condition changes no answer: it tells a type checker that `realm` is a string.
+
+**Caller errors.** A mistake in how the reader is called is the caller's, and raises: `read_plan`, `request_state` or `read_snapshot` given a `plan_id` or `realm` that is not a non-empty string, or given `LOOKUP_IMPOSSIBLE`, which only `correlate` takes; `eligibility`, `is_eligible` or `eligibility_reason` given a sentinel instead of a body; and `correlate` given an argument that is not a read (`TypeError`), reads of two different plans, or a snapshot read for another realm than the plan records (`ValueError`). Nothing a stored body holds raises.
 
 ### Timestamps
 
-Every timestamp that Yggdrasil writes in a plan document or a snapshot is an RFC 3339 date-time in UTC, to the whole second, ending in `Z`: `YYYY-MM-DDTHH:MM:SSZ`, such as `2026-10-22T10:00:00Z`. With one spelling per instant, two timestamps of the same instant are also equal as text. The schemas publish this spelling as a `pattern`, so any JSON Schema validator enforces it.
+**What writers write.** Every timestamp that Yggdrasil writes in a plan document or a snapshot is canonical: an RFC 3339 date-time in UTC, ending in `Z`, naming a real date and time in the years 0001 to 9999. It is either to the whole second, `YYYY-MM-DDTHH:MM:SSZ` such as `2026-10-22T10:00:00Z`, or has a fraction of one to six digits whose last digit is not `0`, such as `2026-10-22T10:00:00.25Z`. With one spelling per instant, two canonical timestamps of the same instant are also equal as text. The schemas publish this spelling as a `pattern`, so any JSON Schema validator enforces it. `yggdrasil.contract.timestamps.is_canonical(value)` checks it, and `canonical_text(instant)` writes a timezone-aware `datetime` in it, to the exact microsecond.
 
-Earlier releases wrote plan-document timestamps ending in `+00:00`. Readers accept any valid RFC 3339 UTC form; writers produce only the canonical one.
+Yggdrasil's clocks write whole seconds. A fraction appears only where a caller supplies a time, which is then kept exactly. Earlier releases wrote plan-document timestamps ending in `+00:00`.
+
+**What readers read.** A reader reads a recorded timestamp for the instant it names, more tolerantly than writers write: being canonical is not a condition. `yggdrasil.contract.timestamps.parse_timestamp(value)` returns that instant as a timezone-aware `datetime` in UTC, or `None`, and never raises. It reads:
+
+- any RFC 3339 date-time, with `T` or `t`, and `Z`, `z` or a numeric offset. An offset is converted to UTC: `2026-11-06T11:20:30+01:00` is `2026-11-06T10:20:30Z`;
+- the timezone-aware ISO 8601 forms that Python 3.11's `datetime.fromisoformat` reads: a space or a lowercase `t` between the date and the time, the compact `20261106T102030Z`, a week date such as `2026-W45-5T10:20:30Z`, a time without seconds or minutes, a comma before the fraction, and an offset with seconds.
+
+Nothing is guessed. These are unknown:
+
+- text without a timezone, such as `2026-11-06T10:20:30`: no timezone is assumed;
+- a fraction of more than six digits, after `.` or `,`, in the time or in the offset: precision is never rounded or truncated;
+- digits after the seconds of the time or of the offset that neither `.` nor `,` introduces, such as `2026-11-06T10:20:30:1234567+00:00` or `2026-11-06T10:20:307Z`: a fraction is read only after `.` or `,`. A colon or a digit between the date and the time looks the same, and is unknown too, as in `2026-11-06:10:20:30Z`;
+- text that contains a NUL character;
+- a date or time that does not exist, such as `2026-11-06T24:00:00Z`, an ordinal date such as `2026-310T10:20:30Z`, an offset of 24 hours or more, and an instant outside the years 0001 to 9999 once converted to UTC;
+- `2026-11-06 10:20:30z`: a lowercase `z` is read only in the RFC 3339 form;
+- a value that is not a string.
+
+Yggdrasil's tests pin these forms with named cases, each with the instant it must give, so that a Python upgrade that changes what the parser reads fails them, and the change is reviewed as a change of the reader rather than absorbed. They do not promise that every form ISO 8601 allows is read. The shared reader reports a timestamp it cannot read as `bad_timestamp` at its field, keeps the recorded value, and loses only the answers that depend on that time.
+
+**Event time.** A snapshot step's `ts` is the time its event carries, and a realm may set it. The schema does not constrain it, and it is not a contract timestamp. A reader reads it as above when it can, and keeps it as recorded when it cannot. `null` means the step has no time, which is not a problem.
+
+**Since v0.6.0.** A canonical timestamp may carry a fraction of a second, and readers read the forms above, numeric offsets converted to UTC. This replaces the earlier rule of this contract, whole seconds only, under which readers accepted any valid RFC 3339 UTC form. The change is specified in **Document Contract: Shared Reader**.
 
 ---
 
@@ -314,9 +414,9 @@ It refuses a document whose `schema_version` is invalid or names a family this r
 
 The replacement keeps the document's creation instant, `created_at`, spelled canonically:
 
-- Over an unversioned document, a valid value that an earlier release wrote, a whole-second UTC time ending in `Z` or `+00:00`, is re-spelled with `Z`. The instant is the same.
-- Over a supported document, the value must already be canonical, and it is kept as it is.
-- Anything else is refused: a missing value, one that is not a real RFC 3339 date-time, a fraction of a second, another offset. The build time is never substituted, and precision is never truncated.
+- Over an unversioned document, a valid value that an earlier release wrote, a whole-second UTC time ending in `Z` or `+00:00`, is re-spelled with `Z`. The instant is the same. Earlier releases never wrote a fraction of a second, so a value with one is refused there.
+- Over a supported document, the value must already be canonical, and it is kept as it is, a canonical fraction included.
+- Anything else is refused: a missing value, one that is not a real RFC 3339 date-time, another offset, a fraction that is not canonical. The build time is never substituted, and precision is never truncated.
 
 Planning checks no other timestamp, and eligibility, admission and finalization check none.
 
@@ -350,7 +450,7 @@ A refused request is allocated no execution ID: nothing is reserved, published o
 
 Nothing is defaulted or converted: a missing token, `"5"`, `5.0` and `true` are all invalid. The upper bound keeps every token exactly representable in every JSON client, browsers included. `yggdrasil.contract.controls.token_pair(document)` applies the rule; eligibility, admission and finalization all use it.
 
-An eligible plan reaches the coordinator whatever its `schema_version`, because eligibility judges only status and tokens. So every approved, eligible pre-contract plan is logged as `UNSUPPORTED_DOCUMENT` each time it is observed. A plan whose tokens are invalid is not eligible, and PlanWatcher skips it without handing it over (see [Plan is approved but Engine never runs it](troubleshooting.md#plan-is-statusapproved-but-engine-never-runs-it)).
+**Eligibility checks the family first**, then the tokens and the status, in the order given in [The shared reader](#the-shared-reader). A plan of no supported family is not eligible, whatever its status and tokens say, and PlanWatcher hands the coordinator only eligible plans. Within its execution authority and run-once owner, the watcher logs at WARNING each plan it does not hand over because its `schema_version` is absent, invalid or unsupported, or because its tokens are invalid or its `status` is missing, since someone has to change the plan before it can run (see [Log lines](#log-lines), and [Plan is approved but Engine never runs it](troubleshooting.md#plan-is-statusapproved-but-engine-never-runs-it)). It reports a plan where it evaluates it: any later change to the plan reports it again, and so do a replay of the change feed and run-once's recovery scan, while a poll that brings no change repeats nothing. A draft, a request already finished, and any plan outside its authority or owner are skipped at DEBUG. The plan stores' recovery listing, which a full recovery scan reads, leaves out every plan of no supported family with a WARNING for each, and other ineligible plans silently. The coordinator's family check, step 2 above, stays for a caller that bypasses the watcher, and for a document that leaves the family after the watcher saw it.
 
 **Refused, or rejected by preflight.** A refused request never starts an attempt, so it has no report. That includes every refusal above, and a plan whose realm or plan ID cannot name one directory, which the engine refuses before an attempt starts (`ADMISSION_FAILED` through the coordinator). A step graph that preflight rejects belongs to an attempt that has started: that attempt has a report, with `termination_reason: "preflight_rejected"` (see [Which endings finish a request](plan_execution.md#which-endings-finish-a-request)).
 
@@ -369,9 +469,11 @@ Recording a finished request is an update: the finalizer changes only `executed_
 `INVALID_CONTROL_STATE` is logged at ERROR. The result is not recorded, not dropped, and not retried until the document changes: it is kept as a **pending finalization**, and the plan is not executed again while it is pending (see [When a result cannot be recorded](plan_execution.md#when-a-result-cannot-be-recorded)). A pending result is:
 
 - kept pending while the plan's tokens are not a valid pair, or recording the result would make them invalid, and through a failed storage read or one that is not the stored document;
-- dropped, without writing, when the plan's document is no longer of the family the result was captured under. This is logged at WARNING with the execution ID; the result is never recorded and never retried, and its report stays in the event spool and in the snapshot;
+- dropped, without writing, when the coordinator reads the plan's document and finds it no longer of the family the result was captured under. This is logged at WARNING with the execution ID; the result is never recorded and never retried, and its report stays in the event spool and in the snapshot;
 - dropped when the plan is regenerated or deleted, and when its authority changes, though only once its tokens are valid;
 - settled when its result turns out to be recorded already.
+
+Each of these is decided when the coordinator reads the plan's document, which it does when PlanWatcher hands the plan over. The watcher does not hand over a document of no supported family, so while the document is outside the family, the result stays pending in memory. Restoring the family and the generation with the same `run_token` leaves it pending; restoring them with a newer `run_token` buys one round of tries to record it; and a regenerated plan, normally a draft, supersedes it without writing it once the new generation is approved and read.
 
 ### When a read is not the stored document
 
@@ -390,15 +492,23 @@ A pending result survives either.
 
 ### Log lines
 
-| Situation | Level | Message |
-|---|---|---|
-| Planning refused to replace a plan | ERROR | `Planning refused to replace plan '<plan_id>': its <field> <value> is <reason> (supported plan-document families: [1]). The draft was not persisted; the stored plan is unchanged.` |
-| A plan of no supported family is observed | WARNING | `Plan '<plan_id>' is not executed: its schema_version is <value>, so it is <state> (supported plan-document families: [1]); nothing ran and nothing was written`. `<value>` is `absent` for an unversioned document |
-| Its pending result is dropped | WARNING | `Dropping the pending finalization of execution '<execution_id>': the schema_version of plan '<plan_id>' is now <value>, so it is <state> (supported plan-document families: [1]). The result is not recorded and is not retried; its report remains in the event spool` |
-| A missing execution field, or an unknown failure policy | ERROR | `Plan '<plan_id>' does not describe an executable request (<problems>); cannot execute`, with problems such as `plan.steps[1].deps is missing` or `plan.failure_policy 'Fail_Fast' is not one of ['continue_independent', 'fail_fast']` |
-| Invalid tokens, seen by PlanWatcher | DEBUG | `Skipping ineligible plan: <plan_id> (Not eligible: invalid tokens (<problems>))`, with problems such as `run_token '5' is a str, not a JSON integer` |
-| Invalid tokens at finalization | ERROR | `Cannot finalize execution '<execution_id>' of plan '<plan_id>' (...): the plan's tokens are not a valid pair (<problems>); nothing was written, and the result cannot be recorded until the plan's tokens change`, or `... would leave run_token <n> / executed_run_token <m>, which is not a valid pair (...)` |
-| A read that is not the stored document, at admission | ERROR | `Could not read plan '<plan_id>' to admit it for execution (PlanStoreError: The read of plan '<plan_id>' returned <what was read>, which is not the plan's stored document; the plan's stored state is unknown); it stays eligible` |
+| Situation | Level | Logger | Message |
+|---|---|---|---|
+| Planning refused to replace a plan | ERROR | `yggdrasil.daemon.core.YggdrasilCore` | `Planning refused to replace plan '<plan_id>': its <field> <value> is <reason> (supported plan-document families: [1]). The draft was not persisted; the stored plan is unchanged.` |
+| PlanWatcher sees a change to a plan of no supported family | WARNING | `yggdrasil.watchers.plan_watcher.PlanWatcher` | `Plan '<plan_id>' is not executed: its schema_version is <value>, so it is <state> (supported plan-document families: [1]); no execution event is emitted for it` |
+| PlanWatcher sees a change to a plan whose tokens are invalid or whose `status` is missing | WARNING | `yggdrasil.watchers.plan_watcher.PlanWatcher` | `Plan '<plan_id>' is not executed: its control state is malformed (<code>). <reason>; no execution event is emitted for it`, where `<code>` and `<reason>` are `invalid_tokens` and `Not eligible: invalid tokens (<problems>)`, with problems such as `run_token '5' is a str, not a JSON integer`, or `status_missing` and `Not eligible: status is missing (must be 'approved')` |
+| Run-once's recovery scan finds either of these | WARNING | `yggdrasil.watchers.plan_watcher.PlanWatcher` | `Recovery: ` followed by the line above |
+| PlanWatcher skips another ineligible plan within its scope, such as a draft | DEBUG | `yggdrasil.watchers.plan_watcher.PlanWatcher` | `Skipping ineligible plan: <plan_id> (<reason>)`, or, in run-once's recovery scan, `Recovery: requested plan <plan_id> is not eligible (<reason>)` |
+| The recovery listing leaves out a plan of no supported family | WARNING | The plan store's: `yggdrasil.storage.sqlite.SQLitePlanStore` or `yggdrasil.storage.couchdb.plan_store.PlanDBManager` | `Plan '<plan_id>' is not executed: its schema_version is <value>, so it is <state> (supported plan-document families: [1]); it is left out of the recovery listing` |
+| Admission reads a plan of no supported family | WARNING | `yggdrasil.daemon.core.YggdrasilCore` | `Plan '<plan_id>' is not executed: its schema_version is <value>, so it is <state> (supported plan-document families: [1]); nothing ran and nothing was written` |
+| Its pending result is dropped | WARNING | `yggdrasil.daemon.core.YggdrasilCore` | `Dropping the pending finalization of execution '<execution_id>': the schema_version of plan '<plan_id>' is now <value>, so it is <state> (supported plan-document families: [1]). The result is not recorded and is not retried; its report remains in the event spool` |
+| A missing execution field, or an unknown failure policy | ERROR | `yggdrasil.daemon.core.YggdrasilCore` | `Plan '<plan_id>' does not describe an executable request (<problems>); cannot execute`, with problems such as `plan.steps[1].deps is missing` or `plan.failure_policy 'Fail_Fast' is not one of ['continue_independent', 'fail_fast']` |
+| Invalid tokens at finalization | ERROR | The plan store's, as above | `Cannot finalize execution '<execution_id>' of plan '<plan_id>' (...): the plan's tokens are not a valid pair (<problems>); nothing was written, and the result cannot be recorded until the plan's tokens change`, or `... would leave run_token <n> / executed_run_token <m>, which is not a valid pair (...)` |
+| A read that is not the stored document, at admission | ERROR | `yggdrasil.daemon.core.YggdrasilCore` | `Could not read plan '<plan_id>' to admit it for execution (PlanStoreError: The read of plan '<plan_id>' returned <what was read>, which is not the plan's stored document; the plan's stored state is unknown); it stays eligible` |
+
+`<value>` is `absent` for an unversioned document, and otherwise the recorded value, shortened, such as `'1'`, `2` or `None`. `<state>` is `unversioned`, `invalid` or `unsupported`. Every line that refuses a plan for its `schema_version` contains `Plan '<plan_id>' is not executed: its schema_version is`, the phrase to search for; a recovery line has it after its `Recovery: ` prefix. The recovery listing shows the plan ID as the store holds it, shortened, so an ordinary ID reads `'<plan_id>'` there too.
+
+The logger is the name that the log file shows in brackets. In the daemon and in run-once, the execution coordinator logs through the core's logger, and the finalizer through the plan store's.
 
 ---
 
@@ -426,7 +536,7 @@ For a plan document or a snapshot, `validate` reads `schema_version` first. An u
 The plan_document does not conform to its contract (3 problems):
   [wrong_type] run_token '1' is a string, not an integer
   [unexpected_field] ticket is not a contract field, and its name matches none of ['^x_']
-  [bad_timestamp] updated_at '2026-10-22T09:30:00+00:00' is not a timestamp spelled canonically: whole seconds, in UTC, ending in Z, as in 2026-10-22T10:00:00Z
+  [bad_timestamp] updated_at '2026-10-22T09:30:00+00:00' is not a timestamp spelled canonically: in UTC, ending in Z, to the whole second or with a fraction of 1 to 6 digits not ending in 0, as in 2026-10-22T10:00:00Z or 2026-10-22T10:00:00.25Z
 ```
 
 Besides the schema, `validate` checks what JSON Schema cannot express: an integer is a JSON integer, never `1.0` or `true`; a timestamp names a date and time that exist; and a plan document's `executed_run_token` is not above its `run_token`. It checks no rule across fields or documents, such as whether a recorded execution matches the report it carries.
@@ -509,12 +619,16 @@ Here `store` is the `SQLiteInternalStore` of the dev database, and `reviewed` ho
 
 Upgrading changes no stored document. Documents written by earlier releases carry no `schema_version`, so they stay unversioned: Yggdrasil refuses to execute or update them until their realm regenerates them, and nothing stamps them. A document that already carries family 1 keeps running.
 
+An upgraded daemon's PlanWatcher logs, at WARNING, `Plan '<plan_id>' is not executed: its schema_version is absent, so it is unversioned (supported plan-document families: [1]); no execution event is emitted for it` each time it sees a change to an unversioned plan within its execution authority (see [Log lines](#log-lines)). These lines name the plans to regenerate.
+
 1. Upgrade every daemon and every host that runs `run-doc --run-once`.
 2. List the store's unversioned, invalid and unsupported documents (below).
 3. Regenerate the wanted plans through their realm. Planning replaces an unversioned slot with a family-1 document of a new generation, and keeps its `created_at` as described in [When planning replaces a plan](#when-planning-replaces-a-plan). Like any new generation, it needs a new approval unless its realm runs it automatically. Disposable development state can be reset instead: the dev SQLite file can be deleted.
 4. Upgrade the programs that read these documents and apply the version rules last. Before the plans are regenerated, they would show every plan as unversioned.
 
-Snapshots need nothing. Every snapshot's content changes with this release, since each one now carries `schema_version`, so the ops consumer writes every plan's snapshot again on its first cycle after the upgrade. Nothing is stamped or deleted automatically.
+Snapshots are written again, not converted. Every snapshot's content changes with this release, since each one now carries `schema_version`, so the ops consumer writes every plan's snapshot again on its first cycle after the upgrade, for each plan whose spool remains. The snapshots of plans whose scope kind is `project` or `flowcell` also get new IDs: their partitions are `project-<id>` and `flowcell-<id>`, where earlier releases wrote `proj-<id>` and `fc-<id>` (see [The `plan_status` snapshot](#the-plan_status-snapshot)). The consumer writes them under the new IDs. A plan whose spool is gone keeps only its snapshot under the old ID, which a reader that derives the new ID does not find. No stored snapshot is stamped, moved, copied or deleted. Cleaning up or copying the snapshots left under the old IDs is a separate step, which this release does not take.
+
+Code that imports from Yggdrasil has one import to change: `yggdrasil.storage.plan_eligibility` no longer exists. Code that imported `is_plan_eligible`, `get_eligibility_reason` or `APPROVED_STATUS` from it imports `yggdrasil.contract.read.is_eligible` and `eligibility_reason` (or `eligibility`, for the coded decision) and `yggdrasil.contract.fields.APPROVED` instead. Unlike the old functions of earlier releases, which judged status and tokens only, these check the family first, so an unversioned plan is not eligible.
 
 To list a store's documents by version state:
 
@@ -555,7 +669,7 @@ report_versions("plan_status", store.list_documents("operations_snapshots"))
 
 On CouchDB, pass it the `doc` of each row of `_all_docs?include_docs=true` in `yggdrasil_plans`, and in `yggdrasil_ops` those whose `type` is `"plan_status"`, leaving out design documents (`_design/...`).
 
-**Rolling back** to a release from before the contract is tolerable only while every stored document is family 1. Such a release ignores `schema_version` and executes family-1 documents correctly, but the documents it regenerates come out unversioned, and need regenerating again after rolling forward. Once any document of family 2 exists, rolling back to a release without the version boundary is not allowed.
+**Rolling back** to a release from before the contract is tolerable only while every stored document is family 1. Such a release ignores `schema_version` and executes family-1 documents correctly, but the documents it regenerates come out unversioned, and need regenerating again after rolling forward. Once any document of family 2 exists, rolling back to a release without the version boundary is not allowed. After a rollback, the earlier release's consumer writes the snapshot of each plan whose spool remains under its old ID again, with `proj-<id>` or `fc-<id>` for a project or flowcell, and the snapshots under the new IDs stay as they were.
 
 Events and the full report in the event spool have no published schema, but the engine that writes them and the ops consumer that reads them must agree. Do not run them across an incompatible change of what events or reports mean, and do not roll back across retained spool data of a newer meaning.
 
