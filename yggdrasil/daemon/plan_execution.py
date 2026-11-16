@@ -427,8 +427,9 @@ def _describe_attempt(report: AttemptReport) -> str:
 # Log level for each resolution; FINALIZED depends on the attempt's outcome.
 _LOG_LEVELS: dict[ExecutionStatus, int] = {
     ExecutionStatus.NOT_FOUND: logging.ERROR,
-    # A plan outside the supported families has to be regenerated: an
-    # operator's task, not a malfunction.
+    # A plan cannot run while its stored schema_version is absent, invalid
+    # or unsupported. That is a document for an operator to change, not a
+    # malfunction.
     ExecutionStatus.UNSUPPORTED_DOCUMENT: logging.WARNING,
     ExecutionStatus.NOT_AUTHORIZED: logging.INFO,
     ExecutionStatus.NOT_ELIGIBLE: logging.INFO,

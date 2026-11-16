@@ -308,11 +308,12 @@ def plan_model_from_document(
 def warn_unsupported_omission(
     logger: logging.Logger, plan_id: object, document: Mapping[str, Any]
 ) -> None:
-    """Report that a recovery listing leaves out a plan of an unsupported family.
+    """Report that a recovery listing leaves out a plan of no supported family.
 
-    Eligibility checks the family first, so a listing omits such a plan
-    whatever its status and tokens say, and it cannot run until it is
-    regenerated. The line names the plan, what its ``schema_version``
+    Eligibility checks the version first, so a listing omits a plan whose
+    stored ``schema_version`` is absent, invalid or unsupported, whatever its
+    status and tokens say: the plan cannot run while its stored version is
+    any of these. The line names the plan, what its ``schema_version``
     records and the supported families, in the words every refusal of a
     family uses.
 

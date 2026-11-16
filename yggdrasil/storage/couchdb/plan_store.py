@@ -435,8 +435,7 @@ class PlanDBManager(CouchDBHandler):
         """
         Query all approved plans that are pending execution.
 
-        Reserved for future daemon-startup recovery. Each document is judged
-        by the shared reader's eligibility decision
+        Each document is judged by the shared reader's eligibility decision
         (``yggdrasil.contract.read.eligibility``): of a supported family,
         with a valid token pair, approved, and with run_token >
         executed_run_token. Design documents are skipped first, silently. A
