@@ -427,7 +427,8 @@ These are small standard-library checks, not runtime schema validation.
   the failing path and reason. Timestamp `format`
   checking is switched on explicitly in producer validation; a `format`
   annotation alone enforces nothing. The canonical spelling itself (whole
-  seconds, `Z`) is published in the schemas as a `pattern`, which every JSON
+  seconds, `Z`; superseded in part, see the supersession note after section
+  14) is published in the schemas as a `pattern`, which every JSON
   Schema validator applies; the `format` check adds whether the date and time
   exist.
 - **Runtime checks** (the version boundary, readers, action preparation)
@@ -769,7 +770,7 @@ and rationale are stated in this PRD.
 | D2 | Version notation | Positive integer compatibility family per kind; the release identifies the schema edition. | **owner** (2026-10-20) |
 | D3 | Strictness | Strict and honest producer checks; tolerant readers (section 6). | agreed |
 | D4 | Actor fields | `approved_at`, `approved_by`, `run_requested_at`, `run_requested_by`; stable actor identifier; latest-action attribution only. | agreed |
-| D5 | Timestamps | New Yggdrasil timestamps use RFC 3339 with `Z`, seconds precision; readers accept any valid RFC 3339 UTC form; producer validation checks `format` explicitly. Why: one spelling per instant (today `+00:00` in plan documents and `Z` elsewhere, and the same instant in the two spellings is unequal as text), and one exact format for producer tests to check. Tidiness, not safety. One formatter, `ygg_time.utcnow_iso()` (9.1). | **owner** (2026-10-21) |
+| D5 | Timestamps | New Yggdrasil timestamps use RFC 3339 with `Z`, seconds precision; readers accept any valid RFC 3339 UTC form; producer validation checks `format` explicitly. Why: one spelling per instant (today `+00:00` in plan documents and `Z` elsewhere, and the same instant in the two spellings is unequal as text), and one exact format for producer tests to check. Tidiness, not safety. One formatter, `ygg_time.utcnow_iso()` (9.1). | **owner** (2026-10-21); superseded in part, see the supersession note after section 14 |
 | D6 | Placement | `yggdrasil.contract` in the bottom layer, standard-library imports, lightness test. | agreed |
 | D7 | Schema tooling | Handwritten JSON Schema 2020-12 resources; offline references; `jsonschema` for development and explicit validation only; `validate` adds procedural checks; standard-library runtime checks; no model-library migration (section 6.1). | agreed; handwritten authoring: engineering |
 | D8 | Version boundary | Update writers require a supported family equal to the captured one on every read; replace writers refuse malformed or unsupported slots; the executor checks first (section 7). | agreed; the two writer kinds: engineering |
@@ -784,6 +785,32 @@ and rationale are stated in this PRD.
 | D17 | Rollback and spool | As in section 11. | agreed |
 | D18 | Executor control checks | The strict token rule at all five sites and the failure-policy check at admission ship with this PRD, not **Document Contract: Shared Reader**, so that this PRD's "never a default" holds from its first release (sections 6, 7.2). | agreed |
 | D19 | Updates versus conformance | Builders' output conforms; update writers conform in the fields they own and do not certify what they keep; fixtures declare positive or negative expectations (section 5 rule 9, 9.2, 9.4). | agreed |
+
+**Supersession note (2026-11-16).** The timestamp rule of D5 is superseded
+in part by **Document Contract: Shared Reader**, section 4.10, decisions D18
+and D22. D5 and the implementation that section 16 records stay as they
+were decided and built. The rule in effect is:
+
+- **Producers.** A canonical timestamp is in UTC, ends in `Z`, and names a
+  real date and time in the years 0001 to 9999. It is to the whole second,
+  `2026-10-22T10:00:00Z`, or has a fraction of one to six digits, trimmed of
+  trailing zeros, `2026-10-22T10:00:00.25Z`, so each instant still has one
+  spelling. The schemas publish it as a `pattern` with a strict end of
+  string, and `maxLength` 27. The clocks, `ygg_time.utcnow_iso()` among
+  them, still write whole seconds: a fraction is written only where a caller
+  supplies a time. Planning keeps a supported document's canonical
+  `created_at`, a fraction included; over an unversioned document it still
+  re-spells only the whole-second `Z` and `+00:00` values that earlier
+  releases wrote.
+- **Readers.** "Any valid RFC 3339 UTC form" is replaced by RFC 3339 together
+  with the timezone-aware ISO 8601 forms that Python 3.11's
+  `datetime.fromisoformat` reads, numeric offsets converted to UTC. At most
+  six fractional digits are read, never truncated, and a fraction is read
+  only after `.` or `,`. No timezone is guessed.
+
+Producer conformance and reader interpretation stay distinct: a reader
+reads values that no producer may write, and a canonical spelling is not a
+condition for reading a value.
 
 ## 15. Open Questions
 
