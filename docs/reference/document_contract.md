@@ -37,8 +37,8 @@ Family 1. Every family-1 plan document carries the required fields below. A miss
 | Field | Content |
 |---|---|
 | `schema_version` | `1`, the document's compatibility family (see [Versions and compatibility](#versions-and-compatibility)) |
-| `_id` | The plan ID |
-| `realm` | The realm that planned it |
+| `_id` | The plan ID, one directory component (see [Plan IDs and realms](#plan-ids-and-realms)) |
+| `realm` | The realm that planned it, one directory component |
 | `scope` | `{"kind": ..., "id": ...}`, both non-empty strings. Any other key is the realm's |
 | `status` | `"draft"` or `"approved"`. Approval only, never an execution outcome |
 | `plan` | The execution definition: `plan_id`, `realm`, `scope`, `steps` and `failure_policy`. Each step has `step_id`, `name`, `fn_ref`, `params`, `deps`, `scope`, `inputs` and `outputs`. Neither `plan` nor a step has any other key |
@@ -132,7 +132,7 @@ Family 1. The ops consumer's projection of one plan's latest observed attempt. H
 | `schema_version` | `1` |
 | `_id` | `<partition>:plan_status:<realm>:<plan_id>`. The partition is `<kind>-<id>`, from the plan's scope, with its kind as recorded, for every kind: `project-P1`, `flowcell-FC1`, `test_scenario-S1`. So a project plan's snapshot is `project-P1:plan_status:test_realm:pln_example` |
 | `type` | `"plan_status"` |
-| `realm`, `plan_id` | The plan |
+| `realm`, `plan_id` | The plan's realm and ID, each one directory component (see [Plan IDs and realms](#plan-ids-and-realms)) |
 | `scope` | The scope the attempt's events carry, with `kind` and `id` |
 | `projection` | `"attempt"`, or `"legacy"` for a plan whose spool holds no observed attempt |
 | `attempt` | `null` for a legacy projection. Otherwise `execution_id`, `plan_generation`, `run_token`, `failure_policy`, `execution_authority`, `execution_owner`, `started_at` and `state` (`"running"` or `"finished"`), then the six fields copied from the report: `ended_at`, `termination_reason`, `outcome`, `is_drained`, `counts` and `diagnostic` |
@@ -155,7 +155,7 @@ What one execution attempt did, as the engine reports it. The report is versione
 
 | Field | Content |
 |---|---|
-| `execution_id`, `plan_id`, `plan_generation`, `run_token`, `failure_policy` | The attempt's identity, as captured with its execution request |
+| `execution_id`, `plan_id`, `plan_generation`, `run_token`, `failure_policy` | The attempt's identity, as captured with its execution request. `plan_id` is one directory component (see [Plan IDs and realms](#plan-ids-and-realms)) |
 | `started_at`, `ended_at` | When the attempt started and ended |
 | `termination_reason`, `outcome`, `is_drained` | How it ended, and whether every step that could run did |
 | `step_ids` | The plan's step IDs, in plan order |
@@ -168,6 +168,22 @@ What one execution attempt did, as the engine reports it. The report is versione
 | `counts` | The number of steps per outcome, plus `unreached` |
 
 The report describes what happened, including to plans that were malformed. `step_ids` and `unreached_step_ids` keep the plan's step IDs exactly as the plan gave them, so when preflight rejected a plan because a step ID was not a string, the report's entry is not a string either. `failure_policy` is the policy the attempt ran under as recorded, which preflight may have rejected. Such a report is valid even though the plan it describes is not.
+
+---
+
+## Plan IDs and realms
+
+A plan's realm and plan ID name its directory in the event spool, `<spool>/<realm>/<plan_id>/`, one level each, and the plan ID also names its work directory, `<work_root>/<plan_id>/`. So each is one directory component: a non-empty string other than `.` or `..`, without `/`, backslash or NUL. Any other character is allowed and kept as given: nothing is normalized. `test_realm` and `dmx_realm:22FKCMLT3:demux` are valid. `dmx_realm:_design/views`, which a realm derived from the ID of the CouchDB design document `_design/views`, is not.
+
+The rule applies wherever the documents record a plan ID or realm:
+
+- in the plan document: `_id`, `realm`, `plan.plan_id`, `plan.realm` and `last_finalized_execution.plan_id`;
+- in the attempt report: `plan_id`, including the report in `last_finalized_execution.report`;
+- in the snapshot: `realm` and `plan_id`.
+
+Scope IDs, `source_doc_id`, step IDs and the snapshot's `_id` follow rules of their own. A step ID, for example, may name nested directories (see [Step IDs](../flow_api/overview.md#step-ids)).
+
+It is the rule the engine applies before an attempt starts: a plan whose `plan.realm` or `plan.plan_id` breaks it is refused, with no attempt and no report (see [When a plan is admitted for execution](#when-a-plan-is-admitted-for-execution)). Planning stores a realm's plan ID and realm as given, so a stored plan document can still break the rule. `validate` reports each field that does, with the code `schema`. The shared reader does not apply the rule: it reads such a document as recorded.
 
 ---
 
@@ -452,7 +468,7 @@ Nothing is defaulted or converted: a missing token, `"5"`, `5.0` and `true` are 
 
 **Eligibility checks the family first**, then the tokens and the status, in the order given in [The shared reader](#the-shared-reader). A plan of no supported family is not eligible, whatever its status and tokens say, and PlanWatcher hands the coordinator only eligible plans. Within its execution authority and run-once owner, the watcher logs at WARNING each plan it does not hand over because its `schema_version` is absent, invalid or unsupported, or because its tokens are invalid or its `status` is missing, since someone has to change the plan before it can run (see [Log lines](#log-lines), and [Plan is approved but Engine never runs it](troubleshooting.md#plan-is-statusapproved-but-engine-never-runs-it)). It reports a plan where it evaluates it: any later change to the plan reports it again, and so do a replay of the change feed and run-once's recovery scan, while a poll that brings no change repeats nothing. A draft, a request already finished, and any plan outside its authority or owner are skipped at DEBUG. The plan stores' recovery listing, which a full recovery scan reads, leaves out every plan of no supported family with a WARNING for each, and other ineligible plans silently. The coordinator's family check, step 2 above, stays for a caller that bypasses the watcher, and for a document that leaves the family after the watcher saw it.
 
-**Refused, or rejected by preflight.** A refused request never starts an attempt, so it has no report. That includes every refusal above, and a plan whose realm or plan ID cannot name one directory, which the engine refuses before an attempt starts (`ADMISSION_FAILED` through the coordinator). A step graph that preflight rejects belongs to an attempt that has started: that attempt has a report, with `termination_reason: "preflight_rejected"` (see [Which endings finish a request](plan_execution.md#which-endings-finish-a-request)).
+**Refused, or rejected by preflight.** A refused request never starts an attempt, so it has no report. That includes every refusal above, and a plan whose realm or plan ID cannot name one directory (see [Plan IDs and realms](#plan-ids-and-realms)), which the engine refuses before an attempt starts (`ADMISSION_FAILED` through the coordinator). A step graph that preflight rejects belongs to an attempt that has started: that attempt has a report, with `termination_reason: "preflight_rejected"` (see [Which endings finish a request](plan_execution.md#which-endings-finish-a-request)).
 
 ### When a result is recorded
 
@@ -539,9 +555,17 @@ The plan_document does not conform to its contract (3 problems):
   [bad_timestamp] updated_at '2026-10-22T09:30:00+00:00' is not a timestamp spelled canonically: in UTC, ending in Z, to the whole second or with a fraction of 1 to 6 digits not ending in 0, as in 2026-10-22T10:00:00Z or 2026-10-22T10:00:00.25Z
 ```
 
+A plan ID or realm that is not one directory component is a `schema` problem at its path, once per field. A draft whose `_id` and `plan.plan_id` are `dmx_realm:_design/views` gives:
+
+```text
+The plan_document does not conform to its contract (2 problems):
+  [schema] _id 'dmx_realm:_design/views' is not one directory component: a non-empty string other than '.' or '..', without '/', backslash or NUL
+  [schema] plan.plan_id 'dmx_realm:_design/views' is not one directory component: a non-empty string other than '.' or '..', without '/', backslash or NUL
+```
+
 Besides the schema, `validate` checks what JSON Schema cannot express: an integer is a JSON integer, never `1.0` or `true`; a timestamp names a date and time that exist; and a plan document's `executed_run_token` is not above its `run_token`. It checks no rule across fields or documents, such as whether a recorded execution matches the report it carries.
 
-The schemas themselves are JSON Schema draft 2020-12, in [`yggdrasil/contract/schemas/`](https://github.com/NationalGenomicsInfrastructure/Yggdrasil/tree/main/yggdrasil/contract/schemas), and `yggdrasil.contract.schema.schema_for(kind, family)` returns a copy of one. Each has an `$id` naming its kind and family, such as `urn:yggdrasil:contract:attempt_report:1`, and the plan-document and snapshot schemas refer to the report's by that `$id`. Another validator therefore needs all three registered, and no reference needs a download. Any validator enforces the timestamp `pattern`. Checking that a date and time exist needs format assertion switched on, which `validate` does. A plain JSON Schema `integer` also accepts `1.0`, which `validate` rejects.
+The schemas themselves are JSON Schema draft 2020-12, in [`yggdrasil/contract/schemas/`](https://github.com/NationalGenomicsInfrastructure/Yggdrasil/tree/main/yggdrasil/contract/schemas), and `yggdrasil.contract.schema.schema_for(kind, family)` returns a copy of one. Each has an `$id` naming its kind and family, such as `urn:yggdrasil:contract:attempt_report:1`, and the plan-document and snapshot schemas refer to the report's by that `$id`. Another validator therefore needs all three registered, and no reference needs a download. Any validator enforces the timestamp `pattern`, and the rule for plan IDs and realms, which each schema defines once as `$defs/directory_component`. Checking that a date and time exist needs format assertion switched on, which `validate` does. A plain JSON Schema `integer` also accepts `1.0`, which `validate` rejects.
 
 **Worked examples.** [`tests/contract/documents/current/`](https://github.com/NationalGenomicsInfrastructure/Yggdrasil/tree/main/tests/contract/documents/current) holds real plan documents and snapshots in their stored form, built by this release's writers. Its `manifest.json` gives each one's scenario, how it was made, and its expectation: valid, or the exact problems `validate` reports. Each tagged release adds its positive examples as a frozen baseline under `released/<tag>/`, and later releases must keep them valid against their family's schema. How a baseline is prepared is described in the corpus [README](https://github.com/NationalGenomicsInfrastructure/Yggdrasil/blob/main/tests/contract/documents/README.md#released-frozen-baselines).
 
