@@ -102,6 +102,19 @@ _TYPE_NAMES = {
     "object": "an object",
 }
 
+# The pattern of the schemas' definition of a plan ID or realm: no '/',
+# backslash or NUL anywhere. With minLength 1 and '.' and '..' excluded, the
+# definition is the rule the engine holds a plan's realm and ID to, since each
+# names a directory of its own. The strict end refuses what '$' would let
+# through before a final newline, as in the timestamp pattern.
+_DIRECTORY_COMPONENT_PATTERN = r"^[^/\\\x00]*(?![\s\S])"
+
+# What is wrong with a plan ID or realm that breaks that rule.
+_DIRECTORY_COMPONENT_DETAIL = (
+    "is not one directory component: a non-empty string other than '.' or "
+    "'..', without '/', backslash or NUL"
+)
+
 
 class ContractError(Exception):
     """A document does not conform to its contract schema.
@@ -181,7 +194,10 @@ def validate(kind: str, document: object) -> None:
     Every problem is reported, once per path and code. Integers must be JSON
     integers, so ``1.0`` and ``true`` are neither tokens nor counts. A
     timestamp must be spelled canonically and name a date and time that
-    exist. A plan document's ``executed_run_token`` must not be above its
+    exist. A plan ID or realm must be one directory component, as the engine
+    requires: a non-empty string other than ``.`` or ``..``, without ``/``,
+    backslash or NUL; one that is not is a ``schema`` problem at its path. A
+    plan document's ``executed_run_token`` must not be above its
     ``run_token``. Schema references resolve only to the bundled resources:
     nothing is ever downloaded.
 
@@ -431,6 +447,12 @@ def _problems_of(error: Any) -> list[_Problem]:
             "0, as in 2026-10-22T10:00:00Z or 2026-10-22T10:00:00.25Z"
         )
         return [_Problem(path, BAD_TIMESTAMP, detail, value)]
+    if _is_directory_component(error.schema) and keyword in (
+        "minLength",
+        "pattern",
+        "not",
+    ):
+        return [_Problem(path, SCHEMA_RULE, _DIRECTORY_COMPONENT_DETAIL, value)]
     if keyword == "pattern":
         detail = f"does not match {describe_recorded(expected)}"
         return [_Problem(path, NOT_IN_VOCABULARY, detail, value)]
@@ -533,6 +555,14 @@ def _unexpected_fields(schema: Mapping[str, Any], value: Any) -> list[tuple[str,
 def _is_timestamp(schema: Any) -> bool:
     """Return whether a (sub)schema is a contract timestamp's definition."""
     return isinstance(schema, Mapping) and schema.get("format") == "date-time"
+
+
+def _is_directory_component(schema: Any) -> bool:
+    """Return whether a (sub)schema is the definition of a plan ID or realm."""
+    return (
+        isinstance(schema, Mapping)
+        and schema.get("pattern") == _DIRECTORY_COMPONENT_PATTERN
+    )
 
 
 def _type_detail(value: Any, expected: Any) -> str:
