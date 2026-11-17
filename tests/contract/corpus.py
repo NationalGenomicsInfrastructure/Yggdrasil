@@ -1204,6 +1204,22 @@ def _malformed_plan_documents(corpus: _Corpus) -> None:
             by_hand=tuple(fields),
         )
 
+    # A realm's handler, called directly for the CouchDB design document
+    # _design/views, derived this plan ID. Its '/' leaves it unable to name one
+    # directory, which the engine requires of every plan ID it runs. The ID is
+    # in two places, and each is a problem.
+    plan_id = "dmx_realm:_design/views"
+    quoted = json.dumps(plan_id)
+    corpus.add(
+        "plan_document/plan_id_with_slash.json",
+        {**draft, "_id": plan_id, "plan": {**draft["plan"], "plan_id": plan_id}},
+        scenario=f"plan ID {quoted}, derived from a CouchDB design document's ID",
+        provenance=f"the draft, with _id and plan.plan_id {quoted} set by hand",
+        problems=[("_id", "schema"), ("plan.plan_id", "schema")],
+        derived_from=draft_file,
+        by_hand=("_id", "plan"),
+    )
+
 
 def _snapshots(corpus: _Corpus, workspaces: _Workspaces) -> None:
     """Snapshots of attempts in every state the consumer projects, and legacy ones."""

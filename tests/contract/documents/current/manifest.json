@@ -239,6 +239,28 @@
       "scenario": "tokens 4 / 5"
     },
     {
+      "by_hand": [
+        "_id",
+        "plan"
+      ],
+      "derived_from": "plan_document/draft.json",
+      "expectation": "invalid",
+      "file": "plan_document/plan_id_with_slash.json",
+      "kind": "plan_document",
+      "problems": [
+        {
+          "code": "schema",
+          "path": "_id"
+        },
+        {
+          "code": "schema",
+          "path": "plan.plan_id"
+        }
+      ],
+      "provenance": "the draft, with _id and plan.plan_id \"dmx_realm:_design/views\" set by hand",
+      "scenario": "plan ID \"dmx_realm:_design/views\", derived from a CouchDB design document's ID"
+    },
+    {
       "expectation": "valid",
       "file": "plan_status/running_with_failure.json",
       "kind": "plan_status",

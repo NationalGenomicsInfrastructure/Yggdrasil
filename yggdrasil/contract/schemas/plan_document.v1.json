@@ -7,8 +7,7 @@
   "properties": {
     "_id": {
       "description": "The plan ID.",
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/$defs/directory_component"
     },
     "_rev": {
       "description": "The storage revision: opaque, set by the backend.",
@@ -21,8 +20,7 @@
       "const": 1
     },
     "realm": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/$defs/directory_component"
     },
     "scope": {
       "$ref": "#/$defs/scope"
@@ -131,6 +129,15 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{0,5}[1-9])?Z(?![\\s\\S])",
       "maxLength": 27
     },
+    "directory_component": {
+      "description": "A plan ID or realm. Each names a directory of its own, so it is one directory component: a non-empty string other than . or .., without /, backslash or NUL. Any other character, such as a colon, is allowed and kept as given.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\\\x00]*(?![\\s\\S])",
+      "not": {
+        "enum": [".", ".."]
+      }
+    },
     "status": {
       "enum": ["draft", "approved"]
     },
@@ -166,12 +173,10 @@
       "type": "object",
       "properties": {
         "plan_id": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/directory_component"
         },
         "realm": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/directory_component"
         },
         "scope": {
           "$ref": "#/$defs/scope"
@@ -254,8 +259,7 @@
           "minLength": 1
         },
         "plan_id": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/directory_component"
         },
         "plan_generation": {
           "type": "string",

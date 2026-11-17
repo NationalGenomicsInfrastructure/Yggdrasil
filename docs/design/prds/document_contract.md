@@ -1342,3 +1342,53 @@ the documentation was committed, on the working tree over d1bac76. The
 documentation changes no code and no test, and the rerun at 41d1cc7 gives
 the same counts. This document is committed after 41d1cc7: the
 documentation build excludes it, and no test reads it.
+
+**Plan IDs and realms in the schemas (2026-11-17).** A correction made
+after the implementation was merged. A realm's handler, called directly for
+the CouchDB design document `_design/views`, produced a deferred draft with
+the plan ID `dmx_realm:_design/views`. The schemas accepted it, while the
+engine refuses it: the ID contains `/`, so it cannot name one directory
+component, as the engine name check above requires. That entry left the
+three schemas unchanged; this one aligns them with the engine.
+
+Each schema defines the engine's rule once, as `$defs/directory_component`:
+a non-empty string other than `.` or `..`, without `/`, backslash or NUL.
+Any other character, such as a colon, is allowed, and nothing is
+normalized. Every plan ID and realm the schemas carry refers to it:
+
+- the plan document's `_id`, `realm`, `plan.plan_id`, `plan.realm` and
+  `last_finalized_execution.plan_id`;
+- the attempt report's `plan_id`, and so the report in
+  `last_finalized_execution.report`;
+- the snapshot's `realm` and `plan_id`.
+
+Scope IDs, `source_doc_id`, step IDs and the snapshot's composite `_id`
+keep their own rules. `validate` reports a plan ID or realm that breaks the
+rule as one problem at its path, with the code `schema` and the message
+`<path> <recorded value> is not one directory component: a non-empty string
+other than '.' or '..', without '/', backslash or NUL`, the value shown
+through `describe_recorded`. A value that is not a string is still
+`wrong_type` alone.
+
+Unchanged: the engine's check, which still refuses such a plan before an
+attempt starts; the shared reader, which reads a stored document with such
+an ID as recorded; and planning, which still stores a realm's plan as
+given.
+
+Tests compare a stock JSON Schema validator over the published schemas,
+and `validate`, with the engine's own check, at each of those fields, for
+names the engine accepts and names it refuses. The corpus gains one
+negative document, `plan_document/plan_id_with_slash.json`: the draft with
+`_id` and `plan.plan_id` set by hand to `dmx_realm:_design/views`, which
+reports a `schema` problem at each. The frozen baseline,
+`released/v0.6.0/`, is unchanged: its 22 documents satisfy the rule, and
+they are still, byte for byte, the valid entries of the rebuilt
+`current/`. The reference page gains a section on plan IDs and realms, and
+the Flow API page points to it.
+
+In the working tree over 7141f44, which holds the two git-ignored tool
+tests as in the Documentation entry, `python -m pytest --ignore=trashcan`
+gives 3554 passed and 6447 subtests, against 3545 and 6100 at 7141f44.
+`ruff check .`, Black and mypy are unchanged, and the corpus has no
+differences. `mkdocs build --strict` passes on an export of 7141f44 with
+these changes, and every link with an anchor resolves.

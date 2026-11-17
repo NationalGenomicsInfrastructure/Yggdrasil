@@ -37,7 +37,9 @@ from yggdrasil.contract import (
     PLAN_STATUS,
 )
 from yggdrasil.contract.controls import FAILURE_POLICIES, MAX_TOKEN
+from yggdrasil.contract.diagnostics import describe_recorded
 from yggdrasil.contract.schema import (
+    _DIRECTORY_COMPONENT_PATTERN,
     BAD_TIMESTAMP,
     INVALID_TOKENS,
     INVALID_VERSION,
@@ -45,6 +47,7 @@ from yggdrasil.contract.schema import (
     NOT_IN_VOCABULARY,
     OUT_OF_RANGE,
     PROBLEM_CODES,
+    SCHEMA_RULE,
     UNEXPECTED_FIELD,
     UNSUPPORTED_VERSION,
     UNVERSIONED,
@@ -55,6 +58,8 @@ from yggdrasil.contract.schema import (
     validate,
 )
 from yggdrasil.contract.timestamps import CANONICAL_MAX_LENGTH, CANONICAL_PATTERN
+from yggdrasil.core.engine import _require_spool_names
+from yggdrasil.flow.events.attempt_records import is_record_key
 from yggdrasil.flow.model import VALID_FAILURE_POLICIES, StepSpec
 from yggdrasil.flow.outcomes import (
     AttemptReport,
@@ -107,6 +112,43 @@ FINAL_NEWLINES = (
     "2026-10-22T10:00:00Z\n",
     "2026-10-22T10:00:00.5Z\n",
     "2026-10-22T10:00:00.12345Z\n",
+)
+
+# Plan IDs and realms, each with a label: first what the engine's rule
+# accepts, then what it refuses. Nothing is normalized, so colons, dots within
+# a name, whitespace and characters that only look like a slash are accepted
+# as they are.
+NAMES: tuple[tuple[str, str], ...] = (
+    ("plain", "pln_contract"),
+    ("realm prefix and colons", "dmx_realm:22FKCMLT3:demux"),
+    ("dots within", "a..b"),
+    ("three dots", "..."),
+    ("leading dot", ".hidden"),
+    ("space", " "),
+    ("newline within", "a\nb"),
+    ("final newline", "pln\n"),
+    ("dot and a final newline", ".\n"),
+    ("percent-encoded slash", "a%2Fb"),
+    ("non-ASCII", "flödes"),
+    ("division slash", "a∕b"),
+    ("long", "x" * 10_000),
+    ("empty", ""),
+    ("dot", "."),
+    ("dot-dot", ".."),
+    ("design document", "dmx_realm:_design/views"),
+    ("slash", "a/b"),
+    ("leading slash", "/absolute"),
+    ("trailing slash", "a/"),
+    ("parent", "../escape"),
+    ("backslash", "a\\b"),
+    ("NUL", "a\x00b"),
+    ("long, with a slash at the end", "x" * 10_000 + "/"),
+)
+
+# What validate says of a plan ID or realm that the rule refuses.
+NOT_A_DIRECTORY_COMPONENT = (
+    "is not one directory component: a non-empty string other than '.' or "
+    "'..', without '/', backslash or NUL"
 )
 
 
@@ -681,6 +723,151 @@ class TestPublishedSchemas(unittest.TestCase):
                     self.assertNotIn("\\d", pattern)
 
 
+class TestPlanIdsAndRealms(unittest.TestCase):
+    """Every plan ID and realm is one directory component, as the engine requires.
+
+    The engine refuses to run a plan whose realm or ID cannot name a directory
+    of its own. The published schemas hold every plan ID and realm that the
+    documents record to the same rule, so any validator applies it, and
+    validate reports a refused one as one schema problem at its path. Scope
+    IDs, source document IDs, step IDs and the snapshot's ``_id`` have rules
+    of their own.
+    """
+
+    def carriers(self) -> list[tuple[str, dict[str, Any], tuple[str, ...]]]:
+        """One conforming document of each kind, and each path naming a plan or realm."""
+        return [
+            (
+                PLAN_DOCUMENT,
+                finalized_document(),
+                (
+                    "_id",
+                    "realm",
+                    "plan.plan_id",
+                    "plan.realm",
+                    "last_finalized_execution.plan_id",
+                    "last_finalized_execution.report.plan_id",
+                ),
+            ),
+            (ATTEMPT_REPORT, report(), ("plan_id",)),
+            (PLAN_STATUS, projection_snapshot(None, {}), ("realm", "plan_id")),
+        ]
+
+    def test_the_names_are_accepted_then_refused(self):
+        verdicts = [is_record_key(name) for _, name in NAMES]
+        self.assertEqual(verdicts, [True] * 13 + [False] * 11)
+
+    def test_the_rule_is_the_engines(self):
+        for field in ("realm", "plan_id"):
+            for label, name in NAMES:
+                with self.subTest(field=field, name=label):
+                    plan = make_plan()
+                    setattr(plan, field, name)
+                    if is_record_key(name):
+                        _require_spool_names(plan)
+                        continue
+                    with self.assertRaises(ValueError) as caught:
+                        _require_spool_names(plan)
+                    self.assertTrue(
+                        str(caught.exception).startswith(
+                            f"plan.{field} must name one directory component"
+                        )
+                    )
+
+    def test_the_schemas_and_validate_agree_with_the_engine(self):
+        for kind, document, paths in self.carriers():
+            validator = plain_validator(kind)
+            self.assertTrue(validator.is_valid(document))
+            for path in paths:
+                for label, name in NAMES:
+                    with self.subTest(kind=kind, path=path, name=label):
+                        named = changed(document, path, name)
+                        accepted = is_record_key(name)
+                        self.assertIs(validator.is_valid(named), accepted)
+                        self.assertEqual(
+                            problems(kind, named),
+                            [] if accepted else [(path, SCHEMA_RULE)],
+                        )
+
+    def test_a_name_that_is_not_text_is_only_the_wrong_type(self):
+        for kind, document, paths in self.carriers():
+            for path in paths:
+                for label, value in (
+                    ("integer", 5),
+                    ("null", None),
+                    ("boolean", True),
+                    ("array", ["a"]),
+                    ("object", {"a": "b"}),
+                ):
+                    with self.subTest(kind=kind, path=path, value=label):
+                        self.assertEqual(
+                            problems(kind, changed(document, path, value)),
+                            [(path, WRONG_TYPE)],
+                        )
+
+    def test_a_refused_name_gets_the_rule_in_a_bounded_message(self):
+        for label, name in NAMES:
+            if is_record_key(name):
+                continue
+            with self.subTest(name=label):
+                with self.assertRaises(ContractError) as caught:
+                    validate(PLAN_DOCUMENT, plan_document(realm=name))
+                (problem,) = caught.exception.problems
+                self.assertEqual((problem.path, problem.code), ("realm", SCHEMA_RULE))
+                self.assertEqual(
+                    problem.message,
+                    f"realm {describe_recorded(name)} {NOT_A_DIRECTORY_COMPONENT}",
+                )
+                # Even a name of 10,000 characters is shown shortened.
+                self.assertLess(len(problem.message), 250)
+                self.assertNotIn("\x00", problem.message)
+
+    def test_each_resource_defines_the_rule_once(self):
+        for kind in KINDS:
+            with self.subTest(kind=kind):
+                schema = schema_for(kind, 1)
+                definition = schema["$defs"]["directory_component"]
+                self.assertEqual(
+                    definition,
+                    {
+                        "description": definition["description"],
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": _DIRECTORY_COMPONENT_PATTERN,
+                        "not": {"enum": [".", ".."]},
+                    },
+                )
+                self.assertEqual(
+                    [
+                        at
+                        for at, pattern in keyword_locations(schema, "pattern")
+                        if pattern == _DIRECTORY_COMPONENT_PATTERN
+                    ],
+                    ["/$defs/directory_component"],
+                )
+
+    def test_every_plan_id_and_realm_uses_the_rule(self):
+        expected = {
+            PLAN_DOCUMENT: {
+                "/properties/_id",
+                "/properties/realm",
+                "/$defs/plan/properties/plan_id",
+                "/$defs/plan/properties/realm",
+                "/$defs/last_finalized_execution/properties/plan_id",
+            },
+            ATTEMPT_REPORT: {"/properties/plan_id"},
+            PLAN_STATUS: {"/properties/realm", "/properties/plan_id"},
+        }
+        for kind in KINDS:
+            with self.subTest(kind=kind):
+                users = {
+                    at
+                    for at, ref in keyword_locations(schema_for(kind, 1), "$ref")
+                    if ref == "#/$defs/directory_component"
+                }
+                self.assertEqual(users, expected[kind])
+
+
 class TestVocabularies(unittest.TestCase):
     """Every vocabulary in the schemas is the one the code writes."""
 
@@ -754,12 +941,16 @@ class TestVocabularies(unittest.TestCase):
                 "/$defs/step_outcome",
             },
         }
+        # The values a plan ID or realm may not be: the one enum that excludes
+        # values rather than listing a vocabulary.
+        excluded = "/$defs/directory_component/not"
         for kind in KINDS:
             with self.subTest(kind=kind):
                 locations = {
                     at for at, _ in keyword_locations(schema_for(kind, 1), "enum")
                 }
-                self.assertEqual(locations, expected[kind])
+                self.assertIn(excluded, locations)
+                self.assertEqual(locations - {excluded}, expected[kind])
 
     def test_conditions_name_vocabulary_values(self):
         consts = list(keyword_locations(schema_for(PLAN_STATUS, 1), "const"))

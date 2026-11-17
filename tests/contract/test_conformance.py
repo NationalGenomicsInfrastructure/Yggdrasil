@@ -38,6 +38,7 @@ from tests.plan_store_support import (
     make_plan,
 )
 from yggdrasil.contract import ATTEMPT_REPORT, PLAN_DOCUMENT, PLAN_STATUS
+from yggdrasil.contract.read import read_plan
 from yggdrasil.contract.schema import (
     MISSING_FIELD,
     NOT_IN_VOCABULARY,
@@ -289,7 +290,13 @@ class TestClosedAndOpenParts(ConformingBuilders):
 
 
 class TestPlanIds(ConformingBuilders):
-    """Every plan ID the contract records is a nonempty string."""
+    """Every plan ID the contract records is one directory component.
+
+    That is a non-empty string other than ``.`` or ``..``, without ``/``,
+    backslash or NUL: the engine's rule, since a plan ID names directories
+    of its own. ``test_schema.py`` checks the rule case by case against the
+    engine's own check.
+    """
 
     def test_a_report_names_its_plan(self):
         report = finalized()["last_finalized_execution"]["report"]
@@ -311,6 +318,35 @@ class TestPlanIds(ConformingBuilders):
     def test_a_snapshot_names_its_plan(self):
         snapshot = changed(projection_snapshot(None, {}), "plan_id", "")
         self.assertEqual(problems(PLAN_STATUS, snapshot), [("plan_id", SCHEMA_RULE)])
+
+    def test_a_plan_id_derived_from_a_design_document_does_not_conform(self):
+        # A realm's handler, called directly for the CouchDB design document
+        # _design/views, derived this ID for a deferred draft. Its '/' leaves
+        # it unable to name one directory, and the engine refuses to run it.
+        plan_id = "dmx_realm:_design/views"
+        document = changed(built_document(), "_id", plan_id)
+        document = changed(document, "plan.plan_id", plan_id)
+
+        self.assertEqual(
+            problems(PLAN_DOCUMENT, document),
+            [("_id", SCHEMA_RULE), ("plan.plan_id", SCHEMA_RULE)],
+        )
+
+        # The reader does not apply the rule: a draft already stored under
+        # this ID still reads, under that ID, with no schema problem.
+        read = read_plan(document, plan_id=plan_id)
+        self.assertTrue(read.usable)
+        self.assertEqual(read.plan_id, plan_id)
+        self.assertNotIn(SCHEMA_RULE, [problem.code for problem in read.problems])
+
+    def test_a_plan_id_derived_from_a_flowcell_conforms(self):
+        # Colons are kept as given: the realm's ordinary plan ID names a
+        # directory of its own.
+        plan_id = "dmx_realm:22FKCMLT3:demux"
+        document = changed(built_document(), "_id", plan_id)
+        document = changed(document, "plan.plan_id", plan_id)
+
+        self.assertEqual(problems(PLAN_DOCUMENT, document), [])
 
 
 class TestMalformedPlans(ConformingBuilders):
