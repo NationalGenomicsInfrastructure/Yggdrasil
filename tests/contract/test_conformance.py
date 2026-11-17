@@ -38,6 +38,7 @@ from tests.plan_store_support import (
     make_plan,
 )
 from yggdrasil.contract import ATTEMPT_REPORT, PLAN_DOCUMENT, PLAN_STATUS
+from yggdrasil.contract.read import read_plan
 from yggdrasil.contract.schema import (
     MISSING_FIELD,
     NOT_IN_VOCABULARY,
@@ -330,6 +331,13 @@ class TestPlanIds(ConformingBuilders):
             problems(PLAN_DOCUMENT, document),
             [("_id", SCHEMA_RULE), ("plan.plan_id", SCHEMA_RULE)],
         )
+
+        # The reader does not apply the rule: a draft already stored under
+        # this ID still reads, under that ID, with no schema problem.
+        read = read_plan(document, plan_id=plan_id)
+        self.assertTrue(read.usable)
+        self.assertEqual(read.plan_id, plan_id)
+        self.assertNotIn(SCHEMA_RULE, [problem.code for problem in read.problems])
 
     def test_a_plan_id_derived_from_a_flowcell_conforms(self):
         # Colons are kept as given: the realm's ordinary plan ID names a
