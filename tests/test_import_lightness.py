@@ -1,4 +1,8 @@
-"""Importing the realm-facing packages leaves logging and the CouchDB client alone."""
+"""Importing the realm-facing packages and the contract has no side effects.
+
+The realm-facing packages leave logging and the CouchDB client alone; the
+contract package loads nothing beyond the standard library.
+"""
 
 import json
 import subprocess
@@ -44,6 +48,60 @@ print(json.dumps({
     "root_handlers": len(root.handlers),
 }))
 """
+
+
+# Measured after ``import yggdrasil``, so the package initializer's own version
+# lookup is not counted against the contract. Reading a published schema needs
+# no validation library either; only validating does.
+_CONTRACT_PROBE = """
+import json
+import logging
+import sys
+
+import yggdrasil
+
+before = set(sys.modules)
+
+import yggdrasil.contract
+import yggdrasil.contract.controls
+import yggdrasil.contract.diagnostics
+import yggdrasil.contract.fields
+import yggdrasil.contract.problems
+import yggdrasil.contract.read
+import yggdrasil.contract.read._correlate
+import yggdrasil.contract.read._eligibility
+import yggdrasil.contract.read._ids
+import yggdrasil.contract.read._plan
+import yggdrasil.contract.read._requests
+import yggdrasil.contract.read._results
+import yggdrasil.contract.read._snapshot
+import yggdrasil.contract.read._steps
+import yggdrasil.contract.read._values
+import yggdrasil.contract.schema
+import yggdrasil.contract.timestamps
+import yggdrasil.contract.versions
+
+yggdrasil.contract.schema.schema_for("plan_document", 1)
+
+loaded = sorted(set(sys.modules) - before)
+print(json.dumps({
+    "loaded": loaded,
+    "foreign": [
+        name for name in loaded
+        if name.split(".")[0] not in sys.stdlib_module_names
+        and name != "yggdrasil.contract"
+        and not name.startswith("yggdrasil.contract.")
+    ],
+    "debug_name": logging.getLevelName(logging.DEBUG),
+    "root_level": logging.getLogger().level,
+    "root_handlers": len(logging.getLogger().handlers),
+}))
+"""
+
+
+def _within(module: str, package: str) -> bool:
+    """Return whether ``module`` is ``package`` itself or one of its submodules."""
+    return module == package or module.startswith(f"{package}.")
 
 
 def _run_probe(probe: str) -> dict:
@@ -101,6 +159,63 @@ class TestLoggingUtilsImport(unittest.TestCase):
                 self.assertEqual(level, 0)  # logging.NOTSET
 
     def test_root_logger_untouched(self):
+        self.assertEqual(self.state["root_level"], 30)  # logging.WARNING, the default
+        self.assertEqual(self.state["root_handlers"], 0)
+
+
+class TestContractImport(unittest.TestCase):
+    """``yggdrasil.contract`` sits in the bottom layer: standard library only.
+
+    That includes its schemas, whose reading loads no validation library, and
+    its reader of plan documents and snapshots, which a program outside
+    Yggdrasil imports without the daemon or the CouchDB client.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.state = _run_probe(_CONTRACT_PROBE)
+
+    def test_the_probe_measured_the_contract(self):
+        self.assertIn("yggdrasil.contract.versions", self.state["loaded"])
+        self.assertIn("yggdrasil.contract.diagnostics", self.state["loaded"])
+        self.assertIn("yggdrasil.contract.schema", self.state["loaded"])
+        self.assertIn("yggdrasil.contract.fields", self.state["loaded"])
+        self.assertIn("yggdrasil.contract.problems", self.state["loaded"])
+        for module in (
+            "read",
+            "read._correlate",
+            "read._eligibility",
+            "read._ids",
+            "read._plan",
+            "read._requests",
+            "read._results",
+            "read._snapshot",
+            "read._steps",
+            "read._values",
+        ):
+            with self.subTest(module=module):
+                self.assertIn(f"yggdrasil.contract.{module}", self.state["loaded"])
+
+    def test_only_standard_library_modules_are_loaded(self):
+        self.assertEqual(self.state["foreign"], [])
+
+    def test_no_higher_layer_or_third_party_module_is_loaded(self):
+        for package in (
+            "ibmcloudant",
+            "jsonschema",
+            "referencing",
+            "yggdrasil.logging_utils",
+            "yggdrasil.flow",
+            "yggdrasil.storage",
+            "yggdrasil.daemon",
+        ):
+            with self.subTest(package=package):
+                self.assertEqual(
+                    [m for m in self.state["loaded"] if _within(m, package)], []
+                )
+
+    def test_logging_untouched(self):
+        self.assertEqual(self.state["debug_name"], "DEBUG")
         self.assertEqual(self.state["root_level"], 30)  # logging.WARNING, the default
         self.assertEqual(self.state["root_handlers"], 0)
 

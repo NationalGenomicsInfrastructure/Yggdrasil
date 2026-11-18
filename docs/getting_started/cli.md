@@ -68,7 +68,7 @@ yggdrasil run-doc DOC_ID [--plan-only | --run-once] [--force] [--timeout SECONDS
 | `DOC_ID`          | The `_id` of the CouchDB project document to process |
 | `-p`, `--plan-only` | Create the plan(s) only, for the daemon to execute once approved. The default when no mode is given |
 | `-r`, `--run-once` | Create the plan(s), execute them in this process once approved, then exit |
-| `-f`, `--force`   | Overwrite an existing plan without asking |
+| `-f`, `--force`   | Overwrite an existing plan without asking. The replacement checks still apply: a stored plan whose `schema_version` is invalid or unsupported, or whose `created_at` cannot be kept, is never replaced (see [When planning replaces a plan](../reference/document_contract.md#when-planning-replaces-a-plan)) |
 | `-t`, `--timeout SECONDS` | With `--run-once`: how long to wait for plans to become executable, such as waiting for approval (default 1800). It never interrupts a running plan |
 | `--manual-submit` | Force manual HPC submission: Yggdrasil writes a submit script but waits for you to run `sbatch` and insert the job ID back into the document |
 
@@ -77,10 +77,12 @@ yggdrasil run-doc DOC_ID [--plan-only | --run-once] [--force] [--timeout SECONDS
 | Code | Meaning |
 |------|---------|
 | `0`  | Every plan ran, succeeded, and has its result recorded |
-| `1`  | Any other ending for any plan. That includes a `continue_independent` plan that finished its healthy branches but had failed or blocked steps, a result that could not be recorded, and a plan still unapproved at the timeout |
+| `1`  | Any other ending for any plan. That includes a `continue_independent` plan that finished its healthy branches but had failed or blocked steps, a result that could not be recorded, and a plan still unapproved, or still refused for its `schema_version`, at the timeout |
 | `130` | Interrupted with Ctrl-C. No new plan or step starts, the running step finishes, and unfinished plans stay eligible |
 
 An exit code of `1` from a `continue_independent` plan does not mean its work stopped early: every branch that could run did, and the request is recorded as finished with a failed outcome. See [Plan Execution](../reference/plan_execution.md) for how to rerun it.
+
+A plan whose stored `schema_version` is absent, invalid or unsupported is not executable either, for example when another writer changed it after this command planned it. The session's watcher logs a WARNING as soon as it sees such a plan, containing `Plan '<plan_id>' is not executed: its schema_version is`, and the session keeps waiting: if it later observes the plan eligible, it executes it; otherwise it exits `1` at the timeout set by `--timeout`.
 
 #### Example: manual Slurm submission
 

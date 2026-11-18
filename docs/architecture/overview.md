@@ -202,6 +202,7 @@ Trigger events control *which handler runs*. Step events record *what happened d
 | `yggdrasil/core/` | Engine, `RealmDescriptor`, core registry |
 | `yggdrasil/daemon/` | `YggdrasilCore`, `PlanExecutionCoordinator`, daemon lock, ops consumer service |
 | `yggdrasil/config/` | `ConfigLoader`, `YggSession`, workspace paths, external-systems resolver, runtime paths |
+| `yggdrasil/contract/` | Published document contract, JSON Schemas, version and control checks, and validation. Imports and runtime helpers use only the standard library; `validate` requires `jsonschema` from the `dev` extra |
 | `yggdrasil/watchers/` | `EventType`, `WatchSpec`, `WatcherManager`, `PlanWatcher`, backends (CouchDB, filesystem) |
 | `yggdrasil/storage/` | Internal-storage protocols and factory, plan-document rules, SQLite backend; `couchdb/` holds the CouchDB backend (plan store, checkpoint store, ops sink) |
 | `yggdrasil/couchdb/` | CouchDB connection handler, `ChangesFetcher` (continuous poller), typed models (`models.py`), endpoint defaults |

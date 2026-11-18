@@ -36,6 +36,7 @@ skipped rather than stopping the consumer.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -68,6 +69,7 @@ from yggdrasil.ops.snapshot import (
     project_attempt,
     project_legacy,
     run_id_of,
+    snapshot_document,
 )
 
 logger = custom_logger(__name__)
@@ -124,7 +126,13 @@ class SpoolIndex:
 
 @dataclass
 class FileSpoolConsumer:
-    """Writes a ``plan_status`` snapshot of every plan in the spool, per cycle.
+    """Writes the ``plan_status`` snapshot of each plan in the spool when it changes.
+
+    Every cycle builds each plan's snapshot again, but writes it only if its
+    content, ``updated_at`` aside, differs from the snapshot this consumer
+    last wrote for that plan, so a plan with no new events is not written
+    again. A new consumer has written nothing yet, so its first cycle writes
+    every plan once.
 
     Attributes:
         spool_root: The spool to read.
@@ -137,9 +145,19 @@ class FileSpoolConsumer:
     writer: Any  # SnapshotWriter, CouchWriter, etc.
     filt: PlanFilter = None
     index: SpoolIndex = field(default_factory=SpoolIndex)
+    # The fingerprint of the snapshot last written, by (realm, plan ID).
+    _written: dict[tuple[str, str], str] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def consume(self) -> None:
-        """Write the current snapshot of every plan with a known scope."""
+        """Write the snapshot of every plan with a known scope, if it changed.
+
+        A snapshot is written when its content, ``updated_at`` aside, differs
+        from the one this consumer last wrote for that plan, or when it wrote
+        none yet. An exception from the writer ends the cycle without counting
+        that plan as written, so the next cycle writes it again.
+        """
         root = self.spool_root
         if not root.exists():
             return
@@ -158,7 +176,12 @@ class FileSpoolConsumer:
                             f"Missing scope in plan.json for {realm}/{plan_id}; skipping..."
                         )
                         continue
+                    key = (realm, plan_id)
+                    fingerprint = _content_fingerprint(snapshot)
+                    if self._written.get(key) == fingerprint:
+                        continue
                     self.writer.write(plan_dir, snapshot)
+                    self._written[key] = fingerprint
         finally:
             self.index.end_cycle()
 
@@ -167,6 +190,24 @@ class FileSpoolConsumer:
         while True:
             self.consume()
             time.sleep(interval_sec)
+
+
+def _content_fingerprint(snapshot: dict[str, Any]) -> str:
+    """Return a digest of a snapshot's content, leaving out ``updated_at``.
+
+    Snapshots built from the same spool contents get the same digest, at
+    whatever time they were built.
+
+    Args:
+        snapshot: The snapshot, which holds JSON types only.
+
+    Returns:
+        str: The SHA-256 hex digest of the snapshot's other fields, serialized
+        with sorted keys.
+    """
+    content = {key: value for key, value in snapshot.items() if key != "updated_at"}
+    serialized = json.dumps(content, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _safe_load(p: Path) -> dict[str, Any]:
@@ -490,7 +531,9 @@ def build_plan_snapshot(
     :mod:`yggdrasil.ops.snapshot`). A plan with no observed attempt is shown as a
     legacy projection instead.
 
-    Snapshot fields, beyond ``type``, ``realm``, ``plan_id`` and ``updated_at``:
+    The snapshot is assembled by :func:`~yggdrasil.ops.snapshot.snapshot_document`.
+    Its fields, beyond ``schema_version``, ``type``, ``realm``, ``plan_id``
+    and ``updated_at``:
 
     - ``scope``: from the attempt's own events; for a legacy projection, from
       the first legacy event that carries one.
@@ -536,13 +579,12 @@ def build_plan_snapshot(
         now = utcnow_iso()
     except Exception:
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    return {
-        "type": "plan_status",
-        "realm": realm,
-        "plan_id": plan_id,
-        "scope": scope,
-        "projection": projection,
-        "attempt": attempt_summary,
-        "steps": steps,
-        "updated_at": now,
-    }
+    return snapshot_document(
+        realm=realm,
+        plan_id=plan_id,
+        scope=scope,
+        projection=projection,
+        attempt=attempt_summary,
+        steps=steps,
+        updated_at=now,
+    )

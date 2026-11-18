@@ -63,11 +63,31 @@ class TestNames(unittest.TestCase):
         )
 
     def test_only_ids_usable_as_a_directory_name_are_record_keys(self):
-        self.assertTrue(is_record_key(FIRST))
-        self.assertTrue(is_record_key("exec_sched_plan"))
-        for key in ("", ".", "..", "a/b", "../escape", "a\\b", None, 7):
+        for key in (FIRST, "exec_sched_plan", "test_realm:P1", "a b", "ünï", "..."):
             with self.subTest(key=key):
-                self.assertFalse(is_record_key(key))
+                self.assertTrue(is_record_key(key))
+        with TemporaryDirectory() as parent:
+            unusable = (
+                ("empty", ""),
+                ("dot", "."),
+                ("dot-dot", ".."),
+                ("nested", "a/b"),
+                ("parent", "../escape"),
+                ("absolute", str(Path(parent) / "absolute")),
+                ("backslash", "a\\b"),
+                ("NUL", "a\x00b"),
+                ("trailing NUL", "a\x00"),
+                ("None", None),
+                ("zero", 0),
+                ("five", 5),
+                ("seven", 7),
+                ("False", False),
+                ("list", []),
+                ("dict", {}),
+            )
+            for label, key in unusable:
+                with self.subTest(key=label):
+                    self.assertFalse(is_record_key(key))
 
 
 class TestPaths(unittest.TestCase):
@@ -195,7 +215,7 @@ class TestPaths(unittest.TestCase):
                 self.assertEqual(step_id_of_dir(name), step_id)
 
     def test_an_id_that_cannot_name_a_directory_is_refused(self):
-        for execution_id in ("", "..", "a/b"):
+        for execution_id in ("", "..", "a/b", "a\x00b"):
             with self.subTest(execution_id=execution_id):
                 with self.assertRaises(ValueError):
                     attempt_dir(Path("/spool"), REALM, PLAN_ID, execution_id)
@@ -329,9 +349,11 @@ class TestSpoolAttemptDirectories(SpoolTestCase):
         self.assertEqual(self.attempts.read_text(), "not a directory")
 
     def test_an_id_that_cannot_name_a_directory_is_refused(self):
-        with self.assertRaises(ValueError):
-            self.directories.reserve(REALM, PLAN_ID, "../escape")
-        self.assertFalse(self.spool.exists())
+        for execution_id in ("../escape", "a\x00b"):
+            with self.subTest(execution_id=execution_id):
+                with self.assertRaises(ValueError):
+                    self.directories.reserve(REALM, PLAN_ID, execution_id)
+                self.assertFalse(self.spool.exists())
 
     def test_reserves_only_in_the_spool_it_was_given(self):
         elsewhere = self.spool.parent / "default_spool"

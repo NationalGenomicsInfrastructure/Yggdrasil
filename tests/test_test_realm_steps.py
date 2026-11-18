@@ -11,7 +11,7 @@ and yggdrasil/realms/test_realm/handler.py.
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from yggdrasil.flow.utils.callable_ref import resolve_callable
 
@@ -32,6 +32,7 @@ _ALL_STEP_NAMES = [
     "step_exercise_all_fetch_methods",
     "step_verify_limit_clamping",
     "step_emit_metadata",
+    "step_slurm_job",
 ]
 
 
@@ -556,3 +557,122 @@ class TestBranchingRecipes(unittest.TestCase):
                 "lane_2__prepare": {"lane_config": "lane_2_config.txt"},
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Functional: step_slurm_job
+# ---------------------------------------------------------------------------
+
+
+class TestStepSlurmJob(unittest.TestCase):
+    """Functional tests for step_slurm_job with a stub job manager."""
+
+    def setUp(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from yggdrasil.realms.test_realm.steps import step_slurm_job
+
+        self.step_fn = step_slurm_job
+        self._tmp = TemporaryDirectory()
+        self.workdir = Path(self._tmp.name)
+        self.ctx = MagicMock()
+        self.ctx.workdir = self.workdir
+
+        self.manager = MagicMock()
+        self.manager.submit_job = AsyncMock()
+        self.manager.wait_for_completion = AsyncMock()
+        # steps.py imports SlurmManagerFactory lazily inside the step, so
+        # patch the symbol where it lives.
+        self._patcher = patch(
+            "yggdrasil.toolkit.sjob_manager.SlurmManagerFactory.get_manager",
+            return_value=self.manager,
+        )
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_success_records_job_id_and_state(self):
+        self.manager.submit_job.return_value = "42"
+        self.manager.wait_for_completion.return_value = "COMPLETED"
+
+        result = self.step_fn(self.ctx)
+
+        self.manager.submit_job.assert_awaited_once()
+        self.assertEqual(result.metrics["job_id"], "42")
+        self.assertEqual(result.metrics["final_state"], "COMPLETED")
+        # The sbatch script is written into the step workdir before submit.
+        script = self.workdir / "slurm_test_job.sh"
+        self.assertTrue(script.is_file())
+        self.assertEqual(result.metrics["script"], str(script))
+
+    def test_submission_failure_raises_permanent_error(self):
+        from yggdrasil.flow.errors import PermanentStepError
+
+        self.manager.submit_job.return_value = None
+        with self.assertRaises(PermanentStepError):
+            self.step_fn(self.ctx)
+        self.manager.wait_for_completion.assert_not_awaited()
+
+    def test_unexpected_terminal_state_raises_permanent_error(self):
+        from yggdrasil.flow.errors import PermanentStepError
+
+        self.manager.submit_job.return_value = "43"
+        self.manager.wait_for_completion.return_value = "FAILED"
+        with self.assertRaises(PermanentStepError):
+            self.step_fn(self.ctx)
+
+    def test_waits_with_requested_poll_interval(self):
+        self.manager.submit_job.return_value = "44"
+        self.manager.wait_for_completion.return_value = "COMPLETED"
+
+        self.step_fn(self.ctx, poll_interval_sec=2.5)
+
+        self.assertEqual(
+            self.manager.wait_for_completion.call_args,
+            (("44", 2.5), {}),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Recipe: slurm_job
+# ---------------------------------------------------------------------------
+
+
+class TestSlurmJobRecipe(unittest.TestCase):
+    """The slurm_job recipe plans echo -> submit -> echo in order."""
+
+    def test_recipe_is_registered(self):
+        from yggdrasil.realms.test_realm.recipes import RECIPES, get_recipe
+
+        self.assertIn("slurm_job", RECIPES)
+        self.assertEqual(get_recipe("slurm_job").__name__, "slurm_job")
+
+    def test_recipe_structure(self):
+        from yggdrasil.realms.test_realm.recipes import slurm_job
+
+        steps = slurm_job()
+
+        self.assertEqual(
+            [s.step_id for s in steps], ["echo_start", "slurm_submit", "echo_end"]
+        )
+        by_id = {s.step_id: s for s in steps}
+        self.assertEqual(
+            by_id["slurm_submit"].fn_ref,
+            f"{_FN_REF_PREFIX}.step_slurm_job",
+        )
+        self.assertEqual(by_id["slurm_submit"].deps, ["echo_start"])
+        self.assertEqual(by_id["echo_end"].deps, ["slurm_submit"])
+
+    def test_recipe_accepts_overrides(self):
+        from yggdrasil.realms.test_realm.recipes import slurm_job
+
+        steps = slurm_job(
+            overrides={
+                "slurm_submit": {"expect_state": "COMPLETED", "filename": "x.sh"}
+            }
+        )
+        by_id = {s.step_id: s for s in steps}
+        self.assertEqual(by_id["slurm_submit"].params["filename"], "x.sh")

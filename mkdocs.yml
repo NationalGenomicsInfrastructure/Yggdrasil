@@ -60,6 +60,7 @@ nav:
   - Reference:
       - Glossary: reference/glossary.md
       - Plan execution: reference/plan_execution.md
+      - Document contract: reference/document_contract.md
       - Test realm: reference/test_realm.md
       - Troubleshooting: reference/troubleshooting.md
 

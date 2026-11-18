@@ -14,6 +14,22 @@ from yggdrasil.storage.protocols import InternalStorageBundle
 
 logger = custom_logger(__name__)
 
+#: Default CouchDB hold time of an idle plan ``_changes`` longpoll.
+DEFAULT_PLAN_LONGPOLL_TIMEOUT_MS = 60_000
+
+
+def _plan_longpoll_timeout_ms(config: Mapping[str, Any]) -> int:
+    """Read ``yggdrasil.plan_watcher_longpoll_timeout_ms`` (positive int)."""
+    value = config.get("yggdrasil", {}).get(
+        "plan_watcher_longpoll_timeout_ms", DEFAULT_PLAN_LONGPOLL_TIMEOUT_MS
+    )
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            "yggdrasil.plan_watcher_longpoll_timeout_ms must be a positive "
+            f"integer (milliseconds), got {value!r}"
+        )
+    return value
+
 
 def build_internal_storage(
     config: Mapping[str, Any],
@@ -39,7 +55,9 @@ def build_internal_storage(
     if resolved is None or isinstance(resolved, CouchInternalStorageConfig):
         from yggdrasil.storage.couchdb.bundle import build_couchdb_bundle
 
-        bundle = build_couchdb_bundle(resolved)
+        bundle = build_couchdb_bundle(
+            resolved, longpoll_timeout_ms=_plan_longpoll_timeout_ms(config)
+        )
     else:
         from yggdrasil.storage.sqlite import build_sqlite_bundle
 

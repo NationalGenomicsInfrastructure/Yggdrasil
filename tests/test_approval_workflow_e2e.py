@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.plan_store_support import supported_plan_document
 from yggdrasil.daemon.singleton import SingletonMeta
 from yggdrasil.watchers.backends.base import RawWatchEvent
 
@@ -151,37 +152,37 @@ class TestApprovalRequiredE2E(unittest.TestCase):
 
     def test_draft_plan_not_executed_until_approved(self):
         """Test that draft plans are not executed."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # Plan in draft status
-        draft_plan_doc = {
-            "_id": "pln_approval_001",
-            "status": "draft",  # Not approved
-            "auto_run": False,
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
+        draft_plan_doc = supported_plan_document(
+            "pln_approval_001",
+            status="draft",  # Not approved
+            auto_run=False,
+            run_token=1,
+            executed_run_token=0,
+        )
 
         # Should NOT be eligible
-        self.assertFalse(is_plan_eligible(draft_plan_doc))
+        self.assertFalse(is_eligible(draft_plan_doc))
 
     def test_approved_plan_becomes_eligible(self):
         """Test that approving a plan makes it eligible."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # Plan approved by an external actor
-        approved_plan_doc = {
-            "_id": "pln_approval_001",
-            "status": "approved",  # Now approved
-            "auto_run": False,
-            "run_token": 1,
-            "executed_run_token": 0,
-            "approved_at": "2026-01-16T12:00:00Z",
-            "approved_by": "user@example.com",
-        }
+        approved_plan_doc = supported_plan_document(
+            "pln_approval_001",
+            status="approved",  # Now approved
+            auto_run=False,
+            run_token=1,
+            executed_run_token=0,
+            approved_at="2026-01-16T12:00:00Z",
+            approved_by="user@example.com",
+        )
 
         # Should be eligible
-        self.assertTrue(is_plan_eligible(approved_plan_doc))
+        self.assertTrue(is_eligible(approved_plan_doc))
 
     @patch("yggdrasil.watchers.plan_watcher.YggdrasilDBManager")
     @patch("yggdrasil.watchers.plan_watcher.ChangesFetcher")
@@ -208,13 +209,13 @@ class TestApprovalRequiredE2E(unittest.TestCase):
         draft_change = {
             "seq": "1-abc",
             "id": "pln_draft_001",
-            "doc": {
-                "_id": "pln_draft_001",
-                "status": "draft",  # Not eligible
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "daemon",
-            },
+            "doc": supported_plan_document(
+                "pln_draft_001",
+                status="draft",  # Not eligible
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="daemon",
+            ),
         }
 
         asyncio.run(
@@ -256,14 +257,13 @@ class TestApprovalRequiredE2E(unittest.TestCase):
         approved_change = {
             "seq": "1-abc",
             "id": "pln_approved_001",
-            "doc": {
-                "_id": "pln_approved_001",
-                "status": "approved",  # Eligible
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "daemon",
-                "plan": {},
-            },
+            "doc": supported_plan_document(
+                "pln_approved_001",
+                status="approved",  # Eligible
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="daemon",
+            ),
         }
 
         asyncio.run(
@@ -297,50 +297,32 @@ class TestManualReRunE2E(unittest.TestCase):
 
     def test_executed_plan_not_eligible(self):
         """Test that already-executed plans are not eligible."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        executed_plan = {
-            "_id": "pln_rerun_001",
-            "status": "approved",
-            "run_token": 1,
-            "executed_run_token": 1,  # Same as run_token
-        }
+        executed_plan = supported_plan_document(
+            "pln_rerun_001",
+            status="approved",
+            run_token=1,
+            executed_run_token=1,  # Same as run_token
+        )
 
-        self.assertFalse(is_plan_eligible(executed_plan))
+        self.assertFalse(is_eligible(executed_plan))
 
     def test_rerun_request_makes_plan_eligible(self):
         """Test that incrementing run_token makes plan eligible again."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # After an external actor increments run_token
-        rerun_plan = {
-            "_id": "pln_rerun_001",
-            "status": "approved",
-            "run_token": 2,  # Incremented by an external actor
-            "executed_run_token": 1,  # Still at previous value
-            "run_requested_at": "2026-01-16T14:00:00Z",
-            "run_requested_by": "user@example.com",
-        }
-
-        self.assertTrue(is_plan_eligible(rerun_plan))
-
-    @patch("yggdrasil.storage.couchdb.plan_store.PlanDBManager")
-    def test_token_updated_after_rerun_execution(self, mock_plan_db_cls):
-        """Test that executed_run_token is updated after re-run execution."""
-        mock_plan_db = mock_plan_db_cls.return_value
-        mock_plan_db.update_executed_token.return_value = True
-
-        # Simulate successful re-run
-        plan_doc_id = "pln_rerun_001"
-        new_run_token = 2
-
-        # After execution, update token
-        success = mock_plan_db.update_executed_token(plan_doc_id, new_run_token)
-
-        self.assertTrue(success)
-        mock_plan_db.update_executed_token.assert_called_once_with(
-            plan_doc_id, new_run_token
+        rerun_plan = supported_plan_document(
+            "pln_rerun_001",
+            status="approved",
+            run_token=2,  # Incremented by an external actor
+            executed_run_token=1,  # Still at previous value
+            run_requested_at="2026-01-16T14:00:00Z",
+            run_requested_by="user@example.com",
         )
+
+        self.assertTrue(is_eligible(rerun_plan))
 
 
 class TestStartupRecoveryE2E(unittest.TestCase):
@@ -391,13 +373,13 @@ class TestStartupRecoveryE2E(unittest.TestCase):
         # (query_approved_pending already filters for run_token > executed_run_token)
         mock_plan_db = mock_plan_db_cls.return_value
         mock_plan_db.query_approved_pending.return_value = [
-            {
-                "_id": "pln_recovery_001",
-                "status": "approved",
-                "run_token": 1,
-                "executed_run_token": 0,
-                "execution_authority": "daemon",
-            },
+            supported_plan_document(
+                "pln_recovery_001",
+                status="approved",
+                run_token=1,
+                executed_run_token=0,
+                execution_authority="daemon",
+            ),
             # Note: pln_recovery_002 would NOT be returned by query_approved_pending
             # because run_token == executed_run_token
         ]
@@ -421,33 +403,33 @@ class TestStartupRecoveryE2E(unittest.TestCase):
 
     def test_recovery_skips_already_executed_plans(self):
         """Test that recovery doesn't re-execute plans with matching tokens."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # Plan that was already executed before crash
-        already_executed = {
-            "_id": "pln_old_001",
-            "status": "approved",
-            "run_token": 1,
-            "executed_run_token": 1,
-        }
+        already_executed = supported_plan_document(
+            "pln_old_001",
+            status="approved",
+            run_token=1,
+            executed_run_token=1,
+        )
 
         # Should NOT be eligible
-        self.assertFalse(is_plan_eligible(already_executed))
+        self.assertFalse(is_eligible(already_executed))
 
     def test_recovery_executes_pending_approved_plans(self):
         """Test that recovery executes pending approved plans."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # Plan that was approved but not yet executed
-        pending_approved = {
-            "_id": "pln_pending_001",
-            "status": "approved",
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
+        pending_approved = supported_plan_document(
+            "pln_pending_001",
+            status="approved",
+            run_token=1,
+            executed_run_token=0,
+        )
 
         # Should be eligible
-        self.assertTrue(is_plan_eligible(pending_approved))
+        self.assertTrue(is_eligible(pending_approved))
 
 
 class TestFailurePathsE2E(unittest.TestCase):
@@ -459,32 +441,32 @@ class TestFailurePathsE2E(unittest.TestCase):
 
     def test_engine_failure_leaves_plan_eligible(self):
         """Test that engine failure doesn't update executed_run_token."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
         # Plan that failed during execution
         # (executed_run_token NOT updated because engine raised)
-        failed_plan = {
-            "_id": "pln_failed_001",
-            "status": "approved",
-            "run_token": 1,
-            "executed_run_token": 0,  # Not updated due to failure
-        }
+        failed_plan = supported_plan_document(
+            "pln_failed_001",
+            status="approved",
+            run_token=1,
+            executed_run_token=0,  # Not updated due to failure
+        )
 
         # Should still be eligible for retry
-        self.assertTrue(is_plan_eligible(failed_plan))
+        self.assertTrue(is_eligible(failed_plan))
 
     def test_rejected_plan_never_eligible(self):
         """Test that rejected plans are never eligible."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        from yggdrasil.contract.read import is_eligible
 
-        rejected_plan = {
-            "_id": "pln_rejected_001",
-            "status": "rejected",
-            "run_token": 1,
-            "executed_run_token": 0,
-        }
+        rejected_plan = supported_plan_document(
+            "pln_rejected_001",
+            status="rejected",
+            run_token=1,
+            executed_run_token=0,
+        )
 
-        self.assertFalse(is_plan_eligible(rejected_plan))
+        self.assertFalse(is_eligible(rejected_plan))
 
     def test_plan_with_no_steps_is_valid(self):
         """Test that plans with empty steps array are valid edge case."""
@@ -533,38 +515,50 @@ class TestComponentInteractionE2E(unittest.TestCase):
     """
 
     def test_eligibility_function_matches_watcher_behavior(self):
-        """Verify is_plan_eligible matches PlanWatcher filtering."""
-        from yggdrasil.storage.plan_eligibility import is_plan_eligible
+        """Verify is_eligible matches PlanWatcher filtering."""
+        from yggdrasil.contract.read import is_eligible
 
         test_cases = [
             # (doc, expected_eligible, description)
             (
-                {"status": "draft", "run_token": 1, "executed_run_token": 0},
+                supported_plan_document(
+                    status="draft", run_token=1, executed_run_token=0
+                ),
                 False,
                 "draft",
             ),
             (
-                {"status": "pending", "run_token": 1, "executed_run_token": 0},
+                supported_plan_document(
+                    status="pending", run_token=1, executed_run_token=0
+                ),
                 False,
                 "pending",
             ),
             (
-                {"status": "approved", "run_token": 1, "executed_run_token": 0},
+                supported_plan_document(
+                    status="approved", run_token=1, executed_run_token=0
+                ),
                 True,
                 "approved",
             ),
             (
-                {"status": "approved", "run_token": 1, "executed_run_token": 1},
+                supported_plan_document(
+                    status="approved", run_token=1, executed_run_token=1
+                ),
                 False,
                 "executed",
             ),
             (
-                {"status": "approved", "run_token": 2, "executed_run_token": 1},
+                supported_plan_document(
+                    status="approved", run_token=2, executed_run_token=1
+                ),
                 True,
                 "rerun",
             ),
             (
-                {"status": "rejected", "run_token": 1, "executed_run_token": 0},
+                supported_plan_document(
+                    status="rejected", run_token=1, executed_run_token=0
+                ),
                 False,
                 "rejected",
             ),
@@ -572,7 +566,7 @@ class TestComponentInteractionE2E(unittest.TestCase):
 
         for doc, expected, desc in test_cases:
             with self.subTest(description=desc):
-                result = is_plan_eligible(doc)
+                result = is_eligible(doc)
                 self.assertEqual(result, expected, f"Failed for {desc}")
 
     def test_plan_serialization_roundtrip(self):

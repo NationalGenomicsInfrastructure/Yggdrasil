@@ -7,6 +7,8 @@ These steps are designed for testing the Yggdrasil execution pipeline:
 - step_fail: Always fails with configurable message
 - step_write_file: Writes a file and registers artifact
 - step_random_fail: Probabilistic failure for chaos testing
+- step_slurm_job: Submits a SLURM batch job through the configured job
+  manager and waits for its terminal state
 
 NOTE: These steps are synchronous (def, not async def) because the
 Engine.run() method is synchronous. Using async def would return
@@ -19,12 +21,14 @@ which records the step as failed: a fail_fast plan stops there, while a
 continue_independent plan blocks the step's dependents and runs the rest.
 """
 
+import asyncio
 import random
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from yggdrasil.flow.errors import PermanentStepError
 from yggdrasil.flow.model import StepResult
 from yggdrasil.flow.step import StepContext, step
 
@@ -650,6 +654,88 @@ def step_emit_metadata(
     return StepResult(metrics=metrics)
 
 
+@step
+def step_slurm_job(
+    ctx: StepContext,
+    script_content: str = "#!/bin/bash\nsleep 5\necho 'slurm test job done'\n",
+    filename: str = "slurm_test_job.sh",
+    expect_state: str = "COMPLETED",
+    poll_interval_sec: float = 5.0,
+) -> StepResult:
+    """
+    Submit a SLURM batch job through the configured job manager and wait
+    for it to reach its terminal state.
+
+    Exercises the same SlurmJobManager code path (sbatch/sacct) an HPC
+    deployment uses: with ``yggdrasil.slurm.backend = "slurm"`` in
+    main.json the manager talks to a real SLURM cluster (in the compose
+    stack: the local single-node slurmctld/slurmd services); without that
+    setting a dev daemon falls back to MockSlurmJobManager, so the step
+    runs everywhere.
+
+    Like every test realm step this is synchronous, but Engine runs steps
+    on worker threads with no running event loop, so it drives the async
+    manager with asyncio.run. Submission and the wait share ONE loop on
+    purpose: the mock backend completes its jobs on a background task of
+    the loop that submitted them.
+
+    Args:
+        ctx: Step execution context
+        script_content: Content of the sbatch script (written to the step
+            workdir before submission)
+        filename: Script file name inside the step workdir
+        expect_state: Terminal state the job must reach
+        poll_interval_sec: Seconds between status checks while waiting
+
+    Returns:
+        StepResult with job_id, final_state and script path in metrics
+
+    Raises:
+        PermanentStepError: If submission yields no job id, or the job
+            ends in a terminal state other than expect_state
+    """
+    from yggdrasil.toolkit.sjob_manager import SlurmManagerFactory
+
+    # test_realm only loads in dev mode, so is_dev=True matches the
+    # session the step is running under; the main.json backend setting
+    # (when present) takes precedence in the factory either way.
+    manager = SlurmManagerFactory.get_manager(is_dev=True)
+
+    script_path = ctx.workdir / filename
+    script_path.write_text(script_content)
+
+    ctx.emit("step.slurm_submitting", script=str(script_path))
+
+    async def _submit_and_wait():
+        job_id = await manager.submit_job(script_path)
+        if job_id is None:
+            return None, None
+        return job_id, await manager.wait_for_completion(job_id, poll_interval_sec)
+
+    job_id, final_state = asyncio.run(_submit_and_wait())
+
+    if job_id is None:
+        raise PermanentStepError(
+            f"SLURM job submission failed (no job id) for script: {script_path}"
+        )
+
+    ctx.emit("step.slurm_completed", job_id=job_id, final_state=final_state)
+
+    if final_state != expect_state:
+        raise PermanentStepError(
+            f"SLURM job {job_id} ended in state '{final_state}', "
+            f"expected '{expect_state}'"
+        )
+
+    return StepResult(
+        metrics={
+            "job_id": job_id,
+            "final_state": final_state,
+            "script": str(script_path),
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step registry for fn_ref resolution
 # ---------------------------------------------------------------------------
@@ -667,6 +753,7 @@ STEPS: dict[str, Any] = {
     "step_exercise_all_fetch_methods": step_exercise_all_fetch_methods,
     "step_verify_limit_clamping": step_verify_limit_clamping,
     "step_emit_metadata": step_emit_metadata,
+    "step_slurm_job": step_slurm_job,
 }
 
 

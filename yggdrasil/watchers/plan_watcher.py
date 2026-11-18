@@ -3,14 +3,20 @@ PlanWatcher: Monitors yggdrasil_plans database for approved plans.
 
 This watcher implements the Plan Approval & Execution Workflow by:
 1. Watching the _changes feed on yggdrasil_plans
-2. Filtering for eligible plans (status='approved', run_token > executed_run_token)
+2. Filtering for eligible plans: of a supported family, with a valid token
+   pair, approved, and with a request not yet executed
+   (run_token > executed_run_token)
 3. Emitting events for execution by YggdrasilCore
 4. Managing checkpoint persistence for restart safety
 
 Key design principles:
 - Uses CouchDBCheckpointStore for DB-backed checkpoint persistence
 - Uses ChangesFetcher for generic _changes streaming
-- Uses is_plan_eligible() pure function for eligibility logic
+- Uses the shared reader's eligibility decision
+  (yggdrasil.contract.read.eligibility), which checks the family and the
+  tokens before the status, and reports at WARNING the refusals within its
+  scope that need an operator: a plan of an unsupported family, and
+  malformed control state
 - Graceful error handling (log + continue, no crash)
 """
 
@@ -19,6 +25,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from yggdrasil.contract import PLAN_DOCUMENT, versions
+from yggdrasil.contract.read import (
+    INVALID_TOKENS,
+    STATUS_MISSING,
+    UNSUPPORTED_DOCUMENT,
+    Eligibility,
+    eligibility,
+)
 from yggdrasil.couchdb.changes_fetcher import ChangesFetcher
 from yggdrasil.couchdb.connection import CouchDBHandler
 from yggdrasil.logging_utils import custom_logger
@@ -26,11 +40,14 @@ from yggdrasil.storage.couchdb.bundle import CouchPlanChangeSource
 from yggdrasil.storage.couchdb.checkpoint_store import CouchDBCheckpointStore
 from yggdrasil.storage.couchdb.plan_store import PlanDBManager
 from yggdrasil.storage.couchdb.yggdrasil_db_manager import YggdrasilDBManager
-from yggdrasil.storage.plan_eligibility import get_eligibility_reason, is_plan_eligible
 from yggdrasil.storage.protocols import PlanChangeSource, PlanStore
 from yggdrasil.watchers.abstract_watcher import AbstractWatcher
 from yggdrasil.watchers.backends.base import Checkpoint, CheckpointStore, RawWatchEvent
 from yggdrasil.watchers.events import EventType, YggdrasilEvent
+
+# Refusals of malformed control state, which only a writer outside the
+# contract leaves behind: reported at WARNING within the watcher's scope.
+_MALFORMED_CONTROL_STATE = frozenset({INVALID_TOKENS, STATUS_MISSING})
 
 
 class PlanWatcher(AbstractWatcher):
@@ -41,7 +58,8 @@ class PlanWatcher(AbstractWatcher):
     - Polls the _changes feed on yggdrasil_plans
     - Filters changes to only process eligible plans
     - Emits PLAN_EXECUTION_EVENT for each eligible plan
-    - Persists checkpoint after each successful emit
+    - After evaluating a change, attempt to persist its sequence when
+      available, whether or not an execution event was emitted.
     - Supports targeted run-once and future daemon-startup recovery
 
     The watcher does NOT execute plans directly. It emits events that
@@ -216,8 +234,17 @@ class PlanWatcher(AbstractWatcher):
         """
         Evaluate a single plan change event.
 
-        Applies filtering criteria (origin, owner), checks eligibility,
-        and emits event if plan is ready for execution.
+        Applies the scope filters (execution authority, then owner) first,
+        then the shared reader's eligibility decision, and emits an event
+        only for an eligible plan. A plan outside the scope is skipped at
+        DEBUG, whatever it holds. Within the scope, a refusal is reported at
+        WARNING when an operator has to act on it: a plan whose
+        ``schema_version`` is absent, invalid or unsupported, and malformed
+        control state (``invalid_tokens``, ``status_missing``), named by its
+        reason code with the decision's bounded diagnostic. A draft or an
+        already-executed request is skipped at DEBUG. A plan missing
+        ``execution_authority`` is skipped with a WARNING, before anything
+        else is judged.
 
         Args:
             change: Backend-agnostic plan change event.
@@ -270,14 +297,17 @@ class PlanWatcher(AbstractWatcher):
                 )
                 return
 
-        # Check eligibility (status + token logic)
-        if is_plan_eligible(doc):
+        # Check eligibility (family, tokens, status), now that the plan is
+        # in scope.
+        decision = eligibility(doc)
+        if decision.eligible:
+            # Eligibility requires a valid token pair, so both tokens are present.
             self._logger.info(
                 "Eligible plan detected: %s (authority=%s, run_token=%s, executed_run_token=%s)",
                 doc_id,
                 doc_authority,
-                doc.get("run_token", 0),
-                doc.get("executed_run_token", -1),
+                doc["run_token"],
+                doc["executed_run_token"],
             )
             # Emit event for execution
             payload = {
@@ -286,8 +316,59 @@ class PlanWatcher(AbstractWatcher):
             }
             await self.emit(payload, source="PlanWatcher")
         else:
-            reason = get_eligibility_reason(doc)
-            self._logger.debug("Skipping ineligible plan: %s (%s)", doc_id, reason)
+            self._report_refusal(doc_id, doc, decision, recovery=False)
+
+    def _report_refusal(
+        self,
+        plan_id: str,
+        doc: dict[str, Any],
+        decision: Eligibility,
+        *,
+        recovery: bool,
+    ) -> None:
+        """Log why a plan within the watcher's scope is not emitted.
+
+        A plan whose ``schema_version`` is absent, invalid or unsupported, and
+        one with malformed control state, are reported at WARNING: neither can
+        run until someone changes it. Every other refusal is logged at DEBUG.
+
+        Args:
+            plan_id: The plan's ID, as the change or the recovery request
+                names it.
+            doc: The plan document.
+            decision: Its eligibility decision, a refusal.
+            recovery: Whether the plan was judged by a recovery scan, whose
+                lines say so.
+        """
+        prefix = "Recovery: " if recovery else ""
+        if decision.code == UNSUPPORTED_DOCUMENT:
+            version = versions.version_of(PLAN_DOCUMENT, doc)
+            self._logger.warning(
+                "%sPlan '%s' is not executed: %s; no execution event is emitted "
+                "for it",
+                prefix,
+                plan_id,
+                versions.version_sentence(PLAN_DOCUMENT, version),
+            )
+        elif decision.code in _MALFORMED_CONTROL_STATE:
+            self._logger.warning(
+                "%sPlan '%s' is not executed: its control state is malformed "
+                "(%s). %s; no execution event is emitted for it",
+                prefix,
+                plan_id,
+                decision.code,
+                decision.reason,
+            )
+        elif recovery:
+            self._logger.debug(
+                "Recovery: requested plan %s is not eligible (%s)",
+                plan_id,
+                decision.reason,
+            )
+        else:
+            self._logger.debug(
+                "Skipping ineligible plan: %s (%s)", plan_id, decision.reason
+            )
 
     async def recover_pending_plans(
         self, plan_ids: list[str] | None = None
@@ -299,25 +380,40 @@ class PlanWatcher(AbstractWatcher):
         eligible-plan scan needed by a future daemon-startup recovery path.
         Both paths apply the configured authority and owner filters.
 
+        Scoped recovery judges each requested plan's eligibility silently,
+        counting the eligible ones, then applies the scope filters, and only
+        then reports a refusal, as the change path does: at WARNING for a
+        plan of an unsupported family or with malformed control state, at
+        DEBUG otherwise. So a plan outside the scope is never reported, and a
+        requested plan missing ``execution_authority`` gets that warning
+        whether or not it is eligible. The full scan relies on the store's
+        listing, which returns eligible plans only and reports the
+        unsupported ones it leaves out.
+
         This method does not load or save checkpoints, and it does not
         coordinate a recovery scan with the live change-feed cursor.
 
         Returns:
             Plan documents that were emitted for execution.
         """
+        # Each candidate with the name a refusal report uses and the decision
+        # that judged it; None where the store's listing already did.
+        candidates: list[tuple[str, dict[str, Any], Eligibility | None]] = []
         if plan_ids is None:
             self._logger.info(
                 "Running eligible-plan recovery: querying all approved "
                 "pending plans..."
             )
             # Preserve the full-scan branch for future daemon-startup recovery.
-            all_eligible = self.plan_db.query_approved_pending()
+            listed = self.plan_db.query_approved_pending()
+            candidates = [(doc.get("_id", "unknown"), doc, None) for doc in listed]
+            total_eligible = len(listed)
         else:
             self._logger.info(
                 "Running scoped eligible-plan recovery for %d plan(s)...",
                 len(plan_ids),
             )
-            all_eligible = []
+            total_eligible = 0
             # A full scan can return each document only once. Preserve that
             # behavior while retaining the caller's order.
             for plan_id in dict.fromkeys(plan_ids):
@@ -336,18 +432,16 @@ class PlanWatcher(AbstractWatcher):
                         "Recovery: requested plan %s was not found", plan_id
                     )
                     continue
-                if not is_plan_eligible(plan_doc):
-                    self._logger.debug(
-                        "Recovery: requested plan %s is not eligible (%s)",
-                        plan_id,
-                        get_eligibility_reason(plan_doc),
-                    )
-                    continue
-                all_eligible.append(plan_doc)
+                # Judged silently here; a refusal is reported only once the
+                # scope filters have kept the plan.
+                judged = eligibility(plan_doc)
+                if judged.eligible:
+                    total_eligible += 1
+                candidates.append((plan_id, plan_doc, judged))
 
         # Apply origin and owner filters
         filtered_plans: list[dict[str, Any]] = []
-        for plan_doc in all_eligible:
+        for name, plan_doc, decision in candidates:
             doc_id = plan_doc.get("_id", "unknown")
             doc_authority = plan_doc.get("execution_authority")
             doc_owner = plan_doc.get("execution_owner")
@@ -382,12 +476,15 @@ class PlanWatcher(AbstractWatcher):
                 )
                 continue
 
+            if decision is not None and not decision.eligible:
+                self._report_refusal(name, plan_doc, decision, recovery=True)
+                continue
             filtered_plans.append(plan_doc)
 
         self._logger.info(
             "Found %d eligible plans for recovery (of %d total eligible)",
             len(filtered_plans),
-            len(all_eligible),
+            total_eligible,
         )
 
         for plan_doc in filtered_plans:

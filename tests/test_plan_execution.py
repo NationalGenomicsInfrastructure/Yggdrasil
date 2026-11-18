@@ -30,6 +30,7 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from tests.execution_support import (
     PLAN_ID,
@@ -42,12 +43,15 @@ from tests.execution_support import (
     CouchBackend,
     ExecutionTestCase,
     Gate,
+    SQLiteBackend,
     chain_plan,
+    directory_tree,
     lanes_plan,
     make_plan,
     run_bounded,
     spec,
 )
+from yggdrasil.contract.read import is_eligible
 from yggdrasil.core.execution_ids import ExecutionIdAllocator, execution_timestamp
 from yggdrasil.daemon.plan_execution import (
     DAEMON_CLAIM,
@@ -81,7 +85,6 @@ from yggdrasil.flow.outcomes import (
 from yggdrasil.ops.consumer import build_plan_snapshot
 from yggdrasil.storage.errors import PlanStoreError
 from yggdrasil.storage.plan_documents import build_plan_document
-from yggdrasil.storage.plan_eligibility import is_plan_eligible
 from yggdrasil.storage.plan_updates import FinalizationStatus, SupersessionReason
 
 CONTINUE = CONTINUE_INDEPENDENT_POLICY
@@ -118,7 +121,7 @@ class ConsumptionScenarios:
                     result.finalization.status, FinalizationStatus.COMMITTED
                 )
                 self.assert_recorded(result)
-                self.assertFalse(is_plan_eligible(self.stored(plan_id)))
+                self.assertFalse(is_eligible(self.stored(plan_id)))
 
     def test_fail_fast_failure_leaves_the_request_eligible(self):
         self.steps.fail("a", RuntimeError("boom"))
@@ -133,7 +136,7 @@ class ConsumptionScenarios:
         self.assertEqual(self.steps.calls, ["a"])
         self.assertEqual(self.store.calls["finalize"], 0)
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_fail_fast_preflight_rejection_leaves_the_request_eligible(self):
         self.save(cyclic_plan(FAIL_FAST))
@@ -146,7 +149,7 @@ class ConsumptionScenarios:
         )
         self.assertEqual(self.steps.calls, [])
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_drained_continuation_failure_consumes_the_request(self):
         # Lane 1 fails and its upload is blocked; lane 2 still completes.
@@ -171,7 +174,7 @@ class ConsumptionScenarios:
         )
         self.assert_recorded(result)
         self.assertEqual(self.stored()["last_finalized_execution"]["outcome"], "failed")
-        self.assertFalse(is_plan_eligible(self.stored()))
+        self.assertFalse(is_eligible(self.stored()))
 
     def test_continuation_preflight_rejection_consumes_the_request(self):
         self.save(cyclic_plan(CONTINUE))
@@ -185,16 +188,19 @@ class ConsumptionScenarios:
         self.assertIn("cycle", result.report.diagnostic.message)
         self.assertEqual(self.steps.calls, [])
         self.assert_recorded(result)
-        self.assertFalse(is_plan_eligible(self.stored()))
+        self.assertFalse(is_eligible(self.stored()))
 
     def test_step_ids_that_are_not_strings_are_rejected_and_recorded(self):
         # A stored document can carry anything as a step ID, and reading the
         # plan keeps it. Its rejection must still be reported and, for a
         # continuation request, recorded like any other preflight rejection.
+        # A null step ID is a missing execution field instead, which
+        # admission refuses before deserializing; see
+        # tests/test_plan_execution_controls.py.
         cases = [
             (policy, step_id)
             for policy in POLICIES
-            for step_id in (["bad"], {"bad": 1}, None)
+            for step_id in (["bad"], {"bad": 1})
         ]
         for index, (policy, step_id) in enumerate(cases):
             plan_id = f"{PLAN_ID}_malformed_{index}"
@@ -221,7 +227,7 @@ class ConsumptionScenarios:
                 if policy == CONTINUE:
                     self.assertEqual(result.status, ExecutionStatus.FINALIZED)
                     self.assert_recorded(result)
-                    self.assertFalse(is_plan_eligible(self.stored(plan_id)))
+                    self.assertFalse(is_eligible(self.stored(plan_id)))
                 else:
                     self.assertEqual(result.status, ExecutionStatus.UNFINISHED)
                     self.assert_unconsumed(plan_id)
@@ -266,23 +272,6 @@ class ConsumptionScenarios:
                 else:
                     self.assertEqual(result.status, ExecutionStatus.UNFINISHED)
                     self.assert_unconsumed(plan_id)
-
-    def test_legacy_plan_is_finalized_against_the_generation_it_is_given(self):
-        legacy = build_plan_document(
-            chain_plan(), REALM, dict(SCOPE), auto_run=True, execution_owner=None
-        )
-        del legacy["plan_generation"]
-        self.backend.raw_put(legacy)
-
-        result = self.execute()
-
-        self.assertEqual(result.status, ExecutionStatus.FINALIZED)
-        generation = self.stored()["plan_generation"]
-        self.assertTrue(generation)
-        self.assertEqual(result.report.plan_generation, generation)
-        self.assertEqual(
-            self.stored()["last_finalized_execution"]["plan_generation"], generation
-        )
 
 
 class TestConsumptionSQLite(ConsumptionScenarios, ExecutionTestCase):
@@ -364,7 +353,7 @@ class TestAdmission(ExecutionTestCase):
             with self.subTest(doc_id=doc["_id"]):
                 result = self.execute(doc["_id"])
                 self.assertEqual(result.status, ExecutionStatus.INVALID_DOCUMENT)
-                self.assertTrue(is_plan_eligible(self.stored(doc["_id"])))
+                self.assertTrue(is_eligible(self.stored(doc["_id"])))
         self.assertEqual(self.engine.contexts, [])
 
     def test_failed_admission_read_leaves_the_plan_eligible(self):
@@ -567,7 +556,7 @@ class TestCancellation(ExecutionTestCase):
                 self.assertEqual(context.report.unreached_step_ids, ["b"])
                 self.assertFalse(self.coordinator.is_in_flight(plan_id))
                 self.assert_unconsumed(plan_id)
-                self.assertTrue(is_plan_eligible(self.stored(plan_id)))
+                self.assertTrue(is_eligible(self.stored(plan_id)))
         self.assertEqual(self.store.calls["finalize"], 0)
 
     def test_shutdown_cancelling_the_coordination_waits_for_the_worker(self):
@@ -810,7 +799,7 @@ class TestFinalizationRetries(ExecutionTestCase):
         self.assertIsNone(self.coordinator.pending_finalization(PLAN_ID))
         # The regenerated plan is a new request, still waiting to run.
         self.assert_unconsumed()
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
     def test_non_retryable_failure_is_not_retried(self):
         self.save()
@@ -837,7 +826,7 @@ class TestFinalizationRetries(ExecutionTestCase):
         self.assertFalse(self.coordinator.is_in_flight(PLAN_ID))
         # Still eligible in storage, yet a duplicate request neither runs the
         # plan nor starts another retry cycle.
-        self.assertTrue(is_plan_eligible(self.stored()))
+        self.assertTrue(is_eligible(self.stored()))
 
         duplicate = self.execute()
 
@@ -1389,6 +1378,103 @@ class TestAttemptReservation(ExecutionTestCase):
         self.assertGreater(retried.report.execution_id, unused.name)
         shown = build_plan_snapshot(plan_dir, REALM, PLAN_ID)["attempt"]
         self.assertEqual(shown["execution_id"], retried.report.execution_id)
+
+
+class UnusableNameScenarios:
+    """A stored plan whose realm or ID cannot name a directory never starts.
+
+    The engine refuses such a plan before it allocates an execution ID, so
+    the coordinator stops at admission: nothing is reserved, run, published,
+    written or finalized, the plan is released, and it stays eligible. Mixed
+    into one ExecutionTestCase per plan-store backend.
+    """
+
+    def setUp(self):
+        super().setUp()
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.sandbox = Path(temp_dir.name)
+        self.spool = self.sandbox / "spool"
+        self.reserver = _SpyReserver(self.spool)
+        self.engine = CapturingEngine(
+            work_root=self.sandbox / "work",
+            emitter=FileSpoolEmitter(self.spool),
+            journal=self.journal,
+            attempt_reserver=self.reserver,
+        )
+        self.coordinator = PlanExecutionCoordinator(
+            engine=self.engine,
+            plan_store=self.store,
+            sleep=self.record_delay,
+        )
+
+    def plan_seq(self):
+        """The SQLite store's plan-change sequence; None on CouchDB."""
+        if isinstance(self.backend, SQLiteBackend):
+            return self.backend.internal.current_plan_seq()
+        return None
+
+    def test_an_unusable_realm_or_plan_id_is_refused_at_admission(self):
+        refused = {}
+        for field, plan_id in (
+            ("plan.realm", PLAN_ID),
+            ("plan.plan_id", "pln_exec/nested"),
+        ):
+            with self.subTest(field=field):
+                self.save(chain_plan(plan_id=plan_id))
+                if field == "plan.realm":
+                    stored_plan = self.stored(plan_id)["plan"]
+                    self.update(plan_id, plan={**stored_plan, "realm": ".."})
+                before = self.stored(plan_id)
+                seq = self.plan_seq()
+                files = directory_tree(self.sandbox)
+                allocator = self.engine.execution_ids
+
+                with (
+                    patch.object(
+                        allocator, "allocate", wraps=allocator.allocate
+                    ) as allocate,
+                    self.assertLogs(COORDINATOR_LOGGER, level=logging.ERROR) as logs,
+                ):
+                    result = self.execute(plan_id)
+
+                self.assertEqual(result.status, ExecutionStatus.ADMISSION_FAILED)
+                rule = f"ValueError: {field} must name one directory component"
+                self.assertIn(rule, result.message)
+                self.assertTrue(any(rule in line for line in logs.output), logs.output)
+                allocate.assert_not_called()
+                self.assertEqual(self.reserver.calls, [])
+                self.assertEqual(self.engine.contexts, [])
+                self.assertEqual(self.steps.calls, [])
+                self.assertEqual(self.store.calls["finalize"], 0)
+                self.assertEqual(directory_tree(self.sandbox), files)
+                self.assertEqual(self.stored(plan_id), before)
+                self.assertEqual(self.plan_seq(), seq)
+                self.assertFalse(self.coordinator.is_in_flight(plan_id))
+                self.assertIsNone(self.coordinator.pending_finalization(plan_id))
+                refused[plan_id] = before
+
+        valid = chain_plan(plan_id="pln_exec_valid")
+        self.save(valid)
+        result = self.execute(valid.plan_id)
+
+        self.assertEqual(result.status, ExecutionStatus.FINALIZED)
+        self.assert_recorded(result)
+        for plan_id, document in refused.items():
+            with self.subTest(still_eligible=plan_id):
+                self.assertEqual(self.stored(plan_id), document)
+                self.assertEqual(document["executed_run_token"], -1)
+                self.assertTrue(is_eligible(document))
+
+
+class TestUnusableNamesSQLite(UnusableNameScenarios, ExecutionTestCase):
+    """The refusal against the SQLite plan store."""
+
+
+class TestUnusableNamesCouch(UnusableNameScenarios, ExecutionTestCase):
+    """The refusal against the CouchDB plan store."""
+
+    backend_type = CouchBackend
 
 
 class _ReturnsNothingEngine:

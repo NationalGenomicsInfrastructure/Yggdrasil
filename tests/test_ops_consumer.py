@@ -8,8 +8,22 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from typing import Any
+from unittest.mock import Mock, patch
 
+from tests.contract.support import ConformingBuilders
+from tests.plan_store_support import (
+    FakeCouchServer,
+    ops_writer_on,
+    patch_api_exception,
+)
+from yggdrasil.flow.events.attempt_records import (
+    ATTEMPT_STARTED_EVENT,
+    attempt_spool_path,
+    record_filename,
+    step_event_filename,
+)
+from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.ops.consumer import (
     FileSpoolConsumer,
     _event_files,
@@ -18,9 +32,10 @@ from yggdrasil.ops.consumer import (
     _safe_load,
     build_plan_snapshot,
 )
+from yggdrasil.storage.partitions import partition_key
 
 
-class TestSafeLoad(unittest.TestCase):
+class TestSafeLoad(ConformingBuilders):
     """Tests for _safe_load helper function."""
 
     def test_safe_load_valid_json(self):
@@ -58,7 +73,7 @@ class TestSafeLoad(unittest.TestCase):
             self.assertEqual(result, {})
 
 
-class TestFindAnyEvent(unittest.TestCase):
+class TestFindAnyEvent(ConformingBuilders):
     """Tests for _find_any_event helper function."""
 
     def test_find_any_event_single_event(self):
@@ -256,7 +271,7 @@ class TestFindAnyEvent(unittest.TestCase):
             self.assertEqual(result["scope"]["id"], "P_NORMAL")
 
 
-class TestEventFiles(unittest.TestCase):
+class TestEventFiles(ConformingBuilders):
     """Only files directly in a step's directory are its events."""
 
     def test_a_nested_steps_directory_is_not_an_event_file(self):
@@ -272,7 +287,7 @@ class TestEventFiles(unittest.TestCase):
             )
 
 
-class TestReadScopeFromSpool(unittest.TestCase):
+class TestReadScopeFromSpool(ConformingBuilders):
     """Tests for _read_scope_from_spool helper function."""
 
     def test_read_scope_from_event(self):
@@ -312,7 +327,7 @@ class TestReadScopeFromSpool(unittest.TestCase):
             self.assertEqual(result, {})
 
 
-class TestBuildPlanSnapshot(unittest.TestCase):
+class TestBuildPlanSnapshot(ConformingBuilders):
     """Tests for build_plan_snapshot function."""
 
     def test_build_plan_snapshot_single_step(self):
@@ -519,7 +534,7 @@ class TestBuildPlanSnapshot(unittest.TestCase):
             self.assertEqual(snapshot["steps"]["step1"]["progress"], 100)
 
 
-class TestFileSpoolConsumer(unittest.TestCase):
+class TestFileSpoolConsumer(ConformingBuilders):
     """Tests for FileSpoolConsumer class."""
 
     def test_consume_nonexistent_spool(self):
@@ -705,6 +720,150 @@ class TestFileSpoolConsumer(unittest.TestCase):
         )
 
         self.assertIsNone(consumer.filt)
+
+
+class TestConsumerSkipsUnchangedSnapshots(ConformingBuilders):
+    """A plan's snapshot is written only when its content changes."""
+
+    REALM = "test_realm"
+    SCOPE = {"kind": "project", "id": "P123"}
+    EXECUTION_ID = "20261016T100000000000Z_ab12"
+
+    def setUp(self):
+        """Give each test an empty spool and an emitter writing to it."""
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.spool = Path(tmp.name)
+        self.emitter = FileSpoolEmitter(self.spool)
+
+    def start_attempt(self, plan_id: str) -> None:
+        """Publish the start record of an attempt that plans step ``a``."""
+        self.emitter.emit(
+            {
+                "type": ATTEMPT_STARTED_EVENT,
+                "execution_id": self.EXECUTION_ID,
+                "scope": self.SCOPE,
+                "steps": [{"step_id": "a", "step_name": "a"}],
+                "_spool_path": attempt_spool_path(
+                    self.REALM,
+                    plan_id,
+                    self.EXECUTION_ID,
+                    record_filename(ATTEMPT_STARTED_EVENT),
+                ),
+            }
+        )
+
+    def publish_step_event(self, plan_id: str, seq: int, event_type: str) -> None:
+        """Publish one event in step ``a``'s stream of the attempt."""
+        self.emitter.emit(
+            {
+                "type": event_type,
+                "seq": seq,
+                "execution_id": self.EXECUTION_ID,
+                "scope": self.SCOPE,
+                "step_id": "a",
+                "run_id": "run_1",
+                "_spool_path": attempt_spool_path(
+                    self.REALM,
+                    plan_id,
+                    self.EXECUTION_ID,
+                    step_event_filename(seq, event_type),
+                    step_id="a",
+                ),
+            }
+        )
+
+    def consumer(self, writer: Any) -> FileSpoolConsumer:
+        """Return a new consumer of the test spool."""
+        return FileSpoolConsumer(spool_root=self.spool, writer=writer)
+
+    def test_an_idle_cycle_writes_nothing(self):
+        """A cycle that finds no new event writes nothing, though time moved on."""
+        self.start_attempt("plan_1")
+        writer = Mock()
+        consumer = self.consumer(writer)
+
+        with patch(
+            "yggdrasil.ops.consumer.utcnow_iso",
+            side_effect=["2026-10-16T10:00:00Z", "2026-10-16T10:00:02Z"],
+        ):
+            consumer.consume()
+            consumer.consume()
+
+        writer.write.assert_called_once()
+        snapshot = writer.write.call_args.args[1]
+        self.assertEqual(snapshot["updated_at"], "2026-10-16T10:00:00Z")
+
+    def test_a_new_event_is_written_next_cycle(self):
+        """An event published between two cycles gets the plan written again."""
+        self.start_attempt("plan_1")
+        writer = Mock()
+        consumer = self.consumer(writer)
+        consumer.consume()
+
+        self.publish_step_event("plan_1", 1, "step.started")
+        consumer.consume()
+
+        self.assertEqual(writer.write.call_count, 2)
+        snapshot = writer.write.call_args.args[1]
+        self.assertEqual(snapshot["steps"]["a"]["state"], "step.started")
+
+    def test_only_changed_plans_are_written(self):
+        """A cycle writes the plans with new events, and no other."""
+        self.start_attempt("plan_1")
+        self.start_attempt("plan_2")
+        writer = Mock()
+        consumer = self.consumer(writer)
+        consumer.consume()
+        writer.reset_mock()
+
+        self.publish_step_event("plan_2", 1, "step.started")
+        consumer.consume()
+
+        writer.write.assert_called_once()
+        self.assertEqual(writer.write.call_args.args[1]["plan_id"], "plan_2")
+
+    def test_a_failed_write_is_retried_next_cycle(self):
+        """A snapshot whose write raised is written again in the next cycle."""
+        self.start_attempt("plan_1")
+        writer = Mock()
+        writer.write.side_effect = [OSError("operations store unreachable"), None]
+        consumer = self.consumer(writer)
+
+        with self.assertRaises(OSError):
+            consumer.consume()
+        consumer.consume()
+
+        self.assertEqual(writer.write.call_count, 2)
+
+    def test_a_new_consumer_writes_the_snapshot_again(self):
+        """A consumer that has just started writes every plan once, as on a restart."""
+        self.start_attempt("plan_1")
+        writer = Mock()
+        first = self.consumer(writer)
+        first.consume()
+        first.consume()
+        self.assertEqual(writer.write.call_count, 1)
+
+        self.consumer(writer).consume()
+
+        self.assertEqual(writer.write.call_count, 2)
+
+    def test_idle_cycles_add_no_couchdb_revision(self):
+        """The stored document keeps its revision until the snapshot changes."""
+        patch_api_exception(self)
+        server = FakeCouchServer()
+        consumer = self.consumer(ops_writer_on(server))
+        doc_id = f"{partition_key(self.SCOPE)}:plan_status:{self.REALM}:plan_1"
+        self.start_attempt("plan_1")
+
+        for _ in range(3):
+            consumer.consume()
+        self.assertEqual(server.raw(doc_id)["_rev"], "1-fake")
+
+        self.publish_step_event("plan_1", 1, "step.started")
+        consumer.consume()
+        self.assertEqual(server.raw(doc_id)["_rev"], "2-fake")
 
 
 if __name__ == "__main__":

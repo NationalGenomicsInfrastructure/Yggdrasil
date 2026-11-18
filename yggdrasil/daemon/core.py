@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from yggdrasil.config.runtime_paths import resolve_event_spool, resolve_work_root
+from yggdrasil.contract.diagnostics import describe_recorded
+from yggdrasil.contract.problems import ContractProblem
 from yggdrasil.core.engine import Engine
 from yggdrasil.core.realm import RealmDescriptor, discover_realms
 from yggdrasil.couchdb.project_db_manager import ProjectDBManager
@@ -22,7 +24,11 @@ from yggdrasil.flow.base_handler import BaseHandler
 from yggdrasil.flow.events.emitter import FileSpoolEmitter
 from yggdrasil.flow.planner.api import PlanDraft, PlanningContext
 from yggdrasil.logging_utils import custom_logger
-from yggdrasil.storage import InternalStorageBundle, build_internal_storage
+from yggdrasil.storage import (
+    InternalStorageBundle,
+    UnsupportedDocumentError,
+    build_internal_storage,
+)
 from yggdrasil.watchers.events import EventType, YggdrasilEvent
 from yggdrasil.watchers.manager import WatcherManager
 from yggdrasil.watchers.plan_watcher import PlanWatcher
@@ -39,6 +45,46 @@ def _generate_run_once_owner() -> str:
     run-once invocations don't interfere with each other.
     """
     return f"run_once:{uuid.uuid4()}"
+
+
+# How many of an existing plan's problems the overwrite box lists by message.
+_SHOWN_PROBLEMS = 3
+
+
+def _shown(value: object, unrecognised: object = None) -> object:
+    """Return a plan summary's value for the overwrite box.
+
+    Args:
+        value: The value the shared reader recognised; None for none.
+        unrecognised: The recorded text the reader did not recognise in the
+            same field, if the summary has one.
+
+    Returns:
+        object: The value; for None, ``unknown``, followed by the
+        unrecognised text, if any, bounded and escaped by
+        ``describe_recorded`` so that it stays on one line.
+    """
+    if value is not None:
+        return value
+    if unrecognised is None:
+        return "unknown"
+    return f"unknown (recorded {describe_recorded(unrecognised)})"
+
+
+def _problems_text(problems: Sequence[ContractProblem]) -> str:
+    """Join the first problems' messages and count the rest, for the overwrite box.
+
+    Args:
+        problems: The problems of an existing plan's summary.
+
+    Returns:
+        str: At most _SHOWN_PROBLEMS messages, each already bounded by the
+        shared reader, followed by how many more there are.
+    """
+    shown = [problem.message for problem in problems[:_SHOWN_PROBLEMS]]
+    text = "; ".join(shown)
+    hidden = len(problems) - len(shown)
+    return f"{text} (and {hidden} more)" if hidden else text
 
 
 @singleton
@@ -135,12 +181,18 @@ class YggdrasilCore:
         *,
         execution_authority: str = "daemon",
         execution_owner: str | None = None,
-    ) -> str:
+    ) -> str | None:
         """
         Persist a PlanDraft to the yggdrasil_plans database.
 
         Creates or updates the plan document with status based on auto_run flag.
         On regeneration, execution tokens are reset (plan becomes eligible again).
+
+        The plan store refuses to replace a stored plan whose schema_version
+        is invalid or unsupported, or whose created_at cannot be kept. That
+        refusal is logged here, once and without a traceback, and the draft is
+        skipped, so the caller can go on with its other drafts. Any other
+        failure propagates.
 
         Args:
             draft: The PlanDraft returned by the handler
@@ -149,18 +201,26 @@ class YggdrasilCore:
             execution_owner: Unique token for run_once isolation (e.g., "run_once:<uuid>")
 
         Returns:
-            str: The database document ID of the persisted plan
+            str | None: The database document ID of the persisted plan, or
+            None if the store refused to replace the stored plan.
         """
-        plan_doc_id = self.plan_dbm.save_plan(
-            plan=draft.plan,
-            realm=handler_realm,
-            scope=draft.plan.scope,
-            auto_run=draft.auto_run,
-            execution_authority=execution_authority,
-            execution_owner=execution_owner,
-            preview=draft.preview,
-            notes=draft.notes,
-        )
+        try:
+            plan_doc_id = self.plan_dbm.save_plan(
+                plan=draft.plan,
+                realm=handler_realm,
+                scope=draft.plan.scope,
+                auto_run=draft.auto_run,
+                execution_authority=execution_authority,
+                execution_owner=execution_owner,
+                preview=draft.preview,
+                notes=draft.notes,
+            )
+        except UnsupportedDocumentError as exc:
+            self._logger.error(
+                "%s. The draft was not persisted; the stored plan is unchanged.",
+                exc,
+            )
+            return None
 
         self._logger.info(
             "Persisted plan '%s' to yggdrasil_plans (realm=%s, auto_run=%s, authority=%s)",
@@ -744,6 +804,19 @@ class YggdrasilCore:
         Uses the actual plan_doc_id (from draft.plan.plan_id) to ensure
         the check matches the exact document that will be persisted.
 
+        The store's summary is None only when no document is stored under
+        the ID, and planning then proceeds. Any stored document, readable or
+        not, is shown at WARNING in an "Existing Plan Found" box: its status,
+        origin (execution authority), last update and tokens, as the shared
+        reader recognises them, with ``unknown`` for each value it does not.
+        A status or origin recorded as text the reader does not know, such
+        as ``pending``, is shown beside ``unknown``, bounded and escaped:
+        ``unknown (recorded 'pending')``. It is shown for information only,
+        and decides nothing. Only when the reader found problems does the box
+        add a Problems line: the first three messages and how many more there
+        are. Planning then stops unless force is set. Whether a forced
+        replacement may happen is decided when the plan is saved.
+
         Args:
             plan_doc_id: The exact plan document ID to check
             force: Whether to force overwrite
@@ -754,25 +827,35 @@ class YggdrasilCore:
         """
         summary = self.plan_dbm.get_plan_summary(plan_doc_id)
         if summary is None:
-            # No existing plan, proceed
+            # No document under this ID, proceed
             return plan_doc_id, True
 
-        # Plan exists - display warning
-        self._logger.warning(
+        # A document exists, readable or not - display warning
+        box = (
             "\n╭─ Existing Plan Found ─────────────────────────────────────╮\n"
             "│ Plan ID:    %s\n"
             "│ Status:     %s\n"
             "│ Origin:     %s\n"
             "│ Updated:    %s\n"
-            "│ Run Token:  %d (executed: %d)\n"
-            "╰───────────────────────────────────────────────────────────╯",
-            plan_doc_id,
-            summary["status"],
-            summary["execution_authority"],
-            summary["updated_at"],
-            summary["run_token"],
-            summary["executed_run_token"],
+            "│ Run Token:  %s (executed: %s)\n"
         )
+        values: list[object] = [
+            plan_doc_id,
+            _shown(summary["status"], summary.get("unrecognised_status")),
+            _shown(
+                summary["execution_authority"],
+                summary.get("unrecognised_execution_authority"),
+            ),
+            _shown(summary["updated_at"]),
+            _shown(summary["run_token"]),
+            _shown(summary["executed_run_token"]),
+        ]
+        problems = summary.get("problems")
+        if problems:
+            box += "│ Problems:   %s\n"
+            values.append(_problems_text(problems))
+        box += "╰───────────────────────────────────────────────────────────╯"
+        self._logger.warning(box, *values)
 
         if force:
             self._logger.info("--force specified; overwriting existing plan.")
@@ -869,6 +952,8 @@ class YggdrasilCore:
                         execution_authority="daemon",
                         execution_owner=None,
                     )
+                    if plan_doc_id is None:
+                        continue  # Refused and logged; go on with the rest
                     self._logger.info(
                         "✓ Plan '%s' created (status=draft, authority=daemon). "
                         "Awaiting external approval.",
@@ -1049,6 +1134,8 @@ class YggdrasilCore:
                     execution_authority="run_once",
                     execution_owner=execution_owner,
                 )
+                if persisted_id is None:
+                    continue  # Refused and logged; go on with the rest
                 self._logger.info(
                     "Plan '%s' created (realm=%s, status=%s, owner=%s)",
                     persisted_id,
@@ -1460,6 +1547,8 @@ class YggdrasilCore:
             realm_id = getattr(handler, "realm_id", "unknown_realm")
             for draft in drafts:
                 plan_doc_id = self._persist_plan_draft(draft, realm_id)
+                if plan_doc_id is None:
+                    continue  # Refused and logged; go on with the rest
 
                 if draft.auto_run:
                     self._logger.info(

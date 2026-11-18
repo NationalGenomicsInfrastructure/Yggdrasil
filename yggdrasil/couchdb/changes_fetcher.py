@@ -56,7 +56,9 @@ class ChangesFetcher:
             include_docs: Include full documents in _changes feed (default True)
             retry_delay_sec: Delay in seconds before retrying (default 2.0)
             max_retries: Max retry attempts on transient errors (default 3)
-            longpoll_timeout_ms: CouchDB longpoll timeout in ms (default 60000)
+            longpoll_timeout_ms: CouchDB longpoll timeout in ms (default 60000).
+                The in-flight poll is a thread that cannot be cancelled. This can
+                delay daemon shutdown while asyncio.run() waits for it to finish.
             logger: Optional logger instance; uses module logger if None
         """
         self.db_handler = db_handler

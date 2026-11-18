@@ -24,7 +24,8 @@ Two key files:
 {
     "yggdrasil": {
         "log_dir": "yggdrasil_workspace/logs",
-        "job_monitor_poll_interval": 5
+        "job_monitor_poll_interval": 5,
+        "plan_watcher_longpoll_timeout_ms": 60000
     },
     "report_transfer": {
         "server": "<server>",
@@ -40,6 +41,7 @@ Two key files:
 |---|---|
 | `yggdrasil.log_dir` | Directory where Yggdrasil writes its log files |
 | `yggdrasil.job_monitor_poll_interval` | Seconds between Slurm job status polls |
+| `yggdrasil.plan_watcher_longpoll_timeout_ms` | Milliseconds CouchDB holds the PlanWatcher's idle `_changes` longpoll on the plans database before returning empty (optional, default 60000). Changes are still delivered as soon as they arrive; the value only sets how often an idle poll cycles. Shutdown can wait this long plus 5 s for the in-flight poll, so the stop grace period of a container or service must exceed it. The realm watchers have their own setting: `longpoll_timeout_ms` under `external_systems` (see below) |
 | `report_transfer.server` | SSH server for transferring reports |
 | `report_transfer.user` | SSH user |
 | `report_transfer.destination` | Remote destination path |
@@ -89,6 +91,7 @@ Two key files:
     },
     "defaults": {
         "couchdb": {
+            "longpoll_timeout_ms": 60000,
             "start_seq": "0",
             "max_limit": 200
         }
@@ -102,7 +105,7 @@ Two key files:
 
 | Key | Purpose |
 |---|---|
-| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq`. A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
+| `watch` | Used by `WatcherManager` to poll the changes feed. Configures `poll_interval`, `limit`, `start_seq` and `longpoll_timeout_ms` (milliseconds CouchDB holds an idle changes poll, default 60000; shutdown can wait this long plus 5 s). A `limit` of at least 25 is recommended — very low values (< 5) will cause slow recovery after downtime. |
 | `data_access` | Used by `DataAccess` for realm data queries. See the table below for sub-keys. |
 
 **`data_access` sub-keys:**
@@ -112,7 +115,7 @@ Two key files:
 | `data_access.realms` | Maps realm_id → phase → permission list. Unlisted realms are denied. Each phase (`planning`, `execution`) has its own `permissions` array (`"read"`, `"write"`). |
 | `data_access.options` | Per-connection backend options (e.g. `max_limit`). Overrides the matching key in `defaults.<backend>`. |
 
-**`defaults`** groups all backend defaults under `defaults.<backend>`. Both `WatcherManager` and `DataAccess` read from `defaults.<backend>` — watcher settings (e.g. `start_seq`, `poll_interval`) and data-access settings (e.g. `max_limit`) all live here. Connection-level overrides (`watch` keys and `data_access.options` respectively) take precedence over these defaults.
+**`defaults`** groups all backend defaults under `defaults.<backend>`. Both `WatcherManager` and `DataAccess` read from `defaults.<backend>` — watcher settings (e.g. `start_seq`, `poll_interval`, `longpoll_timeout_ms`) and data-access settings (e.g. `max_limit`) all live here. Connection-level overrides (`watch` keys and `data_access.options` respectively) take precedence over these defaults.
 
 `WatchSpec` entries in a realm's registration reference a connection by logical name (e.g. `connection="projects_db"`). The `WatcherManager` resolves the name to the concrete endpoint at startup.
 
@@ -191,19 +194,33 @@ required in a future release).
 `status="draft"` until an external actor approves them. Yggdrasil does not
 currently ship an approval UI or command. Operators who need manual
 approval must provide their own integration with the configured plan
-store.
+store, following
+[Approving or rerunning by hand](../reference/document_contract.md#approving-or-rerunning-by-hand).
 
 Approval changes `status` to `"approved"`. Requesting another execution
-increments `run_token`; a plan is eligible only while `run_token` is
-greater than `executed_run_token`. Neither field says whether a run
+increments `run_token`. Both tokens are JSON integers, and
+`executed_run_token` is never above `run_token`:
+
+- `run_token` runs from 0 to 2^53 − 1;
+- `executed_run_token` runs from −1 to 2^53 − 1.
+
+A missing token, a string, a float or a boolean makes the plan
+ineligible: nothing is defaulted or converted. Within that rule, a plan is
+eligible only while `run_token` is greater than `executed_run_token`.
+Neither field says whether a run
 succeeded: `executed_run_token` marks the latest *finished* request, and
 the outcome is recorded separately (see
-[Plan Execution](../reference/plan_execution.md)). A SQLite integration must also advance
+[Plan Execution](../reference/plan_execution.md)).
+
+An integration keeps every field it does not change exactly as read,
+`schema_version` included: it never adds, changes or removes it. A plan
+document without `schema_version`, or with a value other than `1`, is
+not executed, and an integration does not approve it. A SQLite integration must also advance
 the plan change sequence transactionally so PlanWatcher observes the
 update, and must write only if the plan is still at the revision it read
-(`SQLiteInternalStore.put_document(..., expected_rev=...)`), so it never
+(`SQLiteInternalStore.put_document(..., bump_plan_seq=True, expected_rev=...)`), so it never
 overwrites a plan that Yggdrasil updated in the meantime. On a conflict,
-reread the plan and decide again. Editing only the stored JSON is
+reread the plan and check it again before retrying. Editing only the stored JSON is
 insufficient, and SQLite tooling must be kept compatible with Yggdrasil's
 internal schema.
 

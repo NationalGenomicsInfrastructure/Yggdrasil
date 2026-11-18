@@ -43,8 +43,38 @@ class TestInternalStorageFactory(unittest.TestCase):
         ) as mock_couch:
             mock_couch.return_value = MagicMock(backend="couchdb")
             bundle = build_internal_storage({})
-        mock_couch.assert_called_once_with(None)
+        mock_couch.assert_called_once_with(None, longpoll_timeout_ms=60_000)
         self.assertEqual(bundle.backend, "couchdb")
+
+    def test_plan_longpoll_timeout_from_config(self):
+        with patch(
+            "yggdrasil.storage.couchdb.bundle.build_couchdb_bundle"
+        ) as mock_couch:
+            mock_couch.return_value = MagicMock(backend="couchdb")
+            build_internal_storage(
+                {"yggdrasil": {"plan_watcher_longpoll_timeout_ms": 5000}}
+            )
+        mock_couch.assert_called_once_with(None, longpoll_timeout_ms=5000)
+
+    def test_plan_longpoll_timeout_rejects_bad_values(self):
+        for bad in (0, -1, "x", 1.5, True):
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                build_internal_storage(
+                    {"yggdrasil": {"plan_watcher_longpoll_timeout_ms": bad}}
+                )
+
+    def test_bundle_forwards_longpoll_timeout_to_fetcher(self):
+        from yggdrasil.storage.couchdb.bundle import build_couchdb_bundle
+
+        with (
+            patch("yggdrasil.storage.couchdb.bundle.PlanDBManager"),
+            patch("yggdrasil.storage.couchdb.bundle.OpsWriter"),
+            patch("yggdrasil.storage.couchdb.bundle.YggdrasilDBManager"),
+            patch("yggdrasil.storage.couchdb.bundle.CouchDBCheckpointStore"),
+            patch("yggdrasil.storage.couchdb.bundle.ChangesFetcher") as mock_cf,
+        ):
+            build_couchdb_bundle(None, longpoll_timeout_ms=5000)
+        self.assertEqual(mock_cf.call_args.kwargs["longpoll_timeout_ms"], 5000)
 
     def test_legacy_bundle_constructs_coordination_manager_eagerly(self):
         """Legacy implicit path must not defer the coordination DB.

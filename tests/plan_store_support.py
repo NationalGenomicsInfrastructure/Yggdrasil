@@ -1,9 +1,10 @@
 """Shared builders for plan-store tests.
 
-Provides real plans, finished execution attempts for every way an attempt can
-end, and an in-memory stand-in for the Cloudant client with builders that bind
-the CouchDB plan store and ops snapshot sink to it, so the same storage
-scenarios can run against both backends.
+Provides real plans, ordinary plan documents of a supported family, finished
+execution attempts for every way an attempt can end, and an in-memory
+stand-in for the Cloudant client with builders that bind the CouchDB plan
+store and ops snapshot sink to it, so the same storage scenarios can run
+against both backends.
 """
 
 from __future__ import annotations
@@ -30,9 +31,17 @@ from yggdrasil.flow.outcomes import (
 )
 from yggdrasil.storage.couchdb.ops_sink import OpsWriter
 from yggdrasil.storage.couchdb.plan_store import PlanDBManager
+from yggdrasil.storage.plan_documents import build_plan_document
 from yggdrasil.storage.plan_updates import ExecutionFinalization
 
 SCOPE = {"kind": "project", "id": "P1"}
+
+# Stands for a field removed from a document; see supported_plan_document()
+# and tests.contract.support.changed(), which share it.
+ABSENT = object()
+
+# When supported_plan_document's documents were built.
+FIXTURE_TIME = "2026-11-13T10:00:00Z"
 
 # Ways an attempt can end, as accepted by finished_attempt().
 SUCCEEDED = "succeeded"
@@ -80,6 +89,40 @@ def make_plan(
         ],
         failure_policy=failure_policy,
     )
+
+
+def supported_plan_document(
+    plan_id: str = "pln_test_P1_v1", **fields: Any
+) -> dict[str, Any]:
+    """Build an ordinary plan document of a supported family, with some fields set.
+
+    The document is what planning stores for :func:`make_plan`'s plan with
+    that ID: the current family, realm ``test_realm``, scope :data:`SCOPE`,
+    approved, with ``run_token`` 0 and ``executed_run_token`` -1, under
+    daemon authority. Each keyword then sets one top-level field, or removes
+    it when the value is :data:`ABSENT`, so a test states only the fields it
+    is about and every other field is the contract's. A nested field is
+    changed with ``tests.contract.support.changed``.
+
+    Args:
+        plan_id: The plan's ID, which is also the document's ``_id``.
+        **fields: Top-level fields to set, or to remove with ABSENT.
+
+    Returns:
+        dict[str, Any]: A new document, without ``_rev``.
+
+    Raises:
+        KeyError: If a field to remove is not in the document.
+    """
+    document = build_plan_document(
+        make_plan(plan_id), "test_realm", dict(SCOPE), auto_run=True, now=FIXTURE_TIME
+    )
+    for key, value in fields.items():
+        if value is ABSENT:
+            del document[key]
+        else:
+            document[key] = value
+    return document
 
 
 def finished_attempt(
@@ -154,8 +197,9 @@ def finalization_for(
 ) -> ExecutionFinalization:
     """Build the finalization of an attempt admitted from doc.
 
-    The generation, token, authority, owner and plan are captured from doc,
-    the way a caller captures an execution request from one plan snapshot.
+    The family, generation, token, authority, owner and plan are captured from
+    doc, the way a caller captures an execution request from one plan
+    snapshot.
 
     Args:
         doc: The plan document the request was admitted from.
@@ -175,7 +219,9 @@ def finalization_for(
         execution_authority=doc["execution_authority"],
         execution_owner=doc["execution_owner"],
     )
-    return ExecutionFinalization.from_attempt(context)
+    return ExecutionFinalization.from_attempt(
+        context, schema_version=doc["schema_version"]
+    )
 
 
 def continuation_plan(plan_id: str = "pln_test_P1_v1", **kwargs: Any) -> Plan:
@@ -228,10 +274,10 @@ def patch_api_exception(test: unittest.TestCase) -> None:
 class _Result:
     """Mimics the SDK's DetailedResponse: only get_result() is used."""
 
-    def __init__(self, result: dict[str, Any]) -> None:
+    def __init__(self, result: Any) -> None:
         self._result = result
 
-    def get_result(self) -> dict[str, Any]:
+    def get_result(self) -> Any:
         return self._result
 
 
@@ -250,6 +296,10 @@ class FakeCouchServer:
         fail_after_next_write: If set, the next successful write is applied
             and then this exception is raised, like a lost response.
         fail_next_read: If set, the next read raises this exception.
+        read_responses: One-shot bodies that the next reads answer with, one
+            each and in order, with a success status, in place of the stored
+            document: what a proxy or a misrouted request might return. Such a
+            read runs no after_read action.
     """
 
     def __init__(self) -> None:
@@ -258,6 +308,7 @@ class FakeCouchServer:
         self.after_read: list[Callable[[], None]] = []
         self.fail_after_next_write: Exception | None = None
         self.fail_next_read: Exception | None = None
+        self.read_responses: list[Any] = []
 
     def get_database_information(self, *, db: str) -> _Result:
         return _Result({"db_name": db})
@@ -266,6 +317,8 @@ class FakeCouchServer:
         if self.fail_next_read is not None:
             exc, self.fail_next_read = self.fail_next_read, None
             raise exc
+        if self.read_responses:
+            return _Result(copy.deepcopy(self.read_responses.pop(0)))
         doc = copy.deepcopy(self._docs.get(doc_id))
         actions, self.after_read = self.after_read, []
         for action in actions:
@@ -301,6 +354,21 @@ class FakeCouchServer:
         return _Result(
             {"ok": True, "id": doc_id, "rev": f"{self._writes[doc_id]}-fake"}
         )
+
+    def post_all_docs(self, *, db: str, include_docs: bool = False) -> _Result:
+        """List every stored document in ID order, as ``_all_docs`` does."""
+        rows = []
+        for doc_id in sorted(self._docs):
+            doc = self._docs[doc_id]
+            row: dict[str, Any] = {
+                "id": doc_id,
+                "key": doc_id,
+                "value": {"rev": doc["_rev"]},
+            }
+            if include_docs:
+                row["doc"] = copy.deepcopy(doc)
+            rows.append(row)
+        return _Result({"total_rows": len(rows), "offset": 0, "rows": rows})
 
     def raw(self, doc_id: str) -> dict[str, Any] | None:
         """Return the stored document without triggering read hooks."""
