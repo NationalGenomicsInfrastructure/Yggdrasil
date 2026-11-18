@@ -468,7 +468,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-size:12.5px;color:
     <li><h3>A plan is a document</h3><p>One document per plan ID. What it says will run is the execution definition; changing that means a new generation.</p></li>
     <li><h3>Approval is bound to a generation</h3><p>Regenerating a plan resets its status and tokens. An approval never carries over to a version nobody saw.</p></li>
     <li><h3>Status is approval, never outcome</h3><p><code>status</code> stays <code>approved</code> after a run, however it went. The outcome lives in <code>last_finalized_execution</code>.</p></li>
-    <li><h3>Eligible means approved and owed a run</h3><p><code>run_token</code> above <code>executed_run_token</code>. Raise <code>run_token</code> to ask again. Equal tokens mean finished, not succeeded.</p></li>
+    <li><h3>Eligible means approved and owed a run</h3><p>The schema family must be supported, the token pair valid, and <code>run_token</code> above <code>executed_run_token</code>.</p></li>
     <li><h3>Every decision comes from one fresh read</h3><p>Never from the event that prompted it. A stale event cannot pair an old approval with a newer plan.</p></li>
     <li><h3>Results are recorded conditionally</h3><p>Outcome and executed token are written together, on the revision that was read, and never onto another generation.</p></li>
     <li><h3>Only dependencies order and block</h3><p>No step is special for its name or position. A failed step blocks exactly the steps that depend on it.</p></li>
@@ -490,7 +490,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-size:12.5px;color:
 </section>
 
 <footer>
-  <p>Drawn from the Yggdrasil source and documentation on the <code>dev</code> branch at <code>7141f44</code>, the v0.6.0 candidate. The example plan is simplified from the demux realm, whose real plans have more steps per lane.</p>
+  <p>Drawn from the Yggdrasil source and documentation on the <code>dev</code> branch at <code>7141f44</code>, the v0.6.0 candidate. Checked against <code>v0.6.0</code>. The example plan is simplified from the demux realm, whose real plans have more steps per lane.</p>
   <p>Left out on purpose: the eligible plan passes through the core&rsquo;s event routing on its way to the coordinator; PlanWatcher keeps a checkpoint too; DataAccess writes are traced into a step&rsquo;s event stream.</p>
 </footer>
 
