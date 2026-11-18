@@ -1,27 +1,5 @@
-/* The Yggdrasil Atlas in the docs: its page and the card on Home. */
-
-/* Atlas page: let the embedded Atlas use the whole width of the window. */
-.md-main__inner.md-grid:has(.ygg-atlas) {
-  max-width: none;
-}
-
-.md-typeset .ygg-atlas {
-  margin: 1.2em 0 0;
-}
-
-/* The Atlas scrolls inside the frame, which fills the window below the header. */
-.md-typeset .ygg-atlas__frame {
-  display: block;
-  width: 100%;
-  height: calc(100vh - 2.4rem);
-  height: calc(100dvh - 2.4rem);
-  min-height: 30rem;
-  border: 0.05rem solid var(--md-default-fg-color--lightest);
-  border-radius: 0.2rem;
-  background-color: var(--md-default-bg-color);
-}
-
-/* Home: a compact card with a crop of the Atlas map. */
+/* The card on Home that leads to the Yggdrasil Atlas, with a crop of its map.
+   The Atlas itself is a page of its own: docs/architecture/atlas/index.html. */
 .md-typeset .ygg-atlas-card {
   display: grid;
   grid-template-columns: minmax(0, 16rem) minmax(0, 1fr);

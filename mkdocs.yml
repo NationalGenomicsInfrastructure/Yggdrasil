@@ -58,7 +58,7 @@ nav:
       - Configuration: getting_started/configuration.md
   - Architecture:
       - Overview: architecture/overview.md
-      - Interactive Atlas: architecture/atlas.md
+      - Interactive Atlas: architecture/atlas/index.html
   - Flow API:
       - Overview: flow_api/overview.md
   - Realm authoring:
@@ -82,9 +82,6 @@ extra:
 extra_css:
   - stylesheets/atlas.css
   - stylesheets/atlas-palette.css
-
-extra_javascript:
-  - javascripts/atlas.js
 
 markdown_extensions:
   - attr_list
