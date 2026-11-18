@@ -1,0 +1,1255 @@
+<title>Yggdrasil Atlas</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a circuit-trace tree after the project logo. Crown = realms, trunk = core daemon, roots = durable state. */
+:root{
+  --paper:#F1F4EE; --panel:#FBFCF9; --sunk:#E5EAE2; --grid:#DCE2DA;
+  --ink:#0E1A16; --ink-2:#44544D; --ink-3:#74837C;
+  --line:#CBD4CB; --trace:#1C2B26; --trace-dim:#B1BDB4;
+  --realm:#237A4B; --realm-bg:#E1EFE5;
+  --store:#1C6A8C; --store-bg:#DFEDF2;
+  --people:#7446B8; --people-bg:#ECE5F6;
+  --flow:#C8741A; --flow-ink:#96520A; --flow-bg:#F8EAD8;
+  --bad:#B53A2A; --bad-bg:#F7E3DF;
+  --logo-filter:none;
+  --display:"Chakra Petch","Avenir Next Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans","Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0C1412; --panel:#121D1A; --sunk:#0A100E; --grid:#17231F;
+    --ink:#E7EEE9; --ink-2:#A6B6AE; --ink-3:#77877F;
+    --line:#26352F; --trace:#C9DAD1; --trace-dim:#3A4C45;
+    --realm:#62CB8D; --realm-bg:#12291D;
+    --store:#62B9DA; --store-bg:#0F2630;
+    --people:#B79AF2; --people-bg:#211A33;
+    --flow:#F2A64A; --flow-ink:#F2A64A; --flow-bg:#33230F;
+    --bad:#F07B66; --bad-bg:#351713;
+    --logo-filter:invert(1);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0C1412; --panel:#121D1A; --sunk:#0A100E; --grid:#17231F;
+  --ink:#E7EEE9; --ink-2:#A6B6AE; --ink-3:#77877F;
+  --line:#26352F; --trace:#C9DAD1; --trace-dim:#3A4C45;
+  --realm:#62CB8D; --realm-bg:#12291D;
+  --store:#62B9DA; --store-bg:#0F2630;
+  --people:#B79AF2; --people-bg:#211A33;
+  --flow:#F2A64A; --flow-ink:#F2A64A; --flow-bg:#33230F;
+  --bad:#F07B66; --bad-bg:#351713;
+  --logo-filter:invert(1);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);background-image:radial-gradient(var(--grid) 1px,transparent 1.5px);background-size:24px 24px;color:var(--ink);font:400 15px/1.55 var(--body);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1340px;margin:0 auto;padding-block:20px 56px;padding-left:max(16px,3vw,env(safe-area-inset-left,0px));padding-right:max(16px,3vw,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:72px}
+h1,h2,h3,h4,p,ol,ul,dl,dd,figure{margin:0}
+ol,ul{padding:0;list-style:none}
+code{font:500 .9em var(--mono);background:var(--sunk);padding:.05em .32em;border-radius:3px;white-space:nowrap}
+a{color:inherit}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--flow);outline-offset:2px}
+
+/* header */
+.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 24px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font:600 18px var(--display);letter-spacing:.04em}
+.brand img{width:26px;height:auto;filter:var(--logo-filter)}
+.brand em{font-style:normal;color:var(--ink-3);font-weight:500}
+.top nav{display:flex;flex-wrap:wrap;gap:4px 22px}
+.top nav a{font:600 12.5px var(--display);letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:var(--ink-2);padding:6px 0;border-bottom:2px solid transparent}
+.top nav a:hover{color:var(--ink);border-bottom-color:var(--flow)}
+
+/* hero */
+.hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:28px 48px;align-items:center;margin-top:-36px}
+.eyebrow{font:600 12.5px var(--display);letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3)}
+.hero h1{font:700 clamp(46px,8.6vw,108px)/.92 var(--display);letter-spacing:.02em;text-transform:uppercase;margin:10px 0 18px}
+.tag{font:600 clamp(17px,2vw,22px)/1.3 var(--display);color:var(--flow-ink);text-wrap:balance}
+.lede{margin-top:16px;max-width:58ch;font-size:16.5px;color:var(--ink-2)}
+.hero-art{display:flex;align-items:stretch;gap:14px;justify-content:center;min-width:0}
+.hero-art canvas{width:min(100%,330px);aspect-ratio:400/520;height:auto;display:block;flex:0 1 330px;min-width:0}
+.art-key{display:flex;flex-direction:column;justify-content:space-between;padding:17% 0 9%;flex:0 0 132px;min-width:0}
+.art-key li{font-size:12.5px;line-height:1.35;color:var(--ink-2);padding-left:12px;border-left:2px solid var(--line)}
+.art-key b{display:block;font:600 12px var(--display);letter-spacing:.14em;text-transform:uppercase}
+.art-key .k1 b{color:var(--realm)} .art-key .k1{border-color:var(--realm)}
+.art-key .k2 b{color:var(--ink)} .art-key .k2{border-color:var(--trace)}
+.art-key .k3 b{color:var(--store)} .art-key .k3{border-color:var(--store)}
+
+.beats{grid-column:1/-1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));counter-reset:b;position:relative;margin-top:8px}
+.beats::before{content:"";position:absolute;left:17px;right:calc(20% - 19px);top:17px;height:2.5px;background:var(--trace)}
+.beats::after{content:"";position:absolute;top:13px;left:17px;width:11px;height:11px;border-radius:50%;background:var(--flow);box-shadow:0 0 0 4px var(--flow-bg);animation:run 9s linear infinite}
+@keyframes run{from{left:17px}to{left:calc(80% + 12px)}}
+.beats li{counter-increment:b;position:relative;padding:50px 18px 0 0;min-width:0}
+.beats li::before{content:counter(b);position:absolute;left:0;top:0;width:36px;height:36px;border-radius:50%;border:2.5px solid var(--c,var(--trace));background:var(--paper);display:grid;place-items:center;font:700 15px var(--display);color:var(--c,var(--ink));z-index:1}
+.beats h3{font:700 19px var(--display);letter-spacing:.08em;text-transform:uppercase}
+.beats .who{font:500 11.5px var(--mono);color:var(--c,var(--ink-2));margin:2px 0 8px}
+.beats p{font-size:14px;color:var(--ink-2);max-width:30ch}
+.beats .makes{display:inline-block;margin-top:10px;font:500 11.5px var(--mono);color:var(--ink);border:1px solid var(--line);background:var(--panel);padding:2px 8px;border-radius:3px}
+.b-realm{--c:var(--realm)} .b-people{--c:var(--people)} .b-store{--c:var(--store)}
+
+/* sections */
+.sec{display:flex;flex-direction:column;gap:22px;min-width:0}
+.sec-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 32px}
+.sec-head h2{font:700 clamp(26px,3.4vw,38px)/1.05 var(--display);letter-spacing:.03em;text-transform:uppercase;text-wrap:balance}
+.sec-head p{max-width:64ch;color:var(--ink-2);margin-top:8px}
+.btn{font:600 12.5px var(--display);letter-spacing:.1em;text-transform:uppercase;border:1.5px solid var(--trace);background:var(--panel);color:var(--ink);padding:9px 14px;border-radius:3px;cursor:pointer;text-align:left}
+.btn:hover:not(:disabled){background:var(--ink);color:var(--paper)}
+.btn:disabled{opacity:.38;cursor:not-allowed}
+.btn.go{background:var(--flow);border-color:var(--flow);color:#17120A}
+.btn.go:hover:not(:disabled){background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.btn.quiet{border-color:var(--line);color:var(--ink-2)}
+
+/* map */
+.lenses{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.lens{font:500 13px var(--body);border:1px solid var(--line);background:var(--panel);color:var(--ink-2);padding:6px 12px;border-radius:99px;cursor:pointer}
+.lens:hover{border-color:var(--trace);color:var(--ink)}
+.lens[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.lenses .sp{flex:1 1 auto}
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start}
+.map-card{background:var(--panel);border:1px solid var(--line);border-radius:4px;min-width:0}
+.map-scroll{overflow-x:auto}
+.map{display:block;width:100%;min-width:860px;height:auto}
+.legend{display:flex;flex-wrap:wrap;gap:6px 20px;padding:10px 16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:14px;height:14px;display:inline-block;border:2px solid var(--trace);background:var(--panel)}
+.legend .l-realm{border-color:var(--realm);background:var(--realm-bg)}
+.legend .l-store{border-color:var(--store);background:var(--store-bg);border-radius:50%}
+.legend .l-file{border-color:var(--store);border-style:dotted;border-radius:50%}
+.legend .l-people{border-color:var(--people);background:var(--people-bg)}
+.legend .l-out{border-color:var(--ink-3);border-style:dashed;background:var(--sunk)}
+.legend .l-flow{border:0;height:3px;width:22px;background:var(--flow)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0;position:sticky;top:calc(12px + env(safe-area-inset-top,0px))}
+.kick{font:600 11.5px var(--display);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+.kick.k-realm{color:var(--realm)} .kick.k-store,.kick.k-file{color:var(--store)} .kick.k-people{color:var(--people)} .kick.k-tour{color:var(--flow-ink)}
+.panel h3{font:700 22px/1.15 var(--display);letter-spacing:.02em}
+.panel .what{color:var(--ink);font-size:15px}
+.panel ul,.panel ol{display:flex;flex-direction:column;gap:8px}
+.panel li{font-size:13.5px;color:var(--ink-2);padding-left:16px;position:relative}
+.panel ul li::before{content:"";position:absolute;left:0;top:.62em;width:7px;height:7px;border-radius:50%;border:1.8px solid var(--trace)}
+.panel ol{counter-reset:s}
+.panel ol li{counter-increment:s;padding-left:24px}
+.panel ol li::before{content:counter(s);position:absolute;left:0;top:.1em;font:600 11.5px var(--mono);color:var(--ink-3)}
+.panel .note{font-size:13px;color:var(--ink);background:var(--flow-bg);border-left:3px solid var(--flow);padding:9px 12px}
+.panel .note b{font:600 11px var(--display);letter-spacing:.14em;text-transform:uppercase;color:var(--flow-ink);display:block;margin-bottom:2px}
+.panel .cap{font:500 17px/1.4 var(--body);color:var(--ink)}
+.panel .row{display:flex;flex-wrap:wrap;gap:8px}
+.panel .link{background:none;border:0;padding:0;color:var(--ink);text-decoration:underline;text-decoration-color:var(--trace-dim);text-underline-offset:3px;cursor:pointer;font:inherit}
+.dots{display:flex;gap:4px;flex-wrap:wrap}
+.dots i{width:14px;height:4px;background:var(--line);border-radius:2px}
+.dots i.on{background:var(--flow)}
+
+.map .zone-crown{fill:var(--realm-bg);stroke:var(--realm);stroke-width:1.5}
+.map .zone-daemon{fill:none;stroke:var(--trace-dim);stroke-width:1.5;stroke-dasharray:3 7}
+.map .zl{font:600 12.5px var(--display);letter-spacing:.16em;fill:var(--ink-2)}
+.map .zs{font:400 11.5px var(--body);fill:var(--ink-3)}
+.map .chip-dot{fill:var(--realm)}
+.map .chip-line{stroke:var(--realm);stroke-width:2;fill:none}
+.map .chip-t{font:500 11.5px var(--mono);fill:var(--ink-2)}
+.edge,.node{transition:opacity .25s}
+.edge .base{fill:none;stroke:var(--trace);stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round}
+.edge.dashed .base{stroke-dasharray:5 6}
+.edge .head{fill:var(--trace)}
+.edge .flow{fill:none;stroke:var(--flow);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1 11;opacity:0}
+.edge.on .base{stroke:var(--flow);opacity:.5}
+.edge.on .head{fill:var(--flow)}
+.edge.on .flow{opacity:1;animation:march .9s linear infinite}
+.edge.bi.on .flow{animation:none}
+@keyframes march{to{stroke-dashoffset:-12}}
+.edge .elab{font:500 11.5px var(--mono);fill:var(--ink-2);paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-linejoin:round}
+.edge.on .elab{fill:var(--ink)}
+.dim{opacity:.14}
+.node{cursor:pointer;outline:none}
+.node .bx{fill:var(--panel);stroke:var(--trace);stroke-width:2}
+.node.k-realm .bx{stroke:var(--realm)}
+.node.k-people .bx{stroke:var(--people);fill:var(--people-bg)}
+.node.k-out .bx{stroke:var(--ink-3);stroke-dasharray:5 5;fill:var(--sunk)}
+.node .nl{font:600 14px var(--display);fill:var(--ink);letter-spacing:.01em}
+.node .ns{font:400 11px var(--body);fill:var(--ink-2)}
+.node .bl{font:600 12px var(--display);letter-spacing:.14em;fill:var(--ink-2)}
+.node .rg{fill:var(--store-bg);stroke:var(--store);stroke-width:2.6}
+.node.k-file .rg{fill:var(--panel);stroke-dasharray:2 5;stroke-linecap:round}
+.node .dot{fill:var(--store)}
+.node .rl{font:500 12.5px var(--mono);fill:var(--ink)}
+.node .rs{font:400 11px var(--body);fill:var(--ink-2)}
+.node .halo{fill:none;stroke:var(--flow);stroke-width:2.5;opacity:0}
+.node:hover .bx,.node:hover .rg{stroke-width:3.2}
+.node.sel .halo,.node.lit .halo{opacity:1}
+.node:focus-visible .halo{opacity:1;stroke:var(--ink)}
+#map:fullscreen{background:var(--paper);padding:24px;overflow:auto}
+
+.node .zoom{fill:var(--panel);stroke:var(--flow);stroke-width:2}
+.node .zoom-p{stroke:var(--flow);stroke-width:2;stroke-linecap:round;fill:none}
+.legend .l-zoom{border-color:var(--flow);border-radius:50%;display:inline-grid;place-items:center;font:700 11px/1 var(--display);font-style:normal;color:var(--flow-ink)}
+.inside{display:flex;flex-direction:column;gap:16px;min-width:0}
+.in-top{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:flex-start}
+.in-top h3{font:700 clamp(21px,2.4vw,27px)/1.1 var(--display);letter-spacing:.02em}
+.in-top p{color:var(--ink-2);max-width:78ch;margin-top:5px}
+.in-story{font-size:15.5px;color:var(--ink);border-left:3px solid var(--flow);padding:4px 0 4px 14px;max-width:100ch;min-height:3.3em}
+.board-scroll{overflow-x:auto;padding-bottom:6px}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(196px,1fr);gap:14px;align-items:start;counter-reset:ph}
+.ph{background:var(--panel);border:1px solid var(--line);border-top:2.5px solid var(--trace);border-radius:4px;padding:14px 12px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.ph h4{font:700 14.5px/1.25 var(--display);letter-spacing:.06em;text-transform:uppercase;display:flex;gap:8px;align-items:center;margin:0}
+.board.seq .ph{counter-increment:ph}
+.board.seq .ph h4::before{content:counter(ph);flex:none;display:grid;place-items:center;width:22px;height:22px;border-radius:50%;border:2px solid var(--trace);font-size:12px;letter-spacing:0}
+.ph>p{font-size:12.5px;color:var(--ink-2)}
+.ph ul{display:flex;flex-direction:column;gap:8px}
+.rw{border:1px solid var(--line);border-radius:3px;padding:8px 10px;font-size:12.5px;line-height:1.45;color:var(--ink-2);background:var(--paper);transition:opacity .2s}
+.rw b{display:block;font:600 13px/1.3 var(--body);color:var(--ink);margin-bottom:2px}
+.rw code{white-space:normal;overflow-wrap:anywhere}
+.rw .ex{display:flex;flex-direction:column;gap:2px;margin-top:7px;padding-top:6px;border-top:1px dashed var(--line);font-size:12px}
+.rw .ex code{align-self:flex-start;font-weight:600;background:none;padding:0;color:var(--ink)}
+.rw .ex.k-keep code{color:var(--flow-ink)}
+.rw .ex.k-drop code{color:var(--bad)}
+.rw .ex.k-ok code{color:var(--realm)}
+.board.tracing .rw{opacity:.28}
+.board.tracing .rw.pass{opacity:1}
+.board.tracing .rw.pass b::after{content:" \2713";color:var(--realm)}
+.board.tracing .rw.hit{opacity:1;border-color:var(--flow);background:var(--flow-bg);box-shadow:0 0 0 1px var(--flow)}
+/* simulator */
+.sim{display:grid;grid-template-columns:270px minmax(300px,390px) minmax(0,1fr);gap:20px;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:18px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.card h3{font:700 13px var(--display);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;justify-content:space-between}
+.card h3 small{font:400 11.5px var(--body);letter-spacing:0;text-transform:none;color:var(--ink-3)}
+.ctl{display:flex;flex-direction:column;gap:8px}
+.ctl .btn{width:100%}
+.ctl small{display:block;font:400 11.5px var(--body);letter-spacing:0;text-transform:none;opacity:.8;margin-top:1px}
+.field{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:12px}
+.field>span{font:600 11.5px var(--display);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.seg{display:grid;grid-template-columns:1fr;gap:4px}
+.seg label,.chk{display:flex;gap:8px;align-items:center;font:500 12.5px var(--mono);cursor:pointer;padding:5px 8px;border:1px solid var(--line);border-radius:3px}
+.seg input,.chk input{accent-color:var(--flow);margin:0}
+.seg label:has(input:checked),.chk:has(input:checked){border-color:var(--trace);background:var(--sunk)}
+.hint{font-size:12.5px;color:var(--ink-2)}
+.quests{display:flex;flex-direction:column;gap:8px}
+.quests li{font-size:13px;color:var(--ink-2);padding-left:24px;position:relative}
+.quests li::before{content:"";position:absolute;left:0;top:.2em;width:13px;height:13px;border-radius:50%;border:2px solid var(--trace-dim)}
+.quests li.done{color:var(--ink)}
+.quests li.done::before{border-color:var(--realm);background:var(--realm)}
+.doc{display:flex;flex-direction:column;font:400 12.5px/1.45 var(--mono)}
+.doc>div{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 14px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.doc dt{color:var(--ink-2);display:flex;align-items:baseline;gap:7px;white-space:nowrap}
+.doc dt i{width:8px;height:8px;border-radius:50%;flex:none;background:var(--realm);transform:translateY(-1px)}
+.doc dt i.w-appr{background:var(--people)} .doc dt i.w-fin{background:var(--flow)}
+.doc dd{margin-left:auto;text-align:right;min-width:0;color:var(--ink);overflow-wrap:anywhere;font-weight:500}
+.doc dd.none{color:var(--ink-3);font-weight:400}
+.doc dd.flash{animation:flash 1.1s ease-out}
+@keyframes flash{from{background:var(--flow-bg);box-shadow:0 0 0 4px var(--flow-bg)}to{background:transparent;box-shadow:0 0 0 4px transparent}}
+.who-key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink-2)}
+.who-key span{display:inline-flex;align-items:center;gap:6px}
+.who-key i{width:8px;height:8px;border-radius:50%;background:var(--realm)}
+.who-key .w-appr{background:var(--people)} .who-key .w-fin{background:var(--flow)}
+.elig{display:flex;flex-direction:column;gap:5px;counter-reset:e}
+.elig li{counter-increment:e;font-size:13px;color:var(--ink-2);display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:6px;align-items:baseline}
+.elig li::before{content:counter(e);font:600 11.5px var(--mono);color:var(--ink-3)}
+.elig b{font:600 12px var(--mono)}
+.elig .y b{color:var(--realm)} .elig .n b{color:var(--bad)}
+.verdict{font:600 13.5px var(--display);letter-spacing:.06em;padding:8px 12px;border-radius:3px;background:var(--sunk);color:var(--ink-2)}
+.verdict.yes{background:var(--realm-bg);color:var(--realm)}
+.say{font-size:15px;color:var(--ink);border-left:3px solid var(--flow);padding:2px 0 2px 14px;min-height:4.6em}
+.att-id{font:500 12px var(--mono);color:var(--ink-2);overflow-wrap:anywhere}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chipx{font:500 11.5px var(--mono);padding:2px 8px;border-radius:3px;border:1px solid var(--line);color:var(--ink-2);background:var(--panel)}
+.chipx.run{border-color:var(--flow);color:var(--flow-ink);background:var(--flow-bg)}
+.chipx.ok{border-color:var(--realm);color:var(--realm);background:var(--realm-bg)}
+.chipx.bad{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
+.dag-scroll{overflow-x:auto}
+.dag{display:block;width:100%;min-width:500px;height:auto}
+.dag .tr{fill:none;stroke:var(--trace-dim);stroke-width:2;stroke-linecap:round}
+.dag .hd{fill:var(--trace-dim)}
+.stp{cursor:pointer;outline:none}
+.stp .bx{fill:var(--panel);stroke:var(--trace-dim);stroke-width:1.8}
+.stp .tg{font:600 9.5px var(--display);letter-spacing:.14em;fill:var(--ink-3)}
+.stp .nm{font:500 10.5px var(--mono);fill:var(--ink)}
+.stp .state{font:500 10.5px var(--body);fill:var(--ink-3)}
+.stp .brk{font:600 9.5px var(--display);letter-spacing:.08em;fill:var(--bad);opacity:0}
+.stp.broken .brk{opacity:1}
+.stp:hover .bx{stroke-width:2.8}
+.stp:focus-visible .bx{stroke:var(--ink);stroke-width:2.8}
+.stp.st-running .bx{stroke:var(--flow);stroke-width:2.8;fill:var(--flow-bg)} .stp.st-running .state{fill:var(--flow-ink)}
+.stp.st-succeeded .bx{stroke:var(--realm);fill:var(--realm-bg)} .stp.st-succeeded .state{fill:var(--realm)}
+.stp.st-reused .bx{stroke:var(--realm);stroke-dasharray:6 4} .stp.st-reused .state{fill:var(--realm)}
+.stp.st-failed .bx{stroke:var(--bad);fill:var(--bad-bg)} .stp.st-failed .state{fill:var(--bad)}
+.stp.st-blocked .bx{stroke:var(--ink-3);fill:var(--sunk);stroke-dasharray:2 4}
+.stp.st-unreached .bx{stroke-dasharray:2 4}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.two>div{border:1px solid var(--line);border-radius:3px;padding:10px 12px;min-width:0}
+.two b{display:block;font:600 11px var(--display);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);margin-bottom:3px}
+.two span{font:500 12.5px/1.45 var(--mono);overflow-wrap:anywhere}
+.log{font:400 12px/1.5 var(--mono);background:var(--sunk);border-radius:3px;padding:10px 12px;height:176px;overflow-y:auto;display:flex;flex-direction:column;gap:1px}
+.log li{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;color:var(--ink-2)}
+.log li b{font-weight:600;color:var(--ink)}
+.log .t-ok b{color:var(--realm)} .log .t-bad b{color:var(--bad)} .log .t-step b,.log .t-plan b{color:var(--flow-ink)} .log .t-doc b{color:var(--people)}
+.log span{overflow-wrap:anywhere}
+
+/* rules + around */
+.rules{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:0;border-top:1.5px solid var(--trace);border-left:1px solid var(--line)}
+.rules li{padding:18px 20px 20px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel);min-width:0}
+.rules h3{font:700 16px/1.25 var(--display);letter-spacing:.02em;margin-bottom:6px;text-wrap:balance}
+.rules p{font-size:13.5px;color:var(--ink-2)}
+.around{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px}
+.around h3{font:700 13px var(--display);letter-spacing:.16em;text-transform:uppercase;color:var(--ink);padding-bottom:8px;border-bottom:1.5px solid var(--trace);margin-bottom:10px}
+.around p{font-size:13.5px;color:var(--ink-2)}
+footer{border-top:1px solid var(--line);padding-top:18px;font-size:12.5px;color:var(--ink-3);display:flex;flex-direction:column;gap:6px;max-width:92ch}
+
+@media (max-width:1180px){
+  .stage{grid-template-columns:minmax(0,1fr)}
+  .panel{position:static}
+  .sim{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr)}
+  .sim .c-ctl{grid-column:1/-1}
+  .stage.touring .panel{order:-1;min-height:236px}
+  .c-ctl .ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+}
+@media (max-width:1000px){
+  .sim{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:760px){
+  .wrap{gap:56px}
+  .hero{grid-template-columns:minmax(0,1fr);margin-top:0}
+  .art-key{flex-basis:118px}
+  .beats{grid-template-columns:minmax(0,1fr);gap:22px}
+  .beats::before{left:17px;right:auto;top:17px;bottom:60px;width:2.5px;height:auto}
+  .beats::after{display:none}
+  .beats li{padding:4px 0 0 52px}
+  .beats p{max-width:none}
+  .log li{grid-template-columns:minmax(0,1fr)}
+  .log li span{padding-left:12px}
+}
+@media (prefers-reduced-motion:reduce){
+  .beats::after{animation:none;display:none}
+  .edge.on .flow{animation:none}
+  .doc dd.flash{animation:none}
+  .edge,.node,.rw{transition:none}
+}
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <a class="brand" href="#glance"><img alt="" src="data:image/png;base64,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"><span>Yggdrasil</span><em>Atlas</em></a>
+  <nav aria-label="Sections">
+    <a href="#glance">At a glance</a>
+    <a href="#map">The whole tree</a>
+    <a href="#plan">Be the plan</a>
+    <a href="#rules">Rules</a>
+  </nav>
+</header>
+
+<section id="glance" class="hero">
+  <div>
+    <p class="eyebrow">Event-driven orchestration</p>
+    <h1>Yggdrasil</h1>
+    <p class="tag">Automate anything: traceable plans, reproducible runs.</p>
+    <p class="lede">When something changes in a system it watches, Yggdrasil writes down an explicit plan, waits for approval where one is required, runs the plan step by step, and keeps the evidence.</p>
+  </div>
+  <div class="hero-art">
+    <canvas id="art" width="400" height="520" role="img" aria-label="A tree drawn as circuit traces: branches end in filled dots, the trunk is a double helix, roots end in rings."></canvas>
+    <ul class="art-key">
+      <li class="k1"><b>Crown</b>Realms: one domain&rsquo;s logic each, shipped as plug-ins.</li>
+      <li class="k2"><b>Trunk</b>The core daemon: watches, routes, runs. It knows no domain.</li>
+      <li class="k3"><b>Roots</b>Durable state: plans, snapshots, checkpoints, files.</li>
+    </ul>
+  </div>
+  <ol class="beats">
+    <li><h3>Watch</h3><div class="who">core</div><p>A watcher notices a change in an external system.</p><span class="makes">&rarr; event</span></li>
+    <li class="b-realm"><h3>Plan</h3><div class="who">realm handler</div><p>The realm turns the change into an explicit plan for one scope: steps and their dependencies.</p><span class="makes">&rarr; plan draft</span></li>
+    <li class="b-people"><h3>Approve</h3><div class="who">a person, or the realm</div><p>The plan waits as a document until this exact version is approved.</p><span class="makes">&rarr; approved plan</span></li>
+    <li><h3>Run</h3><div class="who">engine + realm steps</div><p>Steps run in dependency order. A step whose earlier result is still valid is reused.</p><span class="makes">&rarr; attempt</span></li>
+    <li class="b-store"><h3>Record</h3><div class="who">core &rarr; stores</div><p>The result is written back onto the plan, and a status snapshot is published.</p><span class="makes">&rarr; result + snapshot</span></li>
+  </ol>
+</section>
+
+<section id="map" class="sec">
+  <div class="sec-head">
+    <div>
+      <h2>The whole tree</h2>
+      <p>Realms sit in the crown, the core daemon in the trunk, durable state in the roots. Select a part to read what it does, pick a path to isolate it, or follow one change from end to end. Parts marked with a plus open into a closer view.</p>
+    </div>
+    <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn go" id="tourBtn" type="button">&#9654; Follow one change</button>
+      <button class="btn quiet" id="fsBtn" type="button">Full screen</button>
+    </div>
+  </div>
+  <div class="lenses" id="lenses" role="group" aria-label="Paths through the map"></div>
+  <div class="stage">
+    <div class="map-card">
+      <div class="map-scroll"><svg class="map" id="mapSvg" viewBox="0 -8 1200 808" role="group" aria-label="Map of Yggdrasil's parts"></svg></div>
+      <div class="legend" aria-hidden="true">
+        <span><i class="l-realm"></i>realm code</span>
+        <span><i></i>core daemon</span>
+        <span><i class="l-store"></i>store</span>
+        <span><i class="l-file"></i>files on disk</span>
+        <span><i class="l-people"></i>people</span>
+        <span><i class="l-out"></i>outside Yggdrasil</span>
+        <span><i class="l-flow"></i>highlighted flow</span>
+        <span><i class="l-zoom">+</i>has an inside view</span>
+      </div>
+    </div>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div>
+  <div class="inside" id="inside" hidden>
+    <div class="in-top">
+      <button class="btn quiet" id="inBack" type="button">&larr; The whole tree</button>
+      <div><h3 id="inTitle"></h3><p id="inLede"></p></div>
+    </div>
+    <div class="lenses" id="inChips" role="group" aria-label="Situations to trace"></div>
+    <p class="in-story" id="inStory" aria-live="polite"></p>
+    <div class="board-scroll"><ol class="board" id="inBoard"></ol></div>
+  </div>
+</section>
+
+<section id="plan" class="sec">
+  <div class="sec-head">
+    <div>
+      <h2>Be the plan</h2>
+      <p>One plan document for one flowcell, simplified from the demux realm. You play the approver, the realm and bad luck. The daemon reacts by the same rules as the real one.</p>
+    </div>
+  </div>
+  <div class="sim">
+    <div class="card c-ctl">
+      <h3>Your moves</h3>
+      <div class="ctl">
+        <button class="btn go" id="btnApprove" type="button">Approve<small>status &rarr; approved</small></button>
+        <button class="btn" id="btnRerun" type="button">Request a rerun<small>run_token + 1</small></button>
+        <button class="btn" id="btnReplan" type="button">Change the source<small>the realm plans again</small></button>
+        <button class="btn quiet" id="btnReset" type="button">Start over</button>
+      </div>
+      <div class="field">
+        <span>The realm plans with</span>
+        <div class="seg">
+          <label><input type="radio" name="policy" id="polCI" value="continue_independent" checked>continue_independent</label>
+          <label><input type="radio" name="policy" id="polFF" value="fail_fast">fail_fast</label>
+        </div>
+        <label class="chk"><input type="checkbox" id="autoRun">auto_run</label>
+      </div>
+      <p class="hint">Select a step in the graph to break it: its output is gone, and it fails when it runs.</p>
+      <div class="field">
+        <span>Things to try</span>
+        <ul class="quests" id="quests"></ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Plan document <small>example values</small></h3>
+      <dl class="doc" id="doc"></dl>
+      <div class="who-key"><span><i></i>written by planning</span><span><i class="w-appr"></i>by approval or rerun</span><span><i class="w-fin"></i>by the finalizer</span></div>
+      <div class="field">
+        <span>Eligible to run? Checked in this order</span>
+        <ol class="elig" id="elig"></ol>
+        <div class="verdict" id="verdict"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Latest attempt <small id="attNote"></small></h3>
+      <div class="chips" id="attChips"></div>
+      <div class="att-id" id="attId"></div>
+      <div class="dag-scroll"><svg class="dag" id="dag" viewBox="0 0 640 230" role="group" aria-label="The plan's six steps"></svg></div>
+      <p class="say" id="say" aria-live="polite"></p>
+      <div class="two">
+        <div><b>The plan document says</b><span id="saysDoc"></span></div>
+        <div><b>The ops snapshot says</b><span id="saysOps"></span></div>
+      </div>
+      <ol class="log" id="log" aria-label="Events"></ol>
+    </div>
+  </div>
+</section>
+
+<section id="rules" class="sec">
+  <div class="sec-head">
+    <div>
+      <h2>Rules that hold everywhere</h2>
+      <p>The whole design compressed into a dozen statements. If a behaviour surprises you, one of these usually explains it.</p>
+    </div>
+  </div>
+  <ul class="rules">
+    <li><h3>Handlers plan, the engine runs</h3><p>A handler returns intent. Execution always goes through the stored plan, so there is exactly one execution path.</p></li>
+    <li><h3>A plan is a document</h3><p>One document per plan ID. What it says will run is the execution definition; changing that means a new generation.</p></li>
+    <li><h3>Approval is bound to a generation</h3><p>Regenerating a plan resets its status and tokens. An approval never carries over to a version nobody saw.</p></li>
+    <li><h3>Status is approval, never outcome</h3><p><code>status</code> stays <code>approved</code> after a run, however it went. The outcome lives in <code>last_finalized_execution</code>.</p></li>
+    <li><h3>Eligible means approved and owed a run</h3><p><code>run_token</code> above <code>executed_run_token</code>. Raise <code>run_token</code> to ask again. Equal tokens mean finished, not succeeded.</p></li>
+    <li><h3>Every decision comes from one fresh read</h3><p>Never from the event that prompted it. A stale event cannot pair an old approval with a newer plan.</p></li>
+    <li><h3>Results are recorded conditionally</h3><p>Outcome and executed token are written together, on the revision that was read, and never onto another generation.</p></li>
+    <li><h3>Only dependencies order and block</h3><p>No step is special for its name or position. A failed step blocks exactly the steps that depend on it.</p></li>
+    <li><h3>Reuse needs proof</h3><p>A matching fingerprint and every declared output present. Otherwise the step runs again in the same directory, and must tolerate that.</p></li>
+    <li><h3>Unknown stays unknown</h3><p>Nothing is defaulted or converted. A document outside the supported family is shown, never executed or approved.</p></li>
+    <li><h3>Two event systems</h3><p>Trigger events decide which handler plans. Step events record what an attempt did. They never mix.</p></li>
+    <li><h3>The core knows no domain</h3><p>Everything specific lives in a realm. Internal state sits behind one storage interface; realm data behind DataAccess.</p></li>
+  </ul>
+</section>
+
+<section class="sec" aria-label="Around the loop">
+  <div class="sec-head"><div><h2>Around the loop</h2></div></div>
+  <div class="around">
+    <div><h3>Start-up</h3><p>Configuration is resolved from <code>YGG_HOME</code>. Realms are discovered through the <code>ygg.realm</code> entry point, and their handlers and WatchSpecs are checked: a wiring mistake stops the daemon before it starts. One daemon runs per mode, per user, per host.</p></div>
+    <div><h3>Two ways in</h3><p><code>yggdrasil daemon</code> runs the loop until stopped. <code>yggdrasil run-doc</code> handles one document: plan only, or plan and execute in the same process with <code>--run-once</code>. A run-once session executes only the plans it created.</p></div>
+    <div><h3>The published contract</h3><p><code>yggdrasil.contract</code> holds the JSON Schemas, the version and token checks, and the shared reader. Any program that reads plan documents or snapshots can reach the same conclusions as the daemon.</p></div>
+    <div><h3>Dev mode</h3><p><code>--dev</code> swaps in the dev configuration, enables the built-in test realm, allows one SQLite file for internal state, and defaults to separate work and spool directories, so a dev daemon can sit beside production.</p></div>
+  </div>
+</section>
+
+<footer>
+  <p>Drawn from the Yggdrasil source and documentation on the <code>dev</code> branch at <code>7141f44</code>, the v0.6.0 candidate. The example plan is simplified from the demux realm, whose real plans have more steps per lane.</p>
+  <p>Left out on purpose: the eligible plan passes through the core&rsquo;s event routing on its way to the coordinator; PlanWatcher keeps a checkpoint too; DataAccess writes are traced into a step&rsquo;s event stream.</p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+'use strict';
+var $=function(s,r){return (r||document).querySelector(s);};
+var NS='http://www.w3.org/2000/svg';
+function S(tag,attrs,parent,text){var e=document.createElementNS(NS,tag);for(var k in attrs){e.setAttribute(k,attrs[k]);}if(text!=null){e.textContent=text;}if(parent){parent.appendChild(e);}return e;}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function fmt(s){return esc(s).replace(/`([^`]+)`/g,'<code>$1</code>');}
+var reduce=window.matchMedia('(prefers-reduced-motion: reduce)');
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+
+/* ---------- hero art: a generated circuit tree ---------- */
+(function(){
+  var cv=$('#art');if(!cv||!cv.getContext){return;}
+  var ctx=cv.getContext('2d'),W=400,H=520,cx=200;
+  var segs=[],dots=[],rings=[],paths=[];
+  function build(){
+    segs=[];dots=[];rings=[];paths=[];
+    /* Proportions follow the logo: crown about 58% of the height, roots 42% and nearly as wide.
+       Few limbs leave the helix and each forks repeatedly; every entry is one full route from
+       the helix to a terminal, so routes share their first stretches.
+       Right half only. [dot radius, side (0 both, 1 right only, -1 left only), points...] */
+    var C=[
+      [5,0,[200,84],[200,24]],
+      [3.8,0,[200,84],[200,60],[212,48],[212,38]],
+      [5.5,0,[200,197],[236,161],[236,36]],
+      [5,0,[200,197],[236,161],[236,100],[258,78],[258,46]],
+      [3.6,0,[200,197],[236,161],[236,100],[258,78],[258,62],[268,52],[268,42]],
+      [5.5,0,[200,197],[236,161],[286,111],[286,60]],
+      [3.8,1,[200,197],[236,161],[286,111],[286,84],[298,72],[298,58]],
+      [5,0,[200,197],[236,161],[286,111],[312,85],[312,68]],
+      [5,0,[200,197],[236,161],[286,111],[318,111],[336,93],[336,80]],
+      [5,0,[214,215],[262,215],[318,159],[340,137],[360,137]],
+      [5.5,0,[214,215],[262,215],[318,159],[356,159]],
+      [3.8,0,[214,215],[262,215],[318,159],[318,130]],
+      [5.5,0,[214,215],[262,215],[330,215],[352,193],[372,193]],
+      [5,0,[214,215],[262,215],[330,215],[366,215]],
+      [5.5,0,[230,253],[254,253],[286,253],[352,253]],
+      [3.8,-1,[230,253],[254,253],[286,253],[318,253],[332,239],[348,239]],
+      [5,0,[230,253],[254,253],[286,253],[316,283],[338,283]],
+      [5,0,[230,253],[254,253],[282,281],[282,296]]
+    ];
+    /* roots start against the lower lobe and fan out. [ring has a centre dot, points...] */
+    var Rt=[
+      [true,[200,316],[200,494]],
+      [true,[236,262],[236,304],[258,326],[328,326],[346,344]],
+      [false,[236,262],[236,304],[258,326],[300,326],[330,356],[330,392]],
+      [true,[236,262],[236,304],[258,326],[290,358],[290,420]],
+      [false,[222,288],[222,352],[264,394],[264,404]],
+      [true,[222,288],[222,352],[222,392],[248,418],[248,452]],
+      [false,[212,301],[212,410],[228,426],[228,438]],
+      [false,[212,301],[212,410],[212,470]]
+    ];
+    function add(q){for(var i=1;i<q.length;i++){segs.push([q[i-1][0],q[i-1][1],q[i][0],q[i][1]]);}paths.push(q);}
+    function put(q,side,fn){
+      var off=q.some(function(v){return v[0]!==cx;});
+      if(side>=0||!off){fn(q);}
+      if(off&&side<=0){fn(q.map(function(v){return [2*cx-v[0],v[1]];}));}
+    }
+    C.forEach(function(c){put(c.slice(2),c[1],function(q){add(q);var e=q[q.length-1];dots.push([e[0],e[1],c[0]]);});});
+    Rt.forEach(function(r){put(r.slice(1),0,function(q){add(q);var e=q[q.length-1];rings.push([e[0],e[1]+6.5,6.5,r[0]]);});});
+    paths=paths.map(function(q){var L=[0];for(var i=1;i<q.length;i++){L.push(L[i-1]+Math.hypot(q[i][0]-q[i-1][0],q[i][1]-q[i-1][1]));}return {p:q,L:L,len:L[L.length-1]};}).filter(function(q){return q.len>20;});
+  }
+  var col={};
+  function colors(){col={t:cssv('--trace'),r:cssv('--realm'),s:cssv('--store'),f:cssv('--flow'),bg:cssv('--paper')};}
+  function at(P,d){var i=1;while(i<P.L.length-1&&P.L[i]<d){i++;}var a=P.p[i-1],b=P.p[i],u=(d-P.L[i-1])/((P.L[i]-P.L[i-1])||1);return [a[0]+(b[0]-a[0])*u,a[1]+(b[1]-a[1])*u];}
+  var pulses=[];
+  function draw(){
+    var dpr=Math.min(window.devicePixelRatio||1,2),w=cv.clientWidth||330,sc=w/W;
+    if(cv.width!==Math.round(W*sc*dpr)){cv.width=Math.round(W*sc*dpr);cv.height=Math.round(H*sc*dpr);}
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.setTransform(sc*dpr,0,0,sc*dpr,0,0);
+    ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=col.t;ctx.lineWidth=3.2;
+    ctx.beginPath();segs.forEach(function(s){ctx.moveTo(s[0],s[1]);ctx.lineTo(s[2],s[3]);});ctx.stroke();
+    /* trunk: double helix, one full turn */
+    function hx(y){return 30*Math.sin((y-84)/226*Math.PI*2);}
+    ctx.lineWidth=2.4;ctx.beginPath();
+    for(var y=96;y<302;y+=10){var dx=Math.abs(hx(y));if(dx>10){ctx.moveTo(cx-dx,y);ctx.lineTo(cx+dx,y);}}
+    ctx.stroke();
+    ctx.lineWidth=4;
+    [1,-1].forEach(function(sg){ctx.beginPath();for(var y=84;y<=310;y+=2){var x=cx+sg*hx(y);if(y===84){ctx.moveTo(x,y);}else{ctx.lineTo(x,y);}}ctx.stroke();});
+    ctx.fillStyle=col.r;dots.forEach(function(d){ctx.beginPath();ctx.arc(d[0],d[1],d[2],0,6.2832);ctx.fill();});
+    rings.forEach(function(r){ctx.beginPath();ctx.arc(r[0],r[1],r[2],0,6.2832);ctx.fillStyle=col.bg;ctx.fill();ctx.lineWidth=3;ctx.strokeStyle=col.s;ctx.stroke();if(r[3]){ctx.beginPath();ctx.arc(r[0],r[1],2.6,0,6.2832);ctx.fillStyle=col.s;ctx.fill();}});
+    ctx.fillStyle=col.f;
+    pulses.forEach(function(q){var P=paths[q.i],a=at(P,q.d),b=at(P,Math.max(0,q.d-9));ctx.globalAlpha=0.35;ctx.beginPath();ctx.arc(b[0],b[1],2.6,0,6.2832);ctx.fill();ctx.globalAlpha=1;ctx.beginPath();ctx.arc(a[0],a[1],3.6,0,6.2832);ctx.fill();});
+  }
+  build();colors();
+  var seen=true,last=0,tick=0;
+  function spawn(){return {i:Math.floor(Math.random()*paths.length),d:0,v:0.9+Math.random()*0.9};}
+  function frame(t){
+    requestAnimationFrame(frame);
+    if(!seen||document.hidden||reduce.matches||t-last<33){return;}
+    last=t;if(++tick%45===0){colors();}
+    if(pulses.length<9&&Math.random()<0.07){pulses.push(spawn());}
+    pulses=pulses.filter(function(q){q.d+=q.v*2;return q.d<paths[q.i].len;});
+    draw();
+  }
+  draw();
+  if('IntersectionObserver' in window){new IntersectionObserver(function(es){seen=es[0].isIntersecting;}).observe(cv);}
+  window.addEventListener('resize',draw);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(){colors();draw();});
+  new MutationObserver(function(){colors();draw();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+  if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){colors();draw();});}
+  requestAnimationFrame(frame);
+})();
+
+/* ---------- the map ---------- */
+var NODES=[
+ {id:'ext',kind:'out',shape:'bar',x:79,y:305,w:90,h:402,lines:['EXTERNAL','SYSTEMS'],sub:['CouchDB','databases']},
+ {id:'hpc',kind:'out',shape:'bar',x:1118,y:168,w:96,h:136,lines:['HPC &','TOOLS'],sub:['Slurm','pipelines']},
+ {id:'da',kind:'realm',shape:'box',x:300,y:142,w:110,h:34,label:'DataAccess'},
+ {id:'watchspecs',kind:'realm',shape:'box',x:435,y:142,w:130,h:46,label:'WatchSpecs',sub:'what to watch'},
+ {id:'handlers',kind:'realm',shape:'box',x:600,y:142,w:130,h:46,label:'Handlers',sub:'how to plan'},
+ {id:'steps',kind:'realm',shape:'box',x:765,y:142,w:130,h:46,label:'Steps',sub:'how to do it'},
+ {id:'backend',kind:'core',shape:'box',x:250,y:470,w:150,h:46,label:'Watcher backends',sub:'feed · checkpoint'},
+ {id:'wm',kind:'core',shape:'box',x:250,y:360,w:150,h:46,label:'WatcherManager',sub:'filter · scope · payload'},
+ {id:'core',kind:'core',shape:'box',x:600,y:300,w:150,h:46,label:'YggdrasilCore',sub:'route · persist'},
+ {id:'pw',kind:'core',shape:'box',x:800,y:470,w:150,h:46,label:'PlanWatcher',sub:'spots eligible plans'},
+ {id:'coord',kind:'core',shape:'box',x:950,y:400,w:150,h:46,label:'Coordinator',sub:'admit · finalize'},
+ {id:'engine',kind:'core',shape:'box',x:950,y:300,w:150,h:46,label:'Engine',sub:'runs one attempt'},
+ {id:'opsc',kind:'core',shape:'box',x:1000,y:505,w:150,h:46,label:'Ops consumer',sub:'events → snapshot'},
+ {id:'coordb',kind:'store',shape:'ring',x:250,y:668,r:30,label:'yggdrasil',sub:'checkpoints',lx:250,ly:716,la:'middle'},
+ {id:'plans',kind:'store',shape:'ring',x:600,y:625,r:36,label:'yggdrasil_plans',sub:'plan documents',lx:552,ly:622,la:'end'},
+ {id:'ops',kind:'store',shape:'ring',x:880,y:690,r:30,label:'yggdrasil_ops',sub:'plan_status snapshots',lx:880,ly:738,la:'middle'},
+ {id:'spool',kind:'file',shape:'ring',x:1110,y:620,r:28,label:'event spool',sub:'event files',lx:1072,ly:650,la:'end'},
+ {id:'work',kind:'file',shape:'ring',x:1110,y:730,r:24,label:'work root',sub:'workdirs · markers',lx:1076,ly:730,la:'end'},
+ {id:'people',kind:'people',shape:'box',x:600,y:752,w:190,h:46,label:'People & interfaces',sub:'approve · rerun · read'}
+];
+var EDGES=[
+ {id:'e1',c:['ext','backend'],pts:[[124,470],[175,470]],lab:['_changes',131,440,'start']},
+ {id:'e2',c:['backend','wm'],pts:[[250,447],[250,383]],lab:['RawWatchEvent',261,419,'start']},
+ {id:'e3',c:['backend','coordb'],pts:[[250,493],[250,638]],lab:['checkpoint',261,572,'start']},
+ {id:'e4',c:['wm','core'],pts:[[325,360],[481,360],[525,316]],lab:['YggdrasilEvent',403,351,'middle']},
+ {id:'e5',c:['watchspecs','wm'],pts:[[415,165],[415,220],[298,337]],dashed:true,lab:['declares',426,216,'start']},
+ {id:'e6',c:['core','handlers'],pts:[[592,277],[592,165]],lab:['event',583,228,'end']},
+ {id:'e7',c:['handlers','core'],pts:[[608,165],[608,277]],lab:['PlanDraft',617,228,'start']},
+ {id:'e8',c:['core','plans'],pts:[[600,323],[600,589]],lab:['plan document',591,476,'end']},
+ {id:'e9',c:['people','plans'],pts:[[600,729],[600,661]],lab:['approve · rerun',611,702,'start']},
+ {id:'e10',c:['plans','pw'],pts:[[636,625],[760,625],[800,585],[800,493]],lab:['changes',698,616,'middle']},
+ {id:'e11',c:['pw','coord'],pts:[[875,470],[905,470],[920,455],[920,423]],lab:['eligible',929,450,'start']},
+ {id:'e12',c:['coord','engine'],pts:[[950,377],[950,323]],lab:['attempt',959,354,'start']},
+ {id:'e13',c:['engine','steps'],pts:[[910,277],[910,255],[820,165]],lab:['@step calls',900,264,'end']},
+ {id:'e14',c:['steps','hpc'],pts:[[830,142],[1070,142]],lab:['jobs · files',950,133,'middle']},
+ {id:'e15',c:['coord','plans'],pts:[[875,412],[670,412],[620,462],[620,595]],bi:true,lab:['read · record result',772,403,'middle']},
+ {id:'e16',c:['engine','spool'],pts:[[1025,300],[1060,300],[1110,350],[1110,592]],lab:['events',1120,440,'start']},
+ {id:'e17',c:['spool','opsc'],pts:[[1082,620],[1060,620],[1030,590],[1030,528]]},
+ {id:'e18',c:['opsc','ops'],pts:[[960,528],[960,640],[910,690]],lab:['snapshot',951,594,'end']},
+ {id:'e19',c:['ops','people'],pts:[[850,690],[770,690],[708,752],[695,752]],lab:['status',810,681,'middle']},
+ {id:'e20',c:['ext','da'],pts:[[124,142],[245,142]],bi:true,lab:['read · write',185,133,'middle']},
+ {id:'e21',c:['spool','work','engine'],pts:[[1110,648],[1110,706]]}
+];
+var KICK={realm:'Realm · plug-in code',core:'Core daemon',store:'Durable state · store',file:'Durable state · files on disk',people:'People',out:'Outside Yggdrasil'};
+var INFO={
+ ext:{t:'External systems',w:'Databases and services outside Yggdrasil that a realm cares about. They are named as connections in the `external_systems` configuration.',p:['Watched through their change feed. Realm code never polls them.','The same connections serve DataAccess, with permissions per realm and per phase.','They are realm sources, not core dependencies: the core has no special knowledge of any of them.'],x:'CouchDB change feeds are the only event source today. File-system events are named in the event vocabulary as future work.'},
+ hpc:{t:'HPC and tools',w:'Where steps do the heavy work: pipelines, Slurm jobs, files on shared storage.',p:['A step can submit a Slurm job through the toolkit and wait for it to end.','With manual submission, Yggdrasil writes the submit script and waits for an operator to run it.','Within one plan the engine runs steps one at a time. Parallelism lives inside what a step launches.']},
+ da:{t:'DataAccess',w:'The gate between realm code and the configured databases.',p:['Planning phase: asynchronous and read-only.','Execution phase: synchronous reads, plus `save()` for writes.','Granted per realm, per connection, per phase. `write` does not imply `read`.','A connection without a `data_access` block is not reachable at all.']},
+ watchspecs:{t:'WatchSpecs',w:'A realm’s declaration of what to watch.',p:['Names a connection, an event type and an optional filter written in JSON Logic.','Carries the two functions that build the event’s scope and payload.','Frozen and declarative: adding a watcher means adding a WatchSpec. Nothing changes in the core.'],x:'A WatchSpec that no handler listens to is a wiring error, and wiring errors stop the daemon at start-up.'},
+ handlers:{t:'Handlers',w:'A realm’s planning code. A handler turns one event into zero or more plans.',p:['`derive_scope(doc)` answers what this is about: `{kind, id}`.','`generate_plan_drafts()` returns each plan with its steps, dependencies and failure policy, plus `auto_run`, notes and a preview.','Reads external data through DataAccess, read-only.','The plan builder records each step’s declared outputs as absolute paths.'],x:'Handlers generate intent and never execute. After an abrupt restart one event can be replayed, so planning must be idempotent.'},
+ steps:{t:'Steps',w:'A realm’s execution code: plain functions wrapped by `@step`.',p:['Receive a context with the work directory, scope, fingerprint, an event emitter and DataAccess.','Return artifacts and metrics. A declared output that is missing fails the step.','Can report progress and register artifacts while running.'],x:'A step can be run again over its own earlier output: after a failure, a lost result or a deleted marker. It has to tolerate that.'},
+ backend:{t:'Watcher backends',w:'They read a source’s change feed and turn each row into a raw event.',p:['One backend per connection, shared by every WatchSpec that names it.','Catches up with a normal feed, then holds a long poll once current.','The checkpoint advances per row, after the row was processed or deliberately skipped.','Feed failures are retried forever, so the daemon outlives a database outage.'],x:'There is no return path from realms to backends. After an abrupt stop, at most the last event is replayed.'},
+ wm:{t:'WatcherManager',w:'It decides which raw changes matter, and to whom.',p:['Resolves each WatchSpec’s connection name to a concrete endpoint.','Evaluates the spec’s filter on every raw event.','On a match, builds scope and payload and emits a `YggdrasilEvent`.']},
+ core:{t:'YggdrasilCore',w:'The orchestrator: it discovers realms, wires watchers, routes events and stores plans.',p:['Keeps the subscriptions: event type to handlers, narrowed by realm and handler when the event says so.','Builds the planning context, awaits the handler, then persists every draft it returns.','A handler that raises is logged; other handlers and events carry on.'],x:'It never runs a plan inline. Execution always starts from the plan store, which is what keeps approval and rerun on a single path.'},
+ pw:{t:'PlanWatcher',w:'It watches the plan store and hands over each plan that has just become eligible.',p:['Eligible: supported family, valid tokens, `approved`, and `run_token` above `executed_run_token`.','The daemon takes plans of `daemon` authority. A run-once session takes only its own.','Warns about a plan somebody has to repair. Skips drafts and finished requests quietly.'],x:'It resumes from its checkpoint. With no checkpoint it starts from now, so plans approved earlier are not picked up until they change.'},
+ coord:{t:'Execution coordinator',w:'It owns everything between a plan that may be eligible and a result that is recorded.',p:['Admission from one fresh read, in order: family, authority, eligibility, required fields.','At most one attempt per plan in this process. A request that arrives meanwhile is checked again afterwards, not dropped.','Finalization writes outcome and executed token together, conditionally, in at most three tries.','On shutdown the running step finishes and no new step starts.'],x:'A result that cannot be recorded is kept pending in memory only. A restart loses it, and the request may then run again.'},
+ engine:{t:'Engine',w:'It runs one attempt at a plan.',p:['Preflight first: IDs, dependencies, cycles, policy, outputs, callables. A rejected plan runs nothing.','Steps run one at a time, in dependency order. List order only breaks ties.','Fingerprint = parameters + input digests + declared outputs. A matching marker with every output present means the step is reused.','`fail_fast` stops at the first failure. `continue_independent` blocks the dependents and finishes everything else.'],x:'Retries are not implemented: a transient error is recorded as a failure.'},
+ opsc:{t:'Ops consumer',w:'It folds the event spool into one status snapshot per plan.',p:['Runs periodically in the daemon, and once when a run-once session ends.','Shows the latest observed attempt: the one whose execution ID orders highest.','Writes a snapshot only when its content changed.'],x:'An attempt that ended without a report keeps showing as running until a newer attempt is observed.'},
+ coordb:{t:'yggdrasil',w:'The coordination store. It holds watcher checkpoints, so each feed resumes where it stopped.',p:['One checkpoint per watched feed, the plan store’s own feed included.','Checkpoint conflicts are the hint that two daemons share one database environment, which is unsupported.']},
+ plans:{t:'yggdrasil_plans',w:'One document per plan. It is the single source of truth for what may run.',p:['Holds the execution definition, approval status, run tokens, generation, authority and the last finalized result.','Three kinds of writer, each with its own fields: planning, approval and rerun, the finalizer.','A versioned contract: `schema_version` family 1. A document outside the family is inspect-only and never executed.'],x:'Field ownership is a rule of the contract. The database does not enforce it.'},
+ ops:{t:'yggdrasil_ops',w:'One `plan_status` snapshot per plan, for anything that displays execution status.',p:['The attempt, and every planned step’s state, outcome, progress, artifacts, error and blockers.','A projection: nothing is decided from it. Delete it and it is written again.','Versioned like the plan document, family 1.']},
+ spool:{t:'Event spool',w:'One JSON file per event, filed by realm, plan and attempt.',p:['An attempt’s start record, each step’s numbered stream, and the closing report.','The attempt directories also order attempts across restarts.','Its only reader is the ops consumer. It is not part of the published contract.']},
+ work:{t:'Work root',w:'One directory per step, shared by every attempt at the plan.',p:['Holds `plan.json`, the step’s artifacts and its `success.fingerprint` marker.','A rerun executes in the same directory, over whatever the last attempt left.','To force a step to run again, remove its marker or one of its declared outputs.']},
+ people:{t:'People and interfaces',w:'Whoever approves, asks for reruns, and looks at what happened.',p:['Approve: `status` from `draft` to `approved`. Rerun: `run_token` plus one. Nothing else is theirs to change.','Writes are conditional on the revision that was read, and only for the generation that was reviewed.','Readers use the shared reader, so every program draws the same conclusions from the same document.'],x:'Yggdrasil ships no approval command or interface yet. An integration writes the plan document itself, following the contract’s by-hand rules.'}
+};
+var LENSES=[
+ {k:'all',label:'Whole tree'},
+ {k:'plan',label:'Planning path',cap:'From a change to a stored plan. Nothing has run yet.',n:['ext','backend','coordb','wm','core','handlers','plans'],e:['e1','e2','e3','e4','e6','e7','e8']},
+ {k:'exec',label:'Execution path',cap:'From an eligible plan to a recorded result.',n:['plans','pw','coord','engine','steps','hpc','work'],e:['e10','e11','e12','e13','e14','e15','e21']},
+ {k:'evid',label:'Evidence path',cap:'How anyone finds out what happened without asking the daemon.',n:['engine','spool','opsc','ops','people'],e:['e16','e17','e18','e19']},
+ {k:'realm',label:'What a realm provides',cap:'Everything domain-specific. The core calls into a realm at three moments: wiring at start-up, planning on an event, execution of an approved plan.',n:['watchspecs','handlers','steps','da','ext','hpc'],e:['e5','e6','e7','e13','e14','e20']},
+ {k:'state',label:'Where state lives',cap:'Three stores behind one storage interface: CouchDB in production, one SQLite file in dev mode. Plus two directory trees on disk.',n:['coordb','plans','ops','spool','work'],e:['e3','e8','e15','e16','e18','e21']},
+ {k:'people',label:'What people touch',cap:'A person changes two fields of a plan document, `status` and `run_token`, and reads the rest.',n:['people','plans','ops'],e:['e9','e19']}
+];
+var TOUR=[
+ {n:['ext'],e:[],t:'A document changes in a database that some realm watches.'},
+ {n:['ext','backend','coordb'],e:['e1','e3'],t:'The watcher backend reads the change feed, emits a raw event and saves its checkpoint, so a restart resumes from here.'},
+ {n:['backend','wm','watchspecs'],e:['e2','e5'],t:'The WatcherManager tests the change against each WatchSpec’s filter. On a match it builds scope and payload: a `YggdrasilEvent`.'},
+ {n:['wm','core'],e:['e4'],t:'The core routes the event to every handler subscribed to its type.'},
+ {n:['core','handlers','da','ext'],e:['e6','e20'],t:'The realm’s handler plans. It may read external data, read-only, and it returns intent only: steps, dependencies, a failure policy.'},
+ {n:['handlers','core','plans'],e:['e7','e8'],t:'The core stores each draft as one plan document: `draft`, or `approved` straight away when the realm set `auto_run`.'},
+ {n:['people','plans'],e:['e9'],t:'A draft waits. A person reviews it and approves exactly this generation by setting `status` to `approved`.'},
+ {n:['plans','pw'],e:['e10'],t:'PlanWatcher sees the change. The plan is eligible: supported family, valid tokens, approved, `run_token` above `executed_run_token`.'},
+ {n:['pw','coord','plans'],e:['e11','e15'],t:'The coordinator reads the document afresh and decides everything from that one read.'},
+ {n:['coord','engine','work'],e:['e12'],t:'The engine starts one attempt. Preflight checks the whole graph; then steps run one at a time in dependency order, each in its own work directory.'},
+ {n:['engine','steps','hpc'],e:['e13','e14'],t:'Each step is a realm function that does the real work: runs tools, submits Slurm jobs, writes results. A step whose earlier success is still valid is reused instead.'},
+ {n:['engine','spool','work'],e:['e16','e21'],t:'The attempt and every step leave event records in the spool, ending with the attempt’s report.'},
+ {n:['coord','plans'],e:['e15'],t:'If the request finished, the coordinator records outcome and executed token together, with a conditional write that never lands on a different generation.'},
+ {n:['spool','opsc','ops'],e:['e17','e18'],t:'The ops consumer folds the spool into one `plan_status` snapshot per plan: the latest observed attempt, step by step.'},
+ {n:['ops','people','plans'],e:['e19','e9'],t:'Interfaces read the plan document and its snapshot. To run again, someone raises `run_token` by one.'}
+];
+
+/* ---------- inside views ---------- */
+var INSIDE_OF={coord:'coord',engine:'engine',plans:'plans',backend:'watch',wm:'watch'};
+var CA=['c1','c2','a1','a2','a4','a5','a6','a7'],CS=CA.concat(['s1','s2','s3']);
+var EB=['b1','b2','b3','p1','p2','p3','p4'],EN=EB.concat(['n1','n2','e1']);
+var INSIDE={
+ coord:{title:'Inside the coordinator',seq:true,
+  lede:'One path for the daemon and for `run-doc --run-once`. It owns everything between a plan that may be eligible and a result that is recorded, and it refuses rather than guesses.',
+  hint:'Read it left to right: five phases, each a list of checks in the order they are made, each with the way out when a check fails. Pick a situation above to trace it.',
+  cols:[
+   {name:'Claim the plan',sub:'One attempt per plan, in this process.',rows:[
+    ['c1','Already in flight?','A plan holds one slot from its first request until its result is recorded or kept pending.','keep','waits','The request is remembered, and the plan is checked again when the current cycle ends.'],
+    ['c2','A task of its own','Each plan is coordinated in its own task, shielded from cancellation. Stopping a caller never unwinds a running attempt.']]},
+   {name:'Read and admit',sub:'One plain read decides everything. The event that prompted it decides nothing.',rows:[
+    ['a1','Read the stored document','A read that writes nothing. It counts only if it returns this plan’s own document, with a revision.','keep','ADMISSION_FAILED','A storage failure proves nothing about the plan. It stays eligible.'],
+    ['a2','Supported family?','`schema_version` is checked before anything else the document says.','stop','UNSUPPORTED_DOCUMENT','Not executed. A result still waiting to be recorded for it is dropped.'],
+    ['a3','An unrecorded result waiting?','An earlier result that could not be recorded is settled first. Then the document is read again.','keep','FINALIZATION_PENDING','Still unrecorded: the plan is not executed.'],
+    ['a4','Exists, and mine to run?','Authority and owner must match the caller: the daemon, or one run-once session.','stop','NOT_FOUND · NOT_AUTHORIZED'],
+    ['a5','Eligible?','Tokens a valid pair, `status` approved, `run_token` above `executed_run_token`.','stop','NOT_ELIGIBLE','Nothing is reserved, published or written.'],
+    ['a6','An executable request?','Every execution field present on the plan and on each step, a known failure policy, its own plan ID, a generation. No default stands in for a missing field.','keep','INVALID_DOCUMENT','Nothing ran. The plan stays eligible until someone repairs it.'],
+    ['a7','Not the request just attempted?','A request that arrived while that very request was running is not run again.','stop','DUPLICATE','That attempt’s result stands for it.']]},
+   {name:'Start the attempt',sub:'Captured from that one read: plan, family, generation, run token, authority.',rows:[
+    ['s1','Reserve an execution ID','Ordered after every earlier attempt at the plan. Its directory is created exclusively, three candidates at most.','keep','ADMISSION_FAILED','No attempt and no report. The plan stays eligible.'],
+    ['s2','Stop already requested?','Cancellation that arrives before the attempt starts wins.','keep','CANCELLED','Not executed. The plan stays eligible.'],
+    ['s3','Run the engine in a worker thread','The event loop stays free. The coordinator owns the attempt’s context, so its report is readable however the attempt ends.'],
+    ['s4','If the daemon is stopping','The engine is asked to start no new step. The running step finishes, and the coordinator keeps waiting for it.']]},
+   {name:'Interpret the report',sub:'The termination reason decides whether the request is finished. The type of an exception never does.',rows:[
+    ['i1','Every step succeeded or was reused','','ok','finished · succeeded'],
+    ['i2','Drained with failures','Only under `continue_independent`: everything that could run did.','ok','finished · failed','Running it again unchanged would not help, so the token is consumed.'],
+    ['i3','Rejected by preflight','Finished and failed under `continue_independent`. Not finished under `fail_fast`.'],
+    ['i4','Stopped at the first failure','Under `fail_fast`. An orchestration error ends the same way under either policy.','keep','UNFINISHED','Nothing recorded. The plan stays eligible.'],
+    ['i5','Interrupted before it drained','By shutdown, or by a step raising its own cancellation.','keep','CANCELLED','Nothing recorded. The plan stays eligible.']]},
+   {name:'Record the result',sub:'Only a finished request gets here. The plan is reread and judged again before every write.',rows:[
+    ['r1','Same family, same generation?','The document must still be the version that was admitted.','drop','SUPERSEDED','Dropped for good. The report stays in the event spool.'],
+    ['r2','Authority unchanged, not recorded by another?','','drop','SUPERSEDED'],
+    ['r3','Tokens valid, before and after?','The stored pair must be valid, and so must the pair this write would leave.','keep','FINALIZATION_PENDING','Kept in memory until the document changes.'],
+    ['r4','Conditional write','Outcome and `executed_run_token` together, on the revision just read. A lost race or a transient error is tried again: three tries, 0.5 s then 1 s apart.','ok','FINALIZED','The token is consumed.'],
+    ['r5','Tries used up','Or a storage error that cannot be retried.','keep','FINALIZATION_PENDING','The plan is not executed again while it is pending. A restart loses it.'],
+    ['r6','Check the plan again','If a request arrived meanwhile, it is admitted from a fresh read.']]}],
+  cases:[
+   {label:'A healthy approved plan',path:CS.concat(['i1','r1','r2','r3']),end:['r4'],story:'Claimed, admitted from one read, run, interpreted as finished, and recorded with a single conditional write. The run token is consumed.'},
+   {label:'A stale event for a draft',path:['c1','c2','a1','a2','a4'],end:['a5'],story:'The event only says that the document changed. The read shows a draft, so the request ends as not eligible. Nothing was reserved, published or written, and the plan is looked at again the next time it changes.'},
+   {label:'A second request during a run',end:['c1','a7','r6'],story:'The plan is in flight, so the request waits. When the cycle ends, the plan is read again. A newer request runs. The request that was just attempted is a duplicate and is not run twice.'},
+   {label:'The plan is regenerated mid-run',path:CS.concat(['i1']),end:['r1'],story:'The attempt finishes its request, but the reread shows another generation. A result is never recorded onto a version that did not run, so it is dropped as superseded. The new generation waits for its own approval.'},
+   {label:'The plan store fails at the end',path:CS.concat(['i1','r1','r2','r3']),end:['r4','r5','a3'],story:'After three tries the result is kept in memory, and other plans carry on. This plan is not executed again while the result is pending: the next newer request settles it first. A restart loses it, and the request may then run again.'},
+   {label:'The daemon stops mid-run',path:CS,end:['s4','i5'],story:'No new step starts and the running step finishes. If that drained the plan, the result is recorded as usual. If not, the attempt ends as cancelled: nothing is recorded and the plan stays eligible.'},
+   {label:'A step fails under fail_fast',path:CS,end:['i4'],story:'The attempt stops at the failure and the request is not finished, so the tokens do not move. Nothing retries on a timer. The plan runs again the next time its document changes.'},
+   {label:'A newer release wrote the plan',path:['c1','c2','a1'],end:['a2'],story:'Family 2 is unknown to this release, so the plan is not executed and nothing is written. Normally PlanWatcher never hands such a plan over. This check covers a document that changed after the watcher saw it.'}]},
+ engine:{title:'Inside the engine',seq:true,
+  lede:'One attempt at one plan. It checks the whole plan before touching anything, then evaluates one step at a time and records honestly how each one ended.',
+  hint:'Phases three to five repeat for every step until nothing more can run. Pick a situation above to trace it.',
+  cols:[
+   {name:'Before anything runs',sub:'An attempt exists before it publishes.',rows:[
+    ['b1','IDs name one directory each','The realm and the plan ID each become one directory level.','stop','refused','No attempt starts, so there is no report.'],
+    ['b2','Execution ID reserved','The attempt’s directory is created before anything is published.'],
+    ['b3','Publish `plan.attempt_started`','With every planned step, so an attempt that runs nothing is still visible.']]},
+   {name:'Preflight',sub:'The whole plan, before any side effect.',rows:[
+    ['p1','Step IDs','Non-empty, unique, each naming a work directory of its own, distinct even when letter case is ignored.'],
+    ['p2','Dependencies','Each names a known step, none names itself, and there is no cycle.'],
+    ['p3','Policy and outputs','A known failure policy and well-formed output declarations.'],
+    ['p4','Step functions','Each reference resolves to a `@step` function that accepts its parameters.','stop','preflight_rejected','Any defect above: no step runs, and the report says why.'],
+    ['p5','A module that fails to import','That is a broken environment, not a bad plan.','keep','orchestration_error','The attempt aborts.']]},
+   {name:'Pick the next step',sub:'Dependencies decide. Position in the list only breaks ties.',rows:[
+    ['n1','Ready','Every dependency succeeded or was reused in this attempt.'],
+    ['n2','One at a time','Among the ready steps, the one listed first in the plan.'],
+    ['n3','Nothing left that can run','The graph is drained and the attempt closes.']]},
+   {name:'Evaluate the step',sub:'In its own work directory, the same one for every attempt.',rows:[
+    ['e1','Fingerprint','Parameters, digests of the declared inputs, and the declared outputs.'],
+    ['e2','Still valid from before?','The marker matches the fingerprint and every declared output exists.','ok','reused','`step.skipped`. It satisfies its dependents like a success.'],
+    ['e3','Run it','The old marker is removed first. Then `step.started`, then the realm’s function.'],
+    ['e4','Declared outputs present?','A missing one fails the step, so no success is ever reported for it.'],
+    ['e5','Success, in one order','Outputs checked, `step.succeeded` published, marker replaced atomically. Only then do dependents become ready.','ok','succeeded']]},
+   {name:'When a step fails',sub:'The plan’s failure policy takes over.',rows:[
+    ['f1','`fail_fast`','The attempt stops. Later steps are never reached.','keep','failed_fast'],
+    ['f2','`continue_independent`','Every step downstream is blocked, with its blockers named. Everything else keeps running.','stop','blocked','A blocked step is never reused, whatever its marker says.'],
+    ['f3','A transient error','Retries are not implemented. It is recorded as a failure.'],
+    ['f4','Infrastructure failure or a stop request','An unwritable spool, a marker that cannot be written, cancellation: the whole attempt ends, under either policy.','keep','orchestration_error · cancelled']]},
+   {name:'Close the attempt',sub:'Every attempt closes a report, however it ends.',rows:[
+    ['z1','Close the report','Termination reason, outcome, each step’s outcome, the failures and the full blocker lists.'],
+    ['z2','Publish `plan.attempt_report`','Once, as the attempt’s last record.'],
+    ['z3','Unless publishing is what failed','The engine does not try again through an emitter that has just failed.','keep','no report','The snapshot keeps showing the attempt as running until a newer one is observed.']]}],
+  cases:[
+   {label:'Everything is still valid',path:EN.concat(['n3','z1']),end:['e2','z2'],story:'A rerun of a finished plan. Every step’s marker matches and its outputs exist, so nothing is executed. The attempt still publishes its start record, one skip per step and a report, and ends succeeded.'},
+   {label:'A step raises, fail_fast',path:EN.concat(['e3','z1']),end:['f1','z2'],story:'The failure is published and the attempt stops. Steps that had not run stay unreached. The report says `failed_fast`.'},
+   {label:'A step raises, continue_independent',path:EN.concat(['e3','z1']),end:['f2','n3','z2'],story:'The failure blocks exactly the steps downstream of it. The scheduler keeps picking ready steps until none is left, then the report closes as completed with outcome failed.'},
+   {label:'A declared output is missing',path:EN,end:['e2','e4'],story:'Two cases. An earlier success is not reused when one of its outputs is gone, so the step runs again. And a step that returns normally without producing what it declared is failed. No success is ever recorded over a missing output.'},
+   {label:'The plan has a dependency cycle',path:['b1','b2','b3','p1','z1'],end:['p2','p4','z2'],story:'Preflight rejects the plan before a work directory is written. No step runs, and the report records `preflight_rejected` with the reason.'},
+   {label:'The event spool is unwritable',path:['b1','b2'],end:['f4','z3'],story:'Publishing an event fails, which ends the whole attempt as an orchestration error. Its report is not published either, so the snapshot cannot show the ending. The request is not finished and the plan stays eligible.'}]},
+ plans:{title:'Inside a plan document',seq:false,
+  lede:'One document, three kinds of writer and two lifetimes. The document lives under one plan ID from creation to deletion. A generation is one planned version of it.',
+  hint:'Each column is one writer, or one rule every reader follows. Pick a situation above to see which parts of the document it touches.',
+  cols:[
+   {name:'Planning creates it',sub:'Yggdrasil planning only. This is what an approval is given to.',rows:[
+    ['d1','Identity','`_id`, `realm`, `scope`, `created_at`, and `schema_version` 1.'],
+    ['d2','The execution definition','`plan`: steps, parameters, inputs, outputs, dependencies, failure policy. Changing any of it takes a new generation.'],
+    ['d3','This version’s name','`plan_generation`: opaque, compared only for equality.'],
+    ['d4','Starting controls','`status` draft, or approved with `auto_run`. `run_token` 0 and `executed_run_token` −1. Authority and owner.'],
+    ['d5','For people','`preview` and `notes`, defined by the realm.']]},
+   {name:'Approval and rerun update it',sub:'A person or an integration. Two operations, nothing else.',rows:[
+    ['u1','Approve','`status` from draft to approved, with `approved_at` and `approved_by`.'],
+    ['u2','Request a rerun','`run_token` plus one, with `run_requested_at` and `run_requested_by`.'],
+    ['u3','Touch only your own fields','Everything else is kept exactly as read, unknown fields included.'],
+    ['u4','Write conditionally','On the revision that was read, and only for the generation that was reviewed. On a conflict, read and check again.']]},
+   {name:'The finalizer updates it',sub:'Yggdrasil, once a request is finished.',rows:[
+    ['f1','Three fields, written together','`executed_run_token`, `last_finalized_execution` with the full report, and `last_executed_at`.'],
+    ['f2','Keeps a newer request','A `run_token` raised meanwhile is left as it is.'],
+    ['f3','Never onto another version','Not a different generation, family or authority.']]},
+   {name:'Regeneration replaces it',sub:'Planning again under the same plan ID.',rows:[
+    ['g1','Kept','`_id` and `created_at`.'],
+    ['g2','Rebuilt','The definition, with a new `plan_generation`.'],
+    ['g3','Reset or removed','Tokens back to 0 and −1. Approval, rerun and result fields are gone.'],
+    ['g4','Not carried over','Any field planning does not write, extension fields included.'],
+    ['g5','A damaged or unknown version','A stored `schema_version` that is invalid, or of an unsupported family, is never replaced.','keep','refused','The new draft is not persisted and the stored plan is unchanged.']]},
+   {name:'Readers check the version first',sub:'A document is in exactly one of four states.',rows:[
+    ['v1','Supported','`schema_version` is 1. Read under family 1’s rules.','ok','read · change · execute'],
+    ['v2','Unsupported','Another positive integer, such as 2: written by a newer release.','stop','inspect-only'],
+    ['v3','Unversioned','No `schema_version`: a document from before the contract. Planning may replace it, which brings it into the contract.','stop','inspect-only'],
+    ['v4','Invalid','Anything else, such as "1", 1.0, true or 0. A damaged marker, never read as family 1.','stop','inspect-only']]}],
+  cases:[
+   {label:'Approved, then the inputs change',end:['u1','g2','g3'],story:'Alice approves generation A. Corrected inputs make Yggdrasil plan again under the same ID. Generation B carries no approval, because Alice never saw B. It waits as a draft, or runs at once if the realm sets `auto_run`.'},
+   {label:'An operator adds a ticket number',end:['u3','g4'],story:'A field named `x_ops_ticket` can never collide with a contract field. Approval, rerun and the finalizer keep it as read. A regeneration drops it, like every field planning does not write.'},
+   {label:'A newer release wrote family 2',end:['v2','g5'],story:'This release shows what it can, labelled as unsupported. It does not say whether the plan is approved, does not approve or run it, and planning refuses to replace it with an older family-1 document.'},
+   {label:'Someone edits run_token to "5"',end:['d4','f1'],story:'The tokens are no longer a valid pair: both must be JSON integers. Nothing is defaulted or converted, so the plan is not eligible, and a result waiting to be recorded stays pending until the pair is valid again.'},
+   {label:'A plan from before the contract',end:['v3','g2'],story:'It has no `schema_version`, so it is never read as family 1 and never executed or approved. The next time its realm plans it, the document is replaced by a family-1 one with a new generation.'}]},
+ watch:{title:'Inside watching',seq:true,
+  lede:'From a row in a database’s change feed to a handler being asked to plan. Two parts share the work: one backend per connection, and the WatcherManager above them.',
+  hint:'Pick a situation above to trace it.',
+  cols:[
+   {name:'Poll the feed',sub:'One backend per connection, however many WatchSpecs name it.',rows:[
+    ['w1','Resume from the checkpoint','Stored in the coordination database.'],
+    ['w2','Catch up, then hold','A normal feed while changes are pending, a long poll once current.'],
+    ['w3','If the database is unreachable','The poll is retried with backoff, without a cap.','keep','retry forever','The daemon outlives an outage.']]},
+   {name:'For each row',sub:'In feed order.',rows:[
+    ['x1','Design and local documents','Skipped silently.','stop','skipped','The checkpoint still advances.'],
+    ['x2','Fetch the document','A transient failure is retried, three times by default.'],
+    ['x3','Gone meanwhile','A 404 on a row that is not a deletion.','stop','skipped, with a warning','The row is not retried.'],
+    ['x4','Emit a raw event','The document, a deleted flag, and where it came from.'],
+    ['x5','Advance the checkpoint','Per row, right after the row was handled or deliberately skipped.']]},
+   {name:'For each WatchSpec',sub:'The realm’s declaration, applied by the WatcherManager.',rows:[
+    ['y1','Does the filter match?','A JSON Logic expression evaluated on the raw event.','stop','no match','Nothing is emitted for this spec.'],
+    ['y2','Build scope and payload','The spec’s own two functions.'],
+    ['y3','Emit a `YggdrasilEvent`','With the event type, and the realm and handlers it is meant for.']]},
+   {name:'Route to handlers',sub:'In the core.',rows:[
+    ['h1','Who subscribed?','Handlers of that event type, narrowed by realm, then by the handlers the spec targets.','stop','no subscriber','Logged as a warning. Nothing is planned.'],
+    ['h2','Plan in a task of its own','Each handler builds its drafts asynchronously. One that raises is logged, and the others carry on.'],
+    ['h3','One way only','Nothing flows back to the backend: no acknowledgement, and no second offer of the event.']]}],
+  cases:[
+   {label:'CouchDB is down for an hour',end:['w3','w1'],story:'Polling is retried with backoff for as long as it takes. When the database answers again, the backend carries on from its checkpoint and catches up on a normal feed.'},
+   {label:'The daemon is killed mid-batch',end:['x5','w1'],story:'Checkpoints advance row by row, so a restart replays at most the last event emitted before the stop. That is why planning has to be idempotent.'},
+   {label:'A change no realm cares about',path:['w1','w2','x2','x4','x5'],end:['y1'],story:'The row is read and the checkpoint advances, but no filter matches, so no event reaches the core.'},
+   {label:'Planning fails for one event',path:['w1','w2','x2','x4','x5','y1','y2','y3','h1'],end:['h2','h3'],story:'The error is logged. Nothing flows back to the backend, whose checkpoint has already moved on, so the event is not offered again. That plan is not created until its source document changes again.'}]}
+};
+
+(function(){
+  var svg=$('#mapSvg'),panel=$('#panel'),lensBox=$('#lenses');
+  if(!svg){return;}
+  function cham(x,y,w,h,c){var l=x-w/2,r=x+w/2,t=y-h/2,b=y+h/2;return [[l+c,t],[r-c,t],[r,t+c],[r,b-c],[r-c,b],[l+c,b],[l,b-c],[l,t+c]].map(function(p){return p.join(',');}).join(' ');}
+  function head(a,b){var dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L,s=6,bx=b[0]-ux*s*1.6,by=b[1]-uy*s*1.6;return [[b[0],b[1]],[bx-uy*s*0.8,by+ux*s*0.8],[bx+uy*s*0.8,by-ux*s*0.8]].map(function(p){return p[0].toFixed(1)+','+p[1].toFixed(1);}).join(' ');}
+  /* zones */
+  var z=S('g',{},svg);
+  S('polygon',{'class':'zone-crown',points:cham(605,129,510,134,26)},z);
+  S('text',{'class':'zl',x:600,y:86,'text-anchor':'middle'},z,'A REALM');
+  S('text',{'class':'zs',x:600,y:103,'text-anchor':'middle'},z,'one domain’s logic, shipped as a plug-in package');
+  S('rect',{'class':'zone-daemon',x:160,y:250,width:930,height:295,rx:6},z);
+  S('text',{'class':'zl',x:176,y:274},z,'CORE DAEMON');
+  S('text',{'class':'zs',x:176,y:291},z,'realm-agnostic machinery');
+  S('text',{'class':'zl',x:40,y:590},z,'DURABLE STATE');
+  S('text',{'class':'zs',x:40,y:607},z,'what survives a restart');
+  [[500,30,'dmx_realm','end',-12,4],[600,20,'test_realm · dev only','middle',0,-11],[700,30,'your realm','start',12,4]].forEach(function(c){
+    S('path',{'class':'chip-line',d:'M'+c[0]+' 62V'+c[1]},z);S('circle',{'class':'chip-dot',cx:c[0],cy:c[1],r:5.5},z);
+    S('text',{'class':'chip-t',x:c[0]+c[4],y:c[1]+c[5],'text-anchor':c[3]},z,c[2]);
+  });
+  /* edges */
+  var eg=S('g',{},svg),edges={};
+  EDGES.forEach(function(e){
+    var g=S('g',{'class':'edge'+(e.dashed?' dashed':'')+(e.bi?' bi':'')},eg);
+    var d='M'+e.pts.map(function(p){return p.join(' ');}).join('L');
+    S('path',{'class':'base',d:d},g);S('path',{'class':'flow',d:d},g);
+    var n=e.pts.length;S('polygon',{'class':'head',points:head(e.pts[n-2],e.pts[n-1])},g);
+    if(e.bi){S('polygon',{'class':'head',points:head(e.pts[1],e.pts[0])},g);}
+    if(e.lab){S('text',{'class':'elab',x:e.lab[1],y:e.lab[2],'text-anchor':e.lab[3]},g,e.lab[0]);}
+    e.g=g;edges[e.id]=e;
+  });
+  /* nodes */
+  var ng=S('g',{},svg),nodes={};
+  NODES.forEach(function(n){
+    var g=S('g',{'class':'node k-'+n.kind,tabindex:0,role:'button','aria-label':INFO[n.id].t,'aria-pressed':'false'},ng);
+    if(n.shape==='ring'){
+      S('circle',{'class':'halo',cx:n.x,cy:n.y,r:n.r+7},g);
+      S('circle',{'class':'rg',cx:n.x,cy:n.y,r:n.r},g);
+      if(n.kind==='store'){S('circle',{'class':'dot',cx:n.x,cy:n.y,r:n.r>32?8:6},g);}
+      S('text',{'class':'rl',x:n.lx,y:n.ly,'text-anchor':n.la},g,n.label);
+      S('text',{'class':'rs',x:n.lx,y:n.ly+15,'text-anchor':n.la},g,n.sub);
+    }else{
+      S('polygon',{'class':'halo',points:cham(n.x,n.y,n.w+12,n.h+12,10)},g);
+      S('polygon',{'class':'bx',points:cham(n.x,n.y,n.w,n.h,7)},g);
+      if(n.shape==='bar'){
+        S('text',{'class':'bl',x:n.x,y:n.y-12,'text-anchor':'middle'},g,n.lines[0]);
+        S('text',{'class':'bl',x:n.x,y:n.y+4,'text-anchor':'middle'},g,n.lines[1]);
+        S('text',{'class':'ns',x:n.x,y:n.y+26,'text-anchor':'middle'},g,n.sub[0]);
+        S('text',{'class':'ns',x:n.x,y:n.y+40,'text-anchor':'middle'},g,n.sub[1]);
+      }else if(n.sub){
+        S('text',{'class':'nl',x:n.x,y:n.y-2,'text-anchor':'middle'},g,n.label);
+        S('text',{'class':'ns',x:n.x,y:n.y+14,'text-anchor':'middle'},g,n.sub);
+      }else{
+        S('text',{'class':'nl',x:n.x,y:n.y+5,'text-anchor':'middle'},g,n.label);
+      }
+    }
+    if(INSIDE_OF[n.id]){
+      var zx=n.shape==='ring'?n.x+n.r*0.72:n.x+n.w/2-1,zy=n.shape==='ring'?n.y-n.r*0.72:n.y-n.h/2+1;
+      S('circle',{'class':'zoom',cx:zx,cy:zy,r:8.5},g);S('path',{'class':'zoom-p',d:'M'+(zx-4)+' '+zy+'h8M'+zx+' '+(zy-4)+'v8'},g);
+      g.addEventListener('dblclick',function(){enter(INSIDE_OF[n.id]);});
+    }
+    g.addEventListener('click',function(){pick(n.id);});
+    g.addEventListener('keydown',function(ev){if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();pick(n.id);}});
+    n.g=g;nodes[n.id]=n;
+  });
+  /* lenses */
+  var cur={lens:'all',node:'plans',tour:-1},timer=null,playing=false;
+  LENSES.forEach(function(L){
+    var b=document.createElement('button');b.type='button';b.className='lens';b.textContent=L.label;b.setAttribute('aria-pressed',L.k==='all'?'true':'false');
+    b.addEventListener('click',function(){stopTour();cur.lens=L.k;cur.node=L.k==='all'?cur.node:null;apply();});
+    L.b=b;lensBox.appendChild(b);
+  });
+  function lens(k){return LENSES.filter(function(L){return L.k===k;})[0];}
+  function pick(id){stopTour();cur.node=id;apply();}
+  function apply(){
+    var L=lens(cur.lens),T=cur.tour>=0?TOUR[cur.tour]:null;
+    if(!T&&cur.lens==='all'&&!cur.node){cur.node='plans';}
+    LENSES.forEach(function(x){x.b.setAttribute('aria-pressed',(!T&&x.k===cur.lens)?'true':'false');});
+    NODES.forEach(function(n){
+      var inn=T?T.n.indexOf(n.id)>=0:(cur.lens==='all'||L.n.indexOf(n.id)>=0);
+      n.g.classList.toggle('dim',!inn);n.g.classList.toggle('lit',!!T&&inn);
+      var sel=!T&&cur.node===n.id;n.g.classList.toggle('sel',sel);n.g.setAttribute('aria-pressed',sel?'true':'false');
+    });
+    EDGES.forEach(function(e){
+      var on,dim;
+      if(T){on=T.e.indexOf(e.id)>=0;dim=!on;}
+      else if(cur.lens!=='all'){on=L.e.indexOf(e.id)>=0;dim=!on;}
+      else{on=!!cur.node&&e.c.indexOf(cur.node)>=0;dim=false;}
+      e.g.classList.toggle('on',on);e.g.classList.toggle('dim',dim);
+    });
+    panel.parentNode.classList.toggle('touring',!!T);
+    if(T){showTour();}else if(cur.node){showNode(cur.node);}else{showLens(L);}
+  }
+  function showNode(id){
+    var n=INFO[id],k=nodes[id].kind;
+    panel.innerHTML='<p class="kick k-'+k+'">'+KICK[k]+'</p><h3>'+esc(n.t)+'</h3><p class="what">'+fmt(n.w)+'</p><ul>'+n.p.map(function(x){return '<li>'+fmt(x)+'</li>';}).join('')+'</ul>'+(n.x?'<p class="note"><b>Watch out</b>'+fmt(n.x)+'</p>':'')+(INSIDE_OF[id]?'<div class="row"><button type="button" class="btn go" id="pInside">Look inside</button></div>':'');
+    var pi=$('#pInside');if(pi){pi.addEventListener('click',function(){enter(INSIDE_OF[id]);});}
+  }
+  function showLens(L){
+    panel.innerHTML='<p class="kick">Path</p><h3>'+esc(L.label)+'</h3><p class="what">'+fmt(L.cap)+'</p><ol>'+L.n.map(function(id){return '<li><button type="button" class="link" data-n="'+id+'">'+esc(INFO[id].t)+'</button></li>';}).join('')+'</ol>';
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-n]'),function(b){b.addEventListener('click',function(){cur.node=b.getAttribute('data-n');apply();});});
+  }
+  function showTour(){
+    var T=TOUR[cur.tour];
+    panel.innerHTML='<p class="kick k-tour">Follow one change · '+(cur.tour+1)+' of '+TOUR.length+'</p><div class="dots">'+TOUR.map(function(_,i){return '<i'+(i<=cur.tour?' class="on"':'')+'></i>';}).join('')+'</div><p class="cap">'+fmt(T.t)+'</p><div class="row"><button type="button" class="btn quiet" id="tPrev">Back</button><button type="button" class="btn" id="tPlay">'+(playing?'Pause':'Play')+'</button><button type="button" class="btn go" id="tNext">'+(cur.tour===TOUR.length-1?'Again':'Next')+'</button><button type="button" class="btn quiet" id="tExit">Exit</button></div>';
+    $('#tPrev').addEventListener('click',function(){hold();go(Math.max(0,cur.tour-1));});
+    $('#tNext').addEventListener('click',function(){hold();go((cur.tour+1)%TOUR.length);});
+    $('#tPlay').addEventListener('click',function(){if(playing){hold();showTour();}else{play();showTour();}});
+    $('#tExit').addEventListener('click',function(){stopTour();apply();});
+  }
+  function go(i){cur.tour=i;apply();}
+  function hold(){playing=false;clearInterval(timer);timer=null;}
+  function play(){hold();playing=true;timer=setInterval(function(){if(cur.tour>=TOUR.length-1){hold();showTour();return;}go(cur.tour+1);},5200);}
+  function stopTour(){hold();cur.tour=-1;}
+  $('#tourBtn').addEventListener('click',function(){if(inKey){leave();}cur.lens='all';cur.node=null;if(reduce.matches){hold();}else{play();}go(0);});
+  var fs=$('#fsBtn'),sec=$('#map');
+  if(!sec.requestFullscreen){fs.hidden=true;}
+  fs.addEventListener('click',function(){if(document.fullscreenElement){document.exitFullscreen();}else{var p=sec.requestFullscreen();if(p&&p.catch){p.catch(function(){});}}});
+  document.addEventListener('fullscreenchange',function(){fs.textContent=document.fullscreenElement?'Leave full screen':'Full screen';});
+  /* inside views */
+  var stageEl=panel.parentNode,insideEl=$('#inside'),inBoard=$('#inBoard'),inChips=$('#inChips'),inStory=$('#inStory'),inKey=null;
+  function enter(k){
+    stopTour();inKey=k;var V=INSIDE[k];
+    stageEl.hidden=true;lensBox.hidden=true;insideEl.hidden=false;
+    $('#inTitle').textContent=V.title;$('#inLede').innerHTML=fmt(V.lede);
+    inBoard.className='board'+(V.seq?' seq':'');
+    inBoard.innerHTML=V.cols.map(function(c){
+      return '<li class="ph"><h4>'+esc(c.name)+'</h4><p>'+fmt(c.sub)+'</p><ul>'+c.rows.map(function(r){
+        return '<li class="rw" data-r="'+r[0]+'"><b>'+fmt(r[1])+'</b>'+(r[2]?fmt(r[2]):'')+(r[3]?'<div class="ex k-'+r[3]+'"><code>'+esc(r[4])+'</code>'+(r[5]?'<span>'+fmt(r[5])+'</span>':'')+'</div>':'')+'</li>';
+      }).join('')+'</ul></li>';
+    }).join('');
+    inChips.innerHTML='';
+    [{label:'Show everything'}].concat(V.cases).forEach(function(c,i){
+      var b=document.createElement('button');b.type='button';b.className='lens';b.textContent=c.label;b.setAttribute('aria-pressed',i===0?'true':'false');
+      b.addEventListener('click',function(){trace(c,b);});inChips.appendChild(b);
+    });
+    inStory.innerHTML=fmt(V.hint);
+  }
+  function trace(c,b){
+    Array.prototype.forEach.call(inChips.children,function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+    inBoard.classList.toggle('tracing',!!c.end);
+    Array.prototype.forEach.call(inBoard.querySelectorAll('.rw'),function(r){
+      var id=r.getAttribute('data-r');
+      r.classList.toggle('hit',!!c.end&&c.end.indexOf(id)>=0);
+      r.classList.toggle('pass',!!c.end&&c.end.indexOf(id)<0&&(c.path||[]).indexOf(id)>=0);
+    });
+    inStory.innerHTML=fmt(c.story||INSIDE[inKey].hint);
+  }
+  function leave(){inKey=null;insideEl.hidden=true;stageEl.hidden=false;lensBox.hidden=false;apply();}
+  $('#inBack').addEventListener('click',leave);
+  apply();
+})();
+
+/* ---------- be the plan ---------- */
+(function(){
+  var STEPS=[
+   {id:'validate_runfolder',tag:'SHARED',nm:'validate_runfolder',deps:[],x:78,y:115},
+   {id:'upsert_x_flowcell',tag:'SHARED',nm:'upsert_x_flowcell',deps:['validate_runfolder'],x:238,y:115},
+   {id:'lane_1__execute_demux',tag:'LANE 1',nm:'execute_demux',deps:['upsert_x_flowcell'],x:404,y:52},
+   {id:'lane_1__upload_results',tag:'LANE 1',nm:'upload_results',deps:['lane_1__execute_demux'],x:562,y:52},
+   {id:'lane_2__execute_demux',tag:'LANE 2',nm:'execute_demux',deps:['upsert_x_flowcell'],x:404,y:178},
+   {id:'lane_2__upload_results',tag:'LANE 2',nm:'upload_results',deps:['lane_2__execute_demux'],x:562,y:178}
+  ];
+  var DEDGES=[[[146,115],[170,115]],[[306,103],[336,73]],[[306,127],[336,157]],[[472,52],[494,52]],[[472,178],[494,178]]];
+  var QUESTS=[
+   ['q1','Approve the draft and let it run to a recorded success.'],
+   ['q2','Request a rerun of that success: every step is reused.'],
+   ['q3','Under `continue_independent`, fail a lane 1 step and watch lane 2 finish.'],
+   ['q4','Under `fail_fast`, fail a step: the request stays unfinished.'],
+   ['q5','Replan an approved plan: the approval does not carry over.'],
+   ['q6','Replan while an attempt is running: its result is dropped.']
+  ];
+  var T={admit:700,step:850,reuse:320,gap:240};
+  var dag=$('#dag');if(!dag){return;}
+  var W,P,A,busy=false,dirty=false,epoch=0,clock=0,done={},prev={};
+  var elDoc=$('#doc'),elElig=$('#elig'),elVerdict=$('#verdict'),elSay=$('#say'),elLog=$('#log'),elChips=$('#attChips'),elAttId=$('#attId'),elNote=$('#attNote'),elSaysDoc=$('#saysDoc'),elSaysOps=$('#saysOps'),elQuests=$('#quests');
+  var bApprove=$('#btnApprove'),bRerun=$('#btnRerun'),bReplan=$('#btnReplan'),bReset=$('#btnReset'),polCI=$('#polCI'),polFF=$('#polFF'),auto=$('#autoRun');
+
+  function hex(n){var s='';for(var i=0;i<n;i++){s+='0123456789abcdef'.charAt(Math.floor(Math.random()*16));}return s;}
+  function p2(n){return (n<10?'0':'')+n;}
+  function execId(){var d=new Date(clock);return ''+d.getUTCFullYear()+p2(d.getUTCMonth()+1)+p2(d.getUTCDate())+'T'+p2(d.getUTCHours())+p2(d.getUTCMinutes())+p2(d.getUTCSeconds())+'00'+hex(4).replace(/[a-f]/g,'7')+'Z_'+hex(4);}
+
+  /* static graph */
+  function cham(x,y,w,h,c){var l=x-w/2,r=x+w/2,t=y-h/2,b=y+h/2;return [[l+c,t],[r-c,t],[r,t+c],[r,b-c],[r-c,b],[l+c,b],[l,b-c],[l,t+c]].map(function(p){return p.join(',');}).join(' ');}
+  DEDGES.forEach(function(e){S('path',{'class':'tr',d:'M'+e[0].join(' ')+'L'+e[1].join(' ')},dag);S('circle',{'class':'hd',cx:e[1][0],cy:e[1][1],r:3.5},dag);});
+  STEPS.forEach(function(s){
+    var g=S('g',{'class':'stp',tabindex:0,role:'button','aria-pressed':'false'},dag);
+    S('polygon',{'class':'bx',points:cham(s.x,s.y,136,58,7)},g);
+    S('text',{'class':'tg',x:s.x-58,y:s.y-14},g,s.tag);
+    S('text',{'class':'brk',x:s.x+58,y:s.y-14,'text-anchor':'end'},g,'BROKEN');
+    S('text',{'class':'nm',x:s.x-58,y:s.y+3},g,s.nm);
+    s.st=S('text',{'class':'state',x:s.x-58,y:s.y+20},g,'');
+    g.addEventListener('click',function(){sabotage(s.id);});
+    g.addEventListener('keydown',function(ev){if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();sabotage(s.id);}});
+    s.g=g;
+  });
+  QUESTS.forEach(function(q){var li=document.createElement('li');li.id=q[0];li.innerHTML=fmt(q[1]);elQuests.appendChild(li);});
+
+  function say(t){elSay.innerHTML=fmt(t);}
+  function log(type,name,rest){
+    var li=document.createElement('li');li.className='t-'+type;li.innerHTML='<b>'+esc(name)+'</b><span>'+esc(rest||'')+'</span>';
+    elLog.appendChild(li);while(elLog.children.length>80){elLog.removeChild(elLog.firstChild);}
+    elLog.scrollTop=elLog.scrollHeight;
+  }
+  function quest(id){if(done[id]){return;}done[id]=true;var li=document.getElementById(id);if(li){li.classList.add('done');}}
+  function eligible(){return P.status==='approved'&&P.run_token>P.executed;}
+
+  function freshPlan(){return {gen:hex(8),status:W.autoRun?'approved':'draft',run_token:0,executed:-1,approved_by:null,last:null,policy:W.policy};}
+  function reset(){
+    epoch++;busy=false;dirty=false;clock=Date.UTC(2026,10,17,9,0,0);prev={};
+    W={broken:{},markers:{},ver:{},autoRun:false,policy:'continue_independent'};
+    STEPS.forEach(function(s){W.ver[s.id]=1;});
+    polCI.checked=true;polFF.checked=false;auto.checked=false;
+    P=freshPlan();A=null;elLog.innerHTML='';
+    log('doc','plan saved','generation '+P.gen+' · draft');
+    say('A change to this flowcell’s source document made the realm plan the work. The plan is a draft: nothing runs until someone approves this generation.');
+    render();
+  }
+
+  /* moves */
+  function approve(){
+    if(P.status!=='draft'){return;}
+    P.status='approved';P.approved_by='you';
+    log('doc','approved','status = approved · by you');
+    say('You approved this generation. `status` is the only thing an approval changes. The plan is now eligible: approved, and `run_token` '+P.run_token+' is above `executed_run_token` '+P.executed+'.');
+    changed();
+  }
+  function rerun(){
+    if(P.status!=='approved'){return;}
+    P.run_token++;
+    log('doc','rerun requested','run_token = '+P.run_token);
+    say(busy?'You raised `run_token` while an attempt is in flight. The request is not dropped: the plan is checked again once that attempt is done.':'You raised `run_token` by one. That is a new execution request for the same generation, so the approval stands.');
+    changed();
+  }
+  function replan(why){
+    var wasApproved=P.status==='approved';
+    if(why==='source'){W.ver.lane_2__execute_demux++;W.ver.lane_2__upload_results++;}
+    P=freshPlan();
+    log('doc','plan regenerated','generation '+P.gen+' · '+P.status);
+    if(wasApproved&&!W.autoRun){quest('q5');}
+    var tail=W.autoRun?' The realm sets `auto_run`, so planning wrote it as approved.':' Nobody has seen this version, so it is a draft again.';
+    if(why==='source'){say('The source document changed, so the realm planned again under the same plan ID. That is a new generation: the tokens are reset, and the earlier approval and result are gone. Lane 2’s parameters changed, so its steps have new fingerprints; the rest can be reused.'+tail);}
+    else if(why==='policy'){say('The failure policy is part of the execution definition. Changing it takes a new generation, and with it a new approval. No fingerprint changed, so earlier successes can still be reused.'+tail);}
+    else{say(W.autoRun?'The realm now sets `auto_run`: planning writes the plan as approved at once, and no person is in the loop for it.':'Without `auto_run`, planning writes a draft and waits for an approver.');}
+    changed();
+  }
+  function sabotage(id){
+    W.broken[id]=!W.broken[id];
+    if(W.broken[id]){delete W.markers[id];}
+    say(W.broken[id]?'`'+id+'` is broken: its output is gone, so it cannot be reused, and it will fail when it runs. That is the world misbehaving, not a change to the plan: the document is untouched, so nothing is triggered.':'`'+id+'` will work again. The plan document did not change, so the daemon has no reason to look at it. Request a rerun to try again.');
+    render();
+  }
+  function changed(){
+    render();
+    if(busy){dirty=true;return;}
+    if(eligible()){runAttempt();}
+  }
+
+  /* the daemon */
+  function runAttempt(){
+    var my=epoch;busy=true;dirty=false;
+    var cap={gen:P.gen,token:P.run_token,policy:P.policy,ver:Object.assign({},W.ver)};
+    A={id:null,state:'admitting',steps:{},term:null,outcome:null,cap:cap};
+    STEPS.forEach(function(s){A.steps[s.id]='pending';});
+    log('core','admitted','family 1 · daemon authority · eligible · fields complete');
+    render();
+    var stopped=false;
+    function alive(){return my===epoch;}
+    function next(){return STEPS.filter(function(s){return A.steps[s.id]==='pending'&&s.deps.every(function(d){return A.steps[d]==='succeeded'||A.steps[d]==='reused';});})[0];}
+    function loop(){
+      var s=next();
+      if(!s||stopped){return Promise.resolve();}
+      var fp=s.id+'@'+cap.ver[s.id];
+      if(W.markers[s.id]===fp){
+        A.steps[s.id]='reused';log('ok','step.skipped',s.id+' · cache_hit');render();
+        return sleep(T.reuse).then(function(){return alive()?loop():null;});
+      }
+      delete W.markers[s.id];
+      A.steps[s.id]='running';log('step','step.started',s.id);render();
+      return sleep(T.step).then(function(){
+        if(!alive()){return null;}
+        if(W.broken[s.id]){
+          A.steps[s.id]='failed';log('bad','step.failed',s.id);
+          if(cap.policy==='fail_fast'){stopped=true;render();return null;}
+          var grew=true;
+          while(grew){grew=false;STEPS.forEach(function(t){if(A.steps[t.id]==='pending'&&t.deps.some(function(d){return A.steps[d]==='failed'||A.steps[d]==='blocked';})){A.steps[t.id]='blocked';log('bad','step.blocked',t.id);grew=true;}});}
+        }else{
+          A.steps[s.id]='succeeded';W.markers[s.id]=fp;log('ok','step.succeeded',s.id);
+        }
+        render();
+        return sleep(T.gap).then(function(){return alive()?loop():null;});
+      });
+    }
+    sleep(T.admit).then(function(){
+      if(!alive()){return;}
+      clock+=1000*(45+Math.floor(Math.random()*240));
+      A.id=execId();A.state='running';
+      log('plan','plan.attempt_started',A.id);
+      say('PlanWatcher handed the plan over. The coordinator read the document afresh and admitted it from that one read. The engine now runs one attempt: steps one at a time, in dependency order.');
+      render();
+      return sleep(T.gap).then(function(){return alive()?loop():null;}).then(function(){
+        if(!alive()){return;}
+        if(stopped){STEPS.forEach(function(s){if(A.steps[s.id]==='pending'){A.steps[s.id]='unreached';}});A.term='failed_fast';A.outcome='failed';}
+        else{A.term='completed';A.outcome=STEPS.some(function(s){return A.steps[s.id]==='failed'||A.steps[s.id]==='blocked';})?'failed':'succeeded';}
+        A.state='finished';
+        log('plan','plan.attempt_report',A.term+' · '+A.outcome);
+        render();
+        return sleep(T.admit).then(function(){if(alive()){finalize(cap,stopped);}});
+      });
+    });
+  }
+  function finalize(cap,stopped){
+    if(stopped){
+      say('`fail_fast` stopped the attempt at the first failure. The request is not finished, so nothing is written to the plan: the tokens stay as they were and the plan stays eligible. Nothing retries on a timer. It runs again the next time the plan document changes, for example when you request a rerun.');
+      quest('q4');
+    }else if(P.gen!==cap.gen){
+      log('bad','finalize refused','superseded: the plan was regenerated');
+      say('The attempt finished, but the plan was regenerated while it ran. A result is never recorded onto a different generation, so this one is dropped as superseded. Its report stays in the event spool, and the snapshot still shows the attempt.');
+      quest('q6');
+    }else{
+      P.executed=cap.token;P.last={run_token:cap.token,outcome:A.outcome,term:A.term};
+      log('core','finalized','executed_run_token = '+cap.token+' · '+A.outcome);
+      if(A.outcome==='succeeded'){
+        var all=STEPS.every(function(s){return A.steps[s.id]==='reused';});
+        say(all?'Every step still had a valid success: same fingerprint, declared outputs present. Nothing was executed, and the request is recorded as finished and succeeded.':'Every step succeeded or was reused. The coordinator recorded the outcome and the executed token together, in one conditional write. `status` stays `approved`: it never turns into an outcome.');
+        quest('q1');if(all){quest('q2');}
+      }else{
+        say('Under `continue_independent` the failure blocked only its dependents, and every other branch ran. The request is finished with outcome `failed`, so the tokens are now equal. It will not run again by itself, and approving again changes nothing: it needs a new request.');
+        var l2=['lane_2__execute_demux','lane_2__upload_results'].every(function(id){return A.steps[id]==='succeeded'||A.steps[id]==='reused';});
+        var l1=A.steps.lane_1__execute_demux==='failed'||A.steps.lane_1__upload_results==='failed';
+        if(l1&&l2){quest('q3');}
+      }
+    }
+    busy=false;render();
+    if(dirty){
+      dirty=false;
+      if((P.gen!==cap.gen||P.run_token>cap.token)&&eligible()){var my=epoch;sleep(T.admit).then(function(){if(my===epoch&&!busy&&eligible()){runAttempt();}});}
+    }
+  }
+
+  /* rendering */
+  function row(k,v,w,none){
+    var changedNow=(k in prev)&&prev[k]!==v;prev[k]=v;
+    return '<div><dt><i class="w-'+w+'"></i>'+esc(k)+'</dt><dd class="'+(none?'none':'')+(changedNow?' flash':'')+'">'+esc(v)+'</dd></div>';
+  }
+  function render(){
+    var last=P.last?'{run_token: '+P.last.run_token+', outcome: "'+P.last.outcome+'", termination_reason: "'+P.last.term+'"}':'absent';
+    elDoc.innerHTML=
+      row('_id','"dmx_realm:22FWK7LT3:demux"','plan')+
+      row('schema_version','1','plan')+
+      row('scope','{kind: "flowcell", id: "22FWK7LT3"}','plan')+
+      row('plan_generation','"'+P.gen+'…"','plan')+
+      row('plan.steps','6 steps','plan')+
+      row('plan.failure_policy','"'+P.policy+'"','plan')+
+      row('execution_authority','"daemon"','plan')+
+      row('status','"'+P.status+'"',P.approved_by?'appr':'plan')+
+      row('approved_by',P.approved_by?'"'+P.approved_by+'"':'absent','appr',!P.approved_by)+
+      row('run_token',String(P.run_token),P.run_token>0?'appr':'plan')+
+      row('executed_run_token',String(P.executed),P.executed>=0?'fin':'plan')+
+      row('last_finalized_execution',last,'fin',!P.last);
+    var c3=P.status==='approved',c4=P.run_token>P.executed;
+    function li(ok,text,val){return '<li class="'+(ok?'y':'n')+'"><span>'+fmt(text)+'</span><b>'+esc(val)+'</b></li>';}
+    elElig.innerHTML=li(true,'`schema_version` names a supported family','yes')+li(true,'the tokens are a valid pair','yes')+li(c3,'`status` is `approved`',c3?'yes':'no')+li(c4,'`run_token` is above `executed_run_token`',P.run_token+' > '+P.executed+(c4?'':' is false'));
+    var el=c3&&c4;
+    elVerdict.className='verdict'+(el?' yes':'');
+    elVerdict.textContent=el?(busy?'Eligible · an attempt is in flight':'Eligible · runs on the next change to this document'):(!c3?'Not eligible · still a draft':'Not eligible · the latest request is finished');
+    /* attempt */
+    STEPS.forEach(function(s){
+      var st=A?A.steps[s.id]:'planned';
+      s.g.setAttribute('class','stp st-'+st+(W.broken[s.id]?' broken':''));
+      s.g.setAttribute('aria-pressed',W.broken[s.id]?'true':'false');
+      s.g.setAttribute('aria-label',s.id+', '+st+(W.broken[s.id]?', broken':''));
+      s.st.textContent=st;
+    });
+    if(!A){
+      elChips.innerHTML='<span class="chipx">no attempt yet</span>';elAttId.textContent='';elNote.textContent='';
+      elSaysOps.textContent='no snapshot: nothing has been observed';
+    }else{
+      var ch='<span class="chipx '+(A.state==='finished'?'':'run')+'">'+(A.state==='admitting'?'admission':A.state)+'</span>';
+      if(A.term){ch+='<span class="chipx">'+A.term+'</span><span class="chipx '+(A.outcome==='succeeded'?'ok':'bad')+'">outcome '+A.outcome+'</span>';}
+      elChips.innerHTML=ch;
+      elAttId.textContent=A.id?'execution_id '+A.id:'';
+      elNote.textContent='generation '+A.cap.gen+'… · run_token '+A.cap.token+(A.cap.gen!==P.gen?' · an earlier generation':'');
+      if(!A.id){elSaysOps.textContent='no snapshot yet for this attempt';}
+      else{
+        var cnt={};STEPS.forEach(function(s){var v=A.steps[s.id];if(v==='pending'||v==='running'){return;}cnt[v]=(cnt[v]||0)+1;});
+        var parts=Object.keys(cnt).map(function(k){return cnt[k]+' '+k;});
+        elSaysOps.textContent='attempt '+(A.state==='finished'?'finished · '+A.outcome+' ('+A.term+')':'running')+(parts.length?' · '+parts.join(', '):'');
+      }
+    }
+    elSaysDoc.textContent=P.last?'request '+P.last.run_token+' finished · '+P.last.outcome:'no request finished in this generation';
+    bApprove.disabled=P.status!=='draft';
+    bRerun.disabled=P.status!=='approved';
+  }
+
+  bApprove.addEventListener('click',approve);
+  bRerun.addEventListener('click',rerun);
+  bReplan.addEventListener('click',function(){replan('source');});
+  bReset.addEventListener('click',reset);
+  [polCI,polFF].forEach(function(r){r.addEventListener('change',function(){if(r.checked&&W.policy!==r.value){W.policy=r.value;replan('policy');}});});
+  auto.addEventListener('change',function(){W.autoRun=auto.checked;replan('auto');});
+  reset();
+})();
+})();
+</script>
