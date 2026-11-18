@@ -12,6 +12,23 @@
 
 Yggdrasil is an event-driven orchestration framework that watches different sources (CouchDB, file-system, etc.), routes change events to **realm** modules, and executes the resulting workflow plans via the **Engine**.
 
+<div class="ygg-atlas-card" markdown>
+<div class="ygg-atlas-card__media" markdown>
+
+[![The Atlas map with the execution path highlighted, from the coordinator through the engine to the steps](assets/atlas-map-light.png#only-light){ width="957" height="501" }![The Atlas map with the execution path highlighted, from the coordinator through the engine to the steps](assets/atlas-map-dark.png#only-dark){ width="957" height="501" }](architecture/atlas.md){ tabindex="-1" aria-hidden="true" }
+
+</div>
+<div class="ygg-atlas-card__body" markdown>
+
+**Interactive Atlas**
+
+Trace a change from watcher to execution, or try approving and rerunning a sample plan.
+
+[Open the Atlas](architecture/atlas.md){ .md-button .md-button--primary }
+
+</div>
+</div>
+
 ---
 
 ## By audience
