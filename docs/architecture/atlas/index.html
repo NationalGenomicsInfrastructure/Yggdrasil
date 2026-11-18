@@ -570,6 +570,16 @@ var reduce=window.matchMedia('(prefers-reduced-motion: reduce)');
 function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
 function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
 
+/* ---------- section links: jump without adding to the browser history, so Back leaves the page ---------- */
+document.addEventListener('click',function(e){
+  if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey){return;}
+  var a=e.target.closest?e.target.closest('a[href^="#"]'):null;
+  var id=a?a.getAttribute('href').slice(1):'';
+  if(!id||!document.getElementById(id)){return;}
+  e.preventDefault();
+  location.replace('#'+id);
+});
+
 /* ---------- hero art: a generated circuit tree ---------- */
 (function(){
   var cv=$('#art');if(!cv||!cv.getContext){return;}
