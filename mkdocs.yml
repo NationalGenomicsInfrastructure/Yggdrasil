@@ -52,6 +52,7 @@ nav:
       - Configuration: getting_started/configuration.md
   - Architecture:
       - Overview: architecture/overview.md
+      - Interactive Atlas: architecture/atlas.md
   - Flow API:
       - Overview: flow_api/overview.md
   - Realm authoring:
@@ -71,6 +72,12 @@ extra:
   analytics:
     provider: google
     property: G-Q6VQF8G4VX
+
+extra_css:
+  - stylesheets/atlas.css
+
+extra_javascript:
+  - javascripts/atlas.js
 
 markdown_extensions:
   - attr_list
@@ -95,3 +102,6 @@ exclude_docs: |
   /design/**
   /diagrams/**
   /assets/README.md
+  /atlas/Yggdrasil_Atlas.html
+  /atlas/build_standalone.py
+  /atlas/fonts/*.woff2

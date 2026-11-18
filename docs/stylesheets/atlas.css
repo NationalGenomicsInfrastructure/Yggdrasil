@@ -1,0 +1,68 @@
+/* The Yggdrasil Atlas in the docs: its page and the card on Home. */
+
+/* Atlas page: let the embedded Atlas use the whole width of the window. */
+.md-main__inner.md-grid:has(.ygg-atlas) {
+  max-width: none;
+}
+
+.md-typeset .ygg-atlas {
+  margin: 1.2em 0 0;
+}
+
+/* The Atlas scrolls inside the frame, which fills the window below the header. */
+.md-typeset .ygg-atlas__frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 2.4rem);
+  height: calc(100dvh - 2.4rem);
+  min-height: 30rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  background-color: var(--md-default-bg-color);
+}
+
+/* Home: a compact card with a crop of the Atlas map. */
+.md-typeset .ygg-atlas-card {
+  display: grid;
+  grid-template-columns: minmax(0, 16rem) minmax(0, 1fr);
+  gap: 0.8rem 1.2rem;
+  align-items: center;
+  margin: 1.6em 0;
+  padding: 0.8rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+}
+
+.md-typeset .ygg-atlas-card__media > p,
+.md-typeset .ygg-atlas-card__media a {
+  display: block;
+  margin: 0;
+  line-height: 0;
+}
+
+/* No display rule here: Material hides the image of the other scheme
+   (#only-light, #only-dark) with display: none. */
+.md-typeset .ygg-atlas-card__media img {
+  width: 100%;
+  height: auto;
+  vertical-align: top;
+  border-radius: 0.1rem;
+}
+
+.md-typeset .ygg-atlas-card__body > :first-child {
+  margin-top: 0;
+}
+
+.md-typeset .ygg-atlas-card__body > :last-child {
+  margin-bottom: 0;
+}
+
+.md-typeset .ygg-atlas-card__body .md-button {
+  margin-top: 0.2em;
+}
+
+@media screen and (max-width: 44.984375em) {
+  .md-typeset .ygg-atlas-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
