@@ -1,0 +1,108 @@
+/* The Atlas palette for Material's light (default) and dark (slate) schemes.
+ *
+ * Paper and ink are the Atlas's. Its green marks navigation (the header, the
+ * active page and section, primary buttons), its blue marks links, and its
+ * amber marks hover and focus. Every colour is sampled from
+ * docs/atlas/Yggdrasil_Atlas.html; where the Atlas's own value is too light
+ * for text, its darker text variant is used (amber #96520a in light mode).
+ */
+
+[data-md-color-scheme="default"] {
+  --ygg-nav-color: #237a4b;
+  --ygg-inline-code-bg: #e5eae2;
+
+  --md-default-bg-color: #f1f4ee;
+  --md-default-bg-color--light: #f1f4eeb3;
+  --md-default-bg-color--lighter: #f1f4ee4d;
+  --md-default-bg-color--lightest: #f1f4ee1f;
+  --md-default-fg-color: #0e1a16;
+  --md-default-fg-color--light: #44544d;
+  --md-default-fg-color--lighter: #74837c;
+  --md-default-fg-color--lightest: #0e1a161a;
+
+  --md-primary-fg-color: #237a4b;
+  --md-primary-fg-color--light: #2e8f5a;
+  --md-primary-fg-color--dark: #1b5e3a;
+  --md-primary-bg-color: #f1f4ee;
+  --md-primary-bg-color--light: #f1f4ee;
+
+  --md-accent-fg-color: #96520a;
+  --md-accent-fg-color--transparent: #96520a1a;
+  --md-accent-bg-color: #f1f4ee;
+  --md-accent-bg-color--light: #f1f4eeb3;
+
+  --md-typeset-a-color: #1c6a8c;
+  --md-typeset-table-color: #0e1a161f;
+  --md-typeset-table-color--light: #0e1a160a;
+
+  --md-code-fg-color: #1d2b26;
+  --md-code-bg-color: #fbfcf9;
+  --md-code-bg-color--light: #fbfcf9b3;
+  --md-code-bg-color--lighter: #fbfcf94d;
+
+  --md-footer-bg-color: #0e1a16;
+  --md-footer-bg-color--dark: #0a100e;
+  --md-footer-fg-color: #f1f4ee;
+  --md-footer-fg-color--light: #f1f4eeb3;
+  --md-footer-fg-color--lighter: #f1f4ee9e;
+}
+
+[data-md-color-scheme="slate"] {
+  --ygg-nav-color: #62cb8d;
+  --ygg-inline-code-bg: #17231f;
+
+  --md-default-bg-color: #0c1412;
+  --md-default-bg-color--light: #0c14128a;
+  --md-default-bg-color--lighter: #0c141242;
+  --md-default-bg-color--lightest: #0c141212;
+  --md-default-fg-color: #e7eee9;
+  --md-default-fg-color--light: #a6b6ae;
+  --md-default-fg-color--lighter: #77877f;
+  --md-default-fg-color--lightest: #e7eee91f;
+
+  --md-primary-fg-color: #237a4b;
+  --md-primary-fg-color--light: #2e8f5a;
+  --md-primary-fg-color--dark: #1b5e3a;
+  --md-primary-bg-color: #f1f4ee;
+  --md-primary-bg-color--light: #f1f4ee;
+
+  --md-accent-fg-color: #f2a64a;
+  --md-accent-fg-color--transparent: #f2a64a1a;
+  --md-accent-bg-color: #0c1412;
+  --md-accent-bg-color--light: #0c1412b3;
+
+  --md-typeset-a-color: #62b9da;
+  --md-typeset-table-color: #e7eee91f;
+  --md-typeset-table-color--light: #e7eee90d;
+
+  --md-code-fg-color: #e7eee9;
+  --md-code-bg-color: #121d1a;
+  --md-code-bg-color--light: #121d1ae6;
+  --md-code-bg-color--lighter: #121d1a8a;
+
+  --md-footer-bg-color: #070c0a;
+  --md-footer-bg-color--dark: #050807;
+  --md-footer-fg-color: #e7eee9;
+  --md-footer-fg-color--light: #e7eee9b3;
+  --md-footer-fg-color--lighter: #e7eee99e;
+}
+
+/* Material colours the active page like a link. Here it takes the Atlas
+   green; hovering still turns it amber. */
+.md-nav__item .md-nav__link--active,
+.md-nav__item .md-nav__link--active code,
+.md-nav--primary .md-nav__item--active > .md-nav__link {
+  color: var(--ygg-nav-color);
+}
+
+/* Inline code sits on the Atlas's sunken tone; code blocks stay on the
+   lighter panel tone, where the syntax colours keep their contrast. */
+.md-typeset :not(pre) > code {
+  background-color: var(--ygg-inline-code-bg);
+}
+
+/* On the green header, an amber focus ring would barely show. */
+.md-header__button,
+.md-header .md-search__input {
+  outline-color: var(--md-primary-bg-color);
+}

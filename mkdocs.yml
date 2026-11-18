@@ -23,6 +23,8 @@ theme:
   palette:
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-auto
         name: Switch to light mode
@@ -30,6 +32,8 @@ theme:
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny 
         name: Switch to dark mode
@@ -37,6 +41,8 @@ theme:
     # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to light mode
@@ -75,6 +81,7 @@ extra:
 
 extra_css:
   - stylesheets/atlas.css
+  - stylesheets/atlas-palette.css
 
 extra_javascript:
   - javascripts/atlas.js
