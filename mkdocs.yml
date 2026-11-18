@@ -83,6 +83,9 @@ extra_css:
   - stylesheets/atlas.css
   - stylesheets/atlas-palette.css
 
+extra_javascript:
+  - javascripts/atlas.js
+
 markdown_extensions:
   - attr_list
   - md_in_html
