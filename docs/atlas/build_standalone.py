@@ -7,9 +7,9 @@ script turns it into one self-contained HTML document.
 By default it writes the documentation site's Atlas page,
 ``docs/architecture/atlas/index.html``, which MkDocs publishes as it is. In
 that build the Atlas logo and a "Docs" item in its menu lead to the
-documentation home, the Atlas uses the light or dark choice saved by the
-documentation site, and the browser tab shows the documentation's icon, the
-only file the page asks the server for.
+documentation home, the Atlas and the documentation share the reader's light
+or dark choice, and the browser tab shows the documentation's icon, the only
+file the page asks the server for.
 
 ``--plain`` writes a copy without those, for embedding elsewhere (such as
 Bifrost) or opening from disk. A plain copy makes no network request.
@@ -82,7 +82,8 @@ Embed   <iframe src="atlas.html" title="Yggdrasil Atlas" allow="fullscreen"
                 style="width:100%;height:100%;border:0"></iframe>
         Give the frame its own full-height area. The page scrolls inside it.
 
-Theme   Follows the operating system unless told otherwise.
+Theme   Follows the operating system unless told otherwise. The switch in
+        the header changes it for the visit.
         At load:      atlas.html?theme=dark        (dark, light or auto)
         While open:   frame.contentWindow.postMessage(
                           {{type: "yggdrasil-atlas:theme", theme: "dark"}},
@@ -98,8 +99,9 @@ docs/atlas/build_standalone.py from docs/atlas/Yggdrasil_Atlas.html; edit that
 file, not this one.
 
 Theme   Uses the light or dark choice saved by the documentation site, or the
-        operating system's when there is none. ?theme=dark, light or auto in
-        the address overrides both.
+        operating system's when there is none, and the switch in the header
+        saves its choice there too. ?theme=dark, light or auto in the address
+        overrides both.
 
 {FONT_NOTE} The licence texts are in docs/atlas/fonts/.
 -->"""
@@ -130,6 +132,11 @@ BRIDGE = """<script>
 # "<site path>.__palette"; "slate" is its dark scheme. Reading it again when
 # the page comes back from the browser's back-forward cache, or when another
 # tab changes it, keeps the Atlas in step with the documentation.
+#
+# The Atlas's theme switch saves its choice there too, as Material would:
+# "index" is the choice's place in the palette list in mkdocs.yml (automatic,
+# light, dark), which Material uses to pick it on the next page it loads, and
+# "color" lets Material show it before its own script runs.
 DOCS_THEME = """<script>
 (function(){
   if(/[?&]theme=/.test(location.search)){return;}
@@ -144,6 +151,14 @@ DOCS_THEME = """<script>
   apply();
   window.addEventListener('storage',function(e){if(e.key===key){apply();}});
   window.addEventListener('pageshow',function(e){if(e.persisted){apply();}});
+  window.addEventListener('yggdrasil-atlas:theme-change',function(e){
+    var t=e.detail,index={auto:0,light:1,dark:2}[t];
+    if(index===undefined){return;}
+    var color=t==='auto'
+      ?{media:'(prefers-color-scheme)',scheme:matchMedia('(prefers-color-scheme: light)').matches?'default':'slate'}
+      :{media:'(prefers-color-scheme: '+t+')',scheme:t==='dark'?'slate':'default'};
+    try{localStorage.setItem(key,JSON.stringify({index:index,color:color}));}catch(err){}
+  });
 })();
 </script>"""
 

@@ -21,6 +21,9 @@ theme:
     - toc.integrate
     #  - navigation.path    # Enables breadcrumbs
   palette:
+    # The Atlas's theme switch saves the reader's choice for these pages too and
+    # relies on this order: automatic, light, dark (docs/atlas/build_standalone.py).
+
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
       primary: custom

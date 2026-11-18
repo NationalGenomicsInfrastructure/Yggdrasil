@@ -12,8 +12,9 @@ docs/atlas/build_standalone.py from docs/atlas/Yggdrasil_Atlas.html; edit that
 file, not this one.
 
 Theme   Uses the light or dark choice saved by the documentation site, or the
-        operating system's when there is none. ?theme=dark, light or auto in
-        the address overrides both.
+        operating system's when there is none, and the switch in the header
+        saves its choice there too. ?theme=dark, light or auto in the address
+        overrides both.
 
 Fonts   Chakra Petch (The Chakra Petch Project Authors) and IBM Plex Sans and
         IBM Plex Mono (IBM Corp.), Latin subsets, embedded under the SIL Open
@@ -82,13 +83,20 @@ button{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--flow);outline-offset:2px}
 
 /* header */
-.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 24px}
-.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font:600 18px var(--display);letter-spacing:.04em}
+.top{display:grid;grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"brand nav mode";align-items:center;gap:12px 24px}
+.brand{grid-area:brand;justify-self:start;display:flex;align-items:center;gap:10px;text-decoration:none;font:600 18px var(--display);letter-spacing:.04em}
 .brand img{width:26px;height:auto;filter:var(--logo-filter)}
 .brand em{font-style:normal;color:var(--ink-3);font-weight:500}
-.top nav{display:flex;flex-wrap:wrap;gap:4px 22px}
+.top nav{grid-area:nav;display:flex;flex-wrap:wrap;gap:4px 22px}
 .top nav a{font:600 12.5px var(--display);letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:var(--ink-2);padding:6px 0;border-bottom:2px solid transparent}
 .top nav a:hover{color:var(--ink);border-bottom-color:var(--flow)}
+/* theme switch: the icon shows the current choice, as in the documentation's header */
+.mode{grid-area:mode;display:grid;place-items:center;width:36px;height:36px;margin:-3px -8px -3px 0;padding:0;border:0;border-radius:3px;background:none;color:var(--ink-2);cursor:pointer}
+.mode:hover{color:var(--ink)}
+.mode svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.mode .m-light,.mode .m-dark,:root[data-theme="light"] .mode .m-auto,:root[data-theme="dark"] .mode .m-auto{display:none}
+:root[data-theme="light"] .mode .m-light,:root[data-theme="dark"] .mode .m-dark{display:block}
+@media (max-width:860px){.top{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand mode" "nav nav"}}
 
 /* hero */
 .hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:28px 48px;align-items:center;margin-top:-36px}
@@ -381,6 +389,14 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-size:12.5px;color:
   apply();
   window.addEventListener('storage',function(e){if(e.key===key){apply();}});
   window.addEventListener('pageshow',function(e){if(e.persisted){apply();}});
+  window.addEventListener('yggdrasil-atlas:theme-change',function(e){
+    var t=e.detail,index={auto:0,light:1,dark:2}[t];
+    if(index===undefined){return;}
+    var color=t==='auto'
+      ?{media:'(prefers-color-scheme)',scheme:matchMedia('(prefers-color-scheme: light)').matches?'default':'slate'}
+      :{media:'(prefers-color-scheme: '+t+')',scheme:t==='dark'?'slate':'default'};
+    try{localStorage.setItem(key,JSON.stringify({index:index,color:color}));}catch(err){}
+  });
 })();
 </script>
 </head>
@@ -396,6 +412,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-size:12.5px;color:
     <a href="#rules">Rules</a>
     <a href="../../">Docs</a>
   </nav>
+  <button class="mode" id="modeBtn" type="button" aria-label="Switch to light mode" title="Switch to light mode"><svg class="m-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg><svg class="m-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.4M12 19v2.4M2.6 12H5M19 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M5.4 18.6l1.7-1.7M16.9 7.1l1.7-1.7"/></svg><svg class="m-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button>
 </header>
 
 <section id="glance" class="hero">
@@ -579,6 +596,23 @@ document.addEventListener('click',function(e){
   e.preventDefault();
   location.replace('#'+id);
 });
+
+/* ---------- theme switch: system, light, dark, in the same order as the documentation's ---------- */
+(function(){
+  var btn=$('#modeBtn');if(!btn){return;}
+  var root=document.documentElement,NEXT={auto:'light',light:'dark',dark:'auto'};
+  var LABEL={auto:'Switch to light mode',light:'Switch to dark mode',dark:'Switch to system preference'};
+  function mode(){var t=root.getAttribute('data-theme');return t==='light'||t==='dark'?t:'auto';}
+  function label(){var l=LABEL[mode()];btn.setAttribute('aria-label',l);btn.title=l;}
+  btn.addEventListener('click',function(){
+    var t=NEXT[mode()];
+    if(t==='auto'){root.removeAttribute('data-theme');}else{root.setAttribute('data-theme',t);}
+    /* The documentation build saves the choice for the documentation site too. */
+    window.dispatchEvent(new CustomEvent('yggdrasil-atlas:theme-change',{detail:t}));
+  });
+  new MutationObserver(label).observe(root,{attributes:true,attributeFilter:['data-theme']});
+  label();
+})();
 
 /* ---------- hero art: a generated circuit tree ---------- */
 (function(){
