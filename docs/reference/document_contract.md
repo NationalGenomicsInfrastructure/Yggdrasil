@@ -410,7 +410,7 @@ Yggdrasil's timestamp tests pin named cases, the reading examples on this page a
 
 **Event time.** A snapshot step's `ts` is the time its event carries, and a realm may set it. The schema does not constrain it, and it is not a contract timestamp. A reader reads it as above when it can, and keeps it as recorded when it cannot. `null` means the step has no time, which is not a problem.
 
-**Since v0.6.0.** A canonical timestamp may carry a fraction of a second, and readers read the forms above, numeric offsets converted to UTC. This replaces the earlier rule of this contract, whole seconds only, under which readers accepted any valid RFC 3339 UTC form. The change is specified in **Document Contract: Shared Reader**.
+**Since v0.6.0.** A canonical timestamp may carry a fraction of a second, and readers read the forms above, numeric offsets converted to UTC. This replaces the earlier rule of this contract, whole seconds only, under which readers accepted any valid RFC 3339 UTC form. The change is specified in [Document Contract: Shared Reader](https://github.com/NationalGenomicsInfrastructure/Yggdrasil/blob/main/docs/design/prds/contract_shared_reader.md).
 
 ---
 

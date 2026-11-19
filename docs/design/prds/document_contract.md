@@ -787,7 +787,7 @@ and rationale are stated in this PRD.
 | D19 | Updates versus conformance | Builders' output conforms; update writers conform in the fields they own and do not certify what they keep; fixtures declare positive or negative expectations (section 5 rule 9, 9.2, 9.4). | agreed |
 
 **Supersession note (2026-11-16).** The timestamp rule of D5 is superseded
-in part by **Document Contract: Shared Reader**, section 4.10, decisions D18
+in part by [Document Contract: Shared Reader](contract_shared_reader.md), section 4.10, decisions D18
 and D22. D5 and the implementation that section 16 records stay as they
 were decided and built. The rule in effect is:
 
