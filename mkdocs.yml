@@ -21,6 +21,9 @@ theme:
     - toc.integrate
     #  - navigation.path    # Enables breadcrumbs
   palette:
+    # The Atlas's theme switch saves the reader's choice for these pages too and
+    # relies on this order: automatic, light, dark (docs/atlas/build_standalone.py).
+
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
       primary: custom
@@ -45,7 +48,7 @@ theme:
       accent: custom
       toggle:
         icon: material/weather-night
-        name: Switch to light mode
+        name: Switch to system preference
 
 docs_dir: docs
 site_dir: site
@@ -58,7 +61,7 @@ nav:
       - Configuration: getting_started/configuration.md
   - Architecture:
       - Overview: architecture/overview.md
-      - Interactive Atlas: architecture/atlas.md
+      - Interactive Atlas: architecture/atlas/index.html
   - Flow API:
       - Overview: flow_api/overview.md
   - Realm authoring:
