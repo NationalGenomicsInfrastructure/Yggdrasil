@@ -48,7 +48,7 @@ theme:
       accent: custom
       toggle:
         icon: material/weather-night
-        name: Switch to light mode
+        name: Switch to system preference
 
 docs_dir: docs
 site_dir: site
