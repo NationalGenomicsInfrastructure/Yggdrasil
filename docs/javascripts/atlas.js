@@ -1,72 +1,78 @@
-/* Keep the embedded Yggdrasil Atlas in the docs' colour scheme.
+/* The Yggdrasil Atlas (docs/architecture/atlas/index.html) is a page of its
+ * own. This script does the two things it needs from the docs pages.
+ */
+
+/* Count opens of the Atlas in Google Analytics.
  *
- * The Atlas (docs/atlas/Yggdrasil_Atlas.standalone.html) follows the
- * operating system unless its host says otherwise: with a `theme` query
- * parameter when it loads, or with a same-origin message while it is open.
- * Material for MkDocs records its scheme as `data-md-color-scheme` on <body>,
- * where "slate" is dark.
+ * The Atlas loads no analytics, so the docs record the click that opens it:
+ * an `atlas_open` event whose `link_text` names the link used, "Sidebar",
+ * "Home card", or the link's own text anywhere else. Opening the Atlas from a
+ * bookmark or a shared address is not counted.
+ *
+ * Material for MkDocs loads Google Analytics (`extra.analytics` in mkdocs.yml)
+ * and queues its commands in `window.dataLayer`. Without it nothing is sent.
  */
 (function () {
   "use strict";
 
-  var MESSAGE = "yggdrasil-atlas:theme";
-  var observer = null;
-  var observed = null;
+  var ATLAS = /\/architecture\/atlas\/(index\.html)?$/;
 
-  function theme() {
-    return document.body.getAttribute("data-md-color-scheme") === "slate" ? "dark" : "light";
+  function gtag() {
+    window.dataLayer.push(arguments);
   }
 
-  function frames() {
-    return Array.prototype.slice.call(document.querySelectorAll("iframe.ygg-atlas__frame"));
-  }
-
-  function tell(frame) {
-    try {
-      if (frame.contentWindow) {
-        frame.contentWindow.postMessage({ type: MESSAGE, theme: theme() }, location.origin);
-      }
-    } catch (error) {
-      /* Without an origin, as when opened from disk, the Atlas follows the system. */
+  function count(event) {
+    if (!window.dataLayer || (event.type === "auxclick" && event.button !== 1)) {
+      return;
     }
-  }
-
-  function setUp() {
-    var systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    frames().forEach(function (frame) {
-      if (frame.getAttribute("data-atlas-theme-bridge")) {
-        return;
-      }
-      frame.setAttribute("data-atlas-theme-bridge", "on");
-      frame.addEventListener("load", function () {
-        tell(frame);
-      });
-      if ((theme() === "dark") !== systemDark) {
-        /* Start it in the docs' scheme instead of switching once it shows. */
-        var url = new URL(frame.getAttribute("src"), location.href);
-        url.searchParams.set("theme", theme());
-        frame.src = url.href;
-      } else {
-        tell(frame);
-      }
-    });
-    if (observed !== document.body) {
-      if (observer) {
-        observer.disconnect();
-      }
-      observer = new MutationObserver(function () {
-        frames().forEach(tell);
-      });
-      observer.observe(document.body, { attributes: true, attributeFilter: ["data-md-color-scheme"] });
-      observed = document.body;
+    var link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!link) {
+      return;
     }
+    var url = new URL(link.href, location.href);
+    if (url.origin !== location.origin || !ATLAS.test(url.pathname)) {
+      return;
+    }
+    var where = link.closest(".md-nav")
+      ? "Sidebar"
+      : link.closest(".ygg-atlas-card")
+        ? "Home card"
+        : link.textContent.trim() || "Link";
+    gtag("event", "atlas_open", { link_text: where });
   }
 
-  if (window.document$ && typeof window.document$.subscribe === "function") {
-    window.document$.subscribe(setUp);
-  } else if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", setUp);
-  } else {
-    setUp();
-  }
+  /* Middle-clicks, which open the Atlas in a new tab, arrive as auxclick. */
+  document.addEventListener("click", count);
+  document.addEventListener("auxclick", count);
+})();
+
+/* Show a theme chosen in the Atlas after Back.
+ *
+ * The Atlas's theme switch saves its choice where Material keeps the docs'
+ * own, so the next docs page loads with it. A page the browser brings back
+ * from its back-forward cache still shows the scheme it had, so select the
+ * saved one with Material's own palette control, as its keyboard handling
+ * does.
+ */
+(function () {
+  "use strict";
+
+  window.addEventListener("pageshow", function (event) {
+    if (!event.persisted || typeof __md_get !== "function") {
+      return;
+    }
+    var saved = __md_get("__palette");
+    var inputs = document.querySelectorAll("input[name='__palette']");
+    var input = saved && inputs[saved.index];
+    if (!input) {
+      return;
+    }
+    /* Material shows the toggle of the palette in use and hides the others. */
+    var label = input.nextElementSibling;
+    if (label instanceof HTMLElement && !label.hidden) {
+      return;
+    }
+    input.checked = false;
+    input.click();
+  });
 })();
