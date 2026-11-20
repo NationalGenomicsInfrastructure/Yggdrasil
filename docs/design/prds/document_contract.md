@@ -2,19 +2,19 @@
 
 ## Version
 v0.9 (2026-10-22): synchronized with the owner's decisions taken while
-planning the implementation. Bifrost's adoption is separate work (9.4, 13,
-D1). `created_at` when planning replaces a document (section 4 rule 2, 7.1,
-D13). A storage envelope for the executor's and the finalizer's reads (7.2).
-The canonical timestamp spelling published as a schema `pattern` (6.1). A
-regression corpus owned by Yggdrasil that keeps released examples (9.2
-item 8).
+planning the implementation. An external UI's adoption is separate work
+(9.4, 13, D1). `created_at` when planning replaces a document (section 4
+rule 2, 7.1, D13). A storage envelope for the executor's and the
+finalizer's reads (7.2). The canonical timestamp spelling published as a
+schema `pattern` (6.1). A regression corpus owned by Yggdrasil that keeps
+released examples (9.2 item 8).
 
 v0.8 (2026-10-22): standalone presentation and named references to related
 PRDs; companion draft status clarified. Requirements are unchanged from v0.7.
 
 Existing-behavior claims were verified against Yggdrasil `v0.5.0`
-(000d596) and `dev` 418c96d, and Bifrost `main` (38c09cd). That `dev`
-revision differs from `v0.5.0` only in the ops consumer (PR #110). The
+(000d596) and `dev` 418c96d, and the external UI's `main` (38c09cd). That
+`dev` revision differs from `v0.5.0` only in the ops consumer (PR #110). The
 implementation started from that revision, on `feature/document_contract`.
 
 ## Status
@@ -36,17 +36,17 @@ order.
 | PRD | Delivers | Needed by |
 | --- | --- | --- |
 | **Document Contract: Schemas, Versioning and Compatibility (this PRD)** | Schemas, `schema_version`, compatibility and reading policy, field ownership, the version boundary for every Yggdrasil writer and the executor, the executor's control checks (one strict token rule), the reference page | everything below; any future incompatible document |
-| **Document Contract: Shared Reader** | Proposed shared reader `yggdrasil.contract.read`: one set of reading rules for Yggdrasil and Bifrost, reusing this PRD's control checks | Bifrost adapter swap |
-| **Document Contract: Approve and Rerun Helpers** | Proposed approve and rerun helpers `yggdrasil.contract.actions`: pure functions that prepare a safe conditional write | **Bifrost: Write Actions and Authentication** |
+| **Document Contract: Shared Reader** | Proposed shared reader `yggdrasil.contract.read`: one set of reading rules for Yggdrasil and its consumers, reusing this PRD's control checks | the external UI's adapter swap |
+| **Document Contract: Approve and Rerun Helpers** | Proposed approve and rerun helpers `yggdrasil.contract.actions`: pure functions that prepare a safe conditional write | the external UI's draft **Write Actions and Authentication** |
 
 ## 1. Overview
 
 Yggdrasil's plan document is its API. Realms create it, operators approve
 and rerun by changing it, the daemon executes what it says and writes the
-result back, and Bifrost displays it. The programs on each side are released
-and deployed separately, so the document format is the contract between
-them. This PRD makes that contract explicit and versioned, and makes every
-Yggdrasil writer refuse to act on a document it does not understand.
+result back, and an external UI displays it. The programs on each side are
+released and deployed separately, so the document format is the contract
+between them. This PRD makes that contract explicit and versioned, and makes
+every Yggdrasil writer refuse to act on a document it does not understand.
 
 This first release:
 
@@ -71,16 +71,17 @@ regenerate them, but nothing interprets, executes or updates them.
 
 Verified at `v0.5.0`:
 
-- **Two copies of the rules.** Bifrost's adapter
-  (`backend/src/bifrost/yggdrasil/`, about 1,000 lines) re-implements
-  `docs/reference/plan_execution.md`. Moving the pin to `v0.5.0` needed a
-  hand review of eight modules to confirm that the rules had not changed.
+- **Two copies of the rules.** The external UI's adapter (about 1,000 lines)
+  re-implements `docs/reference/plan_execution.md`. Moving the pin to
+  `v0.5.0` needed a hand review of eight modules to confirm that the rules
+  had not changed.
 - **The copies already disagree.** A plan document with `"run_token": "5"`
   is eligible to Yggdrasil, which calls `int(value)` in five places, and
-  unreadable to Bifrost, which accepts only JSON integers. The same holds for
-  `true` (Yggdrasil reads 1) and `4.7` (Yggdrasil reads 4). This release makes
-  Yggdrasil strict (section 7.2); **Document Contract: Shared Reader** gives
-  Bifrost the same function.
+  unreadable to the external UI, which accepts only JSON integers. The same
+  holds for `true` (Yggdrasil reads 1) and `4.7` (Yggdrasil reads 4). This
+  release makes Yggdrasil strict (section 7.2);
+  **Document Contract: Shared Reader** gives the external UI the same
+  function.
 - **The only written protocol for changing plan documents is unsafe.**
   `docs/GENSTAT_PLAN_CONTRACT.md` (v1.1, 2026-01-28) describes fields that do
   not exist, gives two different rerun rules ("set `run_token` to
@@ -115,10 +116,10 @@ Verified at `v0.5.0`:
 
 | Document | Store and ID | Written by | Read by | Schema in this release |
 | --- | --- | --- | --- | --- |
-| Plan document | `yggdrasil_plans` (CouchDB) or the SQLite `plans` namespace; `_id` = plan ID | `build_plan_document` (create, regenerate); finalization; approval and rerun actors | PlanWatcher, coordinator, engine, Bifrost | `plan_document`, family 1 |
-| `plan_status` snapshot | `yggdrasil_ops` (CouchDB) or the SQLite `operations_snapshots` namespace; `{partition}:plan_status:{realm}:{plan_id}` | ops consumer | Bifrost | `plan_status`, family 1 |
-| Attempt report | full report in the plan document's `last_finalized_execution.report` and in the internal `plan.attempt_report` event | engine (`AttemptReport.to_dict`) | finalizer, ops consumer, Bifrost | `attempt_report`, a shared component referenced by the plan-document schema; no marker of its own |
-| Daemon lease | `yggdrasil`; `daemon_lease:<mode>` | daemon (**Daemon Lease, Heartbeat and Recovery Sweep**) | Bifrost | authored with the **Daemon Lease, Heartbeat and Recovery Sweep** PRD under these rules |
+| Plan document | `yggdrasil_plans` (CouchDB) or the SQLite `plans` namespace; `_id` = plan ID | `build_plan_document` (create, regenerate); finalization; approval and rerun actors | PlanWatcher, coordinator, engine, the external UI | `plan_document`, family 1 |
+| `plan_status` snapshot | `yggdrasil_ops` (CouchDB) or the SQLite `operations_snapshots` namespace; `{partition}:plan_status:{realm}:{plan_id}` | ops consumer | the external UI | `plan_status`, family 1 |
+| Attempt report | full report in the plan document's `last_finalized_execution.report` and in the internal `plan.attempt_report` event | engine (`AttemptReport.to_dict`) | finalizer, ops consumer, the external UI | `attempt_report`, a shared component referenced by the plan-document schema; no marker of its own |
+| Daemon lease | `yggdrasil`; `daemon_lease:<mode>` | daemon (**Daemon Lease, Heartbeat and Recovery Sweep**) | the external UI | authored with the **Daemon Lease, Heartbeat and Recovery Sweep** PRD under these rules |
 | Event records | file spool; CouchDB with `CouchEmitter` | engine, step wrapper, step context, DataAccess traces | the ops consumer only | none: no reader outside Yggdrasil |
 
 The snapshot does not embed the report. It copies six report fields into its
@@ -250,9 +251,9 @@ Rules:
 6. Ownership defines the supported operations; the database does not
    enforce it.
 7. **Extension fields.** A field a writer needs is defined in the contract
-   when we control the writer: Bifrost's fields, for example, become schema
-   fields with an owner and a lifetime, not extensions. Extensions are for
-   writers we do not control (someone's script, a hand edit in Fauxton,
+   when we control the writer: the external UI's fields, for example, become
+   schema fields with an owner and a lifetime, not extensions. Extensions are
+   for writers we do not control (someone's script, a hand edit in Fauxton,
    another team's tool). For those, the contract promises never to define a
    field starting with `x_`, so a field named `x_<writer>_<name>` (for example
    `x_ops_ticket`) can never collide with a later contract field. Nothing can
@@ -358,9 +359,9 @@ precise schema edition.
 
 Two jobs, two policies.
 
-**Producer checks are strict.** Yggdrasil's tests and Bifrost's fixture
-generator validate what a writer produced against the schema of the same
-release. Objects only Yggdrasil writes have closed key sets
+**Producer checks are strict.** Yggdrasil's tests and the external UI's
+fixture generator validate what a writer produced against the schema of the
+same release. Objects only Yggdrasil writes have closed key sets
 (`additionalProperties: false`), so a misspelled key fails a test: the
 snapshot, `plan`, `last_finalized_execution` and the attempt report. The plan
 document's top level allows the contract fields plus any `x_` extension
@@ -387,10 +388,10 @@ A report about a rejected plan is valid even though the plan was not
   progress percentage does not hide the request outcome; an unsupported
   snapshot next to a supported plan does not block approving the plan.
 
-Example: Yggdrasil 0.7 adds `jobs[]` to snapshot steps. Bifrost, still pinned
-to 0.6, ignores `jobs` and shows everything else. Validating that snapshot
-against 0.6's closed schema would reject it, which is exactly why readers do
-not validate.
+Example: Yggdrasil 0.7 adds `jobs[]` to snapshot steps. A reader still
+pinned to 0.6 ignores `jobs` and shows everything else. Validating that
+snapshot against 0.6's closed schema would reject it, which is exactly why
+readers do not validate.
 
 **Control state is explicit.** Family-1 documents carry every control field
 listed as required in section 3.1. A missing, null or malformed control field
@@ -567,8 +568,8 @@ to `tests/test_import_lightness.py`. `storage` uses it to write the marker and
 apply the writer rules, `daemon` to apply the executor rule.
 `UnsupportedDocumentError` joins `storage.errors`.
 
-Bifrost's runtime imports nothing from Yggdrasil in this release. Its fixture
-generator (a development tool) already loads modules from the pinned
+The external UI's runtime imports nothing from Yggdrasil in this release. Its
+fixture generator (a development tool) already loads modules from the pinned
 checkout; it loads `yggdrasil.contract` the same way and calls `validate`.
 
 ## 9. Delivery
@@ -630,7 +631,7 @@ it really is realm-defined.
 7. The acceptance cases of section 7.4.
 8. A regression corpus of real documents in `tests/contract/documents/`,
    built by this release's writers from the contract's own scenarios. The
-   corpus is Yggdrasil's: Bifrost's catalogue and generator are not inputs. A
+   corpus is Yggdrasil's: no consumer's catalogue or generator is an input. A
    released version's positive examples are kept as compatibility baselines;
    later releases add examples rather than replace them.
 9. `import yggdrasil.contract` passes the lightness test.
@@ -649,11 +650,11 @@ page; its field tables and unsafe recipes are not carried over.
 `docs/reference/plan_execution.md` describes the boundary and drops the
 legacy generation initialization.
 
-### 9.4 Bifrost (one pull request, when the pin moves to this release)
+### 9.4 External UI (one pull request, when the pin moves to this release)
 
 Separate work, not part of this release's implementation (owner,
-2026-10-22). Bifrost adopts the published contract in its own pull request;
-this section records what that pull request does.
+2026-10-22). The external UI adopts the published contract in its own pull
+request; this section records what that pull request does.
 
 - The fixture generator checks every fixture it writes with
   `yggdrasil.contract.validate` from the pinned checkout before comparing
@@ -666,8 +667,8 @@ this section records what that pull request does.
   or snapshot whose `schema_version` is not the integer 1 is shown
   inspect-only, with its state (`unversioned`, `invalid`, `unsupported`) and
   the recorded value; approval state and request conclusions are withheld.
-  New fixtures cover the three states. Without this, Bifrost would show an
-  unversioned plan as runnable while the daemon refuses it.
+  New fixtures cover the three states. Without this, the external UI would
+  show an unversioned plan as runnable while the daemon refuses it.
 
 ### 9.5 Development stores
 
@@ -687,13 +688,13 @@ release itself deletes nothing.
 
 | Capability | Needs | PRD |
 | --- | --- | --- |
-| Bifrost shows live CouchDB data | while pinned to `v0.5.0`: nothing new; from the pin move to this release: the adapter's marker rule (9.4) | **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints** |
-| Bifrost checks its fixtures against Yggdrasil's schemas | this release | this PRD |
+| The external UI shows live CouchDB data | while pinned to `v0.5.0`: nothing new; from the pin move to this release: the adapter's marker rule (9.4) | the external UI's draft **CouchDB PlanReader and `_changes` Refresh Hints** |
+| The external UI checks its fixtures against Yggdrasil's schemas | this release | this PRD |
 | Yggdrasil's executor applies the strict control checks | this release | this PRD |
-| Bifrost applies Yggdrasil's reading rules, tokens included | the shared reader; Bifrost depends on `yggdrasil` at the tag | **Document Contract: Shared Reader** |
-| Bifrost approves and requests reruns safely | the action helpers; the live reader; authentication | **Document Contract: Approve and Rerun Helpers**; **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints**; **Bifrost: Write Actions and Authentication** |
-| Yggdrasil writes plan documents of family 2 | this release's boundary on every daemon and run-once host; family-2 documents written as new generations; Bifrost reading family 2 or showing it inspect-only | this PRD and the PRD introducing family 2 |
-| Bifrost shows the daemon heartbeat | the lease document | **Daemon Lease, Heartbeat and Recovery Sweep** |
+| The external UI applies Yggdrasil's reading rules, tokens included | the shared reader; the external UI depends on `yggdrasil` at the tag | **Document Contract: Shared Reader** |
+| The external UI approves and requests reruns safely | the action helpers; the live reader; authentication | **Document Contract: Approve and Rerun Helpers**; the external UI's drafts **CouchDB PlanReader and `_changes` Refresh Hints** and **Write Actions and Authentication** |
+| Yggdrasil writes plan documents of family 2 | this release's boundary on every daemon and run-once host; family-2 documents written as new generations; the external UI reading family 2 or showing it inspect-only | this PRD and the PRD introducing family 2 |
+| The external UI shows the daemon heartbeat | the lease document | **Daemon Lease, Heartbeat and Recovery Sweep** |
 
 ## 11. Rollout, Rollback and Future Compatibility
 
@@ -702,9 +703,9 @@ release itself deletes nothing.
   documents become unversioned and stop executing until regenerated. If that
   ever changes for some deployment, add a one-off stamping step for it.
 - **Order.** Upgrade every daemon and run-once host to this release;
-  regenerate the wanted plans or reset development state; then move
-  Bifrost's pin (9.4). Moving Bifrost first would show every plan as
-  unversioned.
+  regenerate the wanted plans or reset development state; then move the
+  external UI's pin (9.4). Moving the external UI first would show every
+  plan as unversioned.
 - **Rollback.** A daemon released before this contract ignores markers.
   Rolling back to one is tolerable only while every stored document is family 1, which is today's
   shape: it executes them correctly, but the documents it regenerates come out
@@ -719,18 +720,18 @@ release itself deletes nothing.
   feature that changes those meanings defines its transition first.
 - **Future families.** A family-2 writer may be deployed only when every host
   that executes or updates plans runs this release or later and declares
-  support for family 2 (or refuses it), and Bifrost reads it or shows it
-  inspect-only. Approvals never transfer between families (section 5,
+  support for family 2 (or refuses it), and the external UI reads it or shows
+  it inspect-only. Approvals never transfer between families (section 5,
   rule 7).
 
 ## 12. Out of Scope, and Where It Went
 
 | Topic | Where |
 | --- | --- |
-| Reading rules (reusing this release's control checks), Bifrost's adapter swap | **Document Contract: Shared Reader** |
+| Reading rules (reusing this release's control checks), the external UI's adapter swap | **Document Contract: Shared Reader** |
 | Approve and rerun helpers | **Document Contract: Approve and Rerun Helpers** |
-| Live reading, refresh hints, missed-update recovery | **Bifrost: CouchDB PlanReader and `_changes` Refresh Hints** |
-| Authentication, carrying the review from page to click, retry policy, wording | **Bifrost: Write Actions and Authentication** |
+| Live reading, refresh hints, missed-update recovery | the external UI's draft **CouchDB PlanReader and `_changes` Refresh Hints** |
+| Authentication, carrying the review from page to click, retry policy, wording | the external UI's draft **Write Actions and Authentication** |
 | Recovery sweep, heartbeat display, lease fencing | **Daemon Lease, Heartbeat and Recovery Sweep** |
 | Code identity, environments, what approval means across an upgrade | **Code Identity in Fingerprints**; **Execution Context and Upgrades** |
 | Adoption, durable action history, public event schemas, migration tooling for pre-contract data | Future work, outside this release; migration tooling only if a deployment ever needs it |
@@ -753,9 +754,9 @@ release itself deletes nothing.
   longer offers the blind conflict retry, the `executed_run_token + 1` rule or
   adoption.
 
-Bifrost's adoption (section 9.4) is separate work, judged on its own: its
-`--check` passes, with its positive fixtures validating and its negative
-fixtures rejected for their declared reasons.
+The external UI's adoption (section 9.4) is separate work, judged on its
+own: its `--check` passes, with its positive fixtures validating and its
+negative fixtures rejected for their declared reasons.
 
 ## 14. Decisions
 
@@ -766,7 +767,7 @@ and rationale are stated in this PRD.
 
 | # | Decision | Answer | Status |
 | --- | --- | --- | --- |
-| D1 | Public scope of the first release | Schemas for the plan document, the snapshot and the report component; markers; the version boundary; the reference page; Bifrost's fixture validation (Bifrost's side is separate work, section 9.4). No public event schema. Lease with **Daemon Lease, Heartbeat and Recovery Sweep**. | agreed |
+| D1 | Public scope of the first release | Schemas for the plan document, the snapshot and the report component; markers; the version boundary; the reference page; the external UI's fixture validation (its side is separate work, section 9.4). No public event schema. Lease with **Daemon Lease, Heartbeat and Recovery Sweep**. | agreed |
 | D2 | Version notation | Positive integer compatibility family per kind; the release identifies the schema edition. | **owner** (2026-10-20) |
 | D3 | Strictness | Strict and honest producer checks; tolerant readers (section 6). | agreed |
 | D4 | Actor fields | `approved_at`, `approved_by`, `run_requested_at`, `run_requested_by`; stable actor identifier; latest-action attribution only. | agreed |
@@ -1267,8 +1268,8 @@ A clean clone runs 50 fewer.
 The documentation adds no tests. `mkdocs build --strict` passes, and every
 link with an anchor resolves.
 
-Bifrost's adoption of the published contract (section 9.4) stays separate
-work.
+The external UI's adoption of the published contract (section 9.4) stays
+separate work.
 
 **Final review and verification (2026-10-29).** The review of the
 documentation, the last part of the implementation to be reviewed, covered
@@ -1304,7 +1305,7 @@ Accepted choices (review, 2026-10-29):
   corrected.
 - Listing a CouchDB store is described in prose, without a snippet, since
   none could be run against a CouchDB server.
-- The public documentation does not depend on Bifrost.
+- The public documentation does not depend on the external UI.
 
 The review reports, for 4a98da9, a strict documentation build, all 1,719
 links with an anchor resolving, and the corpus tests passing (12 tests, 66

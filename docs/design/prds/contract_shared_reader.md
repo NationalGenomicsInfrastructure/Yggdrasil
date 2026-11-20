@@ -4,11 +4,14 @@
 v0.20 (2026-11-19): closes the PRD after the `v0.6.0` release. Adds
 section 14, Implementation Outcome: what shipped, the accepted
 deviations, and the release evidence (the frozen baseline, the schema
-correction made before the tag, Bifrost's validation, the tag, and the
-installation checks). Other PRDs are named by title instead of by
-number, with links to those in this repository, and references to files
-outside this repository are replaced by descriptions. Requirements and
-decisions are unchanged.
+correction made before the tag, the validation by an external UI with its
+footprint measurement, the tag, and the installation checks after the
+tag). Sections 1.1 and 7 now say that they are the planning baseline,
+date their time-bound statements, and point to section 14 for the
+outcome. Other PRDs are named by title instead of by number, with links
+to those in this repository; references to files outside this repository
+are replaced by descriptions; and that external UI is described rather
+than named. Requirements and decisions are unchanged.
 
 v0.19 (2026-11-16): records a display refinement the owner decided on
 2026-11-16, in the review of the plan summary's implementation. The summary
@@ -87,8 +90,8 @@ entry, while blockers are still interpreted only for blocked steps (4.3,
 `null` attempt diagnostic is no diagnostic (5.3); the call-site paragraph
 follows the adapter table and the code (5.4); the plan summary's `problems`
 key and bounded Problems line are recorded (5.4, 8 step 5); delivery names
-every deviation from Bifrost and the test updates the version-first rule
-requires (8 steps 2 and 4). Interface addition:
+every deviation from the external UI and the test updates the version-first
+rule requires (8 steps 2 and 4). Interface addition:
 `Correlation.request_and_observation`, whether the observed attempt belongs
 to the current request (`current`, `other`, `unknown`), with closed reasons
 and their precedence (5.3). The v0.12 approval does not cover this wording.
@@ -130,8 +133,8 @@ resolved review decisions. Yggdrasil `dev` rechecked at
 v0.8 (2026-11-06): review of v0.7 against Yggdrasil `dev` 7ace54d,
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
 as promoted, the corpus README, and the drafts
-**Document Contract: Approve and Rerun Helpers**,
-**Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**
+**Document Contract: Approve and Rerun Helpers**, the external UI's
+**CouchDB PlanReader and `_changes` Refresh Hints**
 and **PlanWatcher Reliability and Operational Logging**. 4.10 holds where it states
 code facts: the writers pass a supplied `now` through unchanged, so
 preservation costs nothing; `canonical_from_legacy` shares `is_canonical`,
@@ -162,19 +165,19 @@ timestamp overrides and raw projection remain supported (D19); 4.9 now
 interprets step time tolerantly instead of requiring canonical spelling.
 Delivery, compatibility, tests and the release candidate include the
 fractional allowance. Other v0.6 review points remain separate. Yggdrasil
-`dev` rechecked at 7ace54d on 2026-11-06; Bifrost's 38c09cd audit remains
-the characterization baseline.
+`dev` rechecked at 7ace54d on 2026-11-06; the audit of the external UI at
+38c09cd remains the characterization baseline.
 
 v0.6 (2026-11-03): acceptance candidate after the owner's review of v0.5
-with GPT-6 Astra (2026-11-03). Scope narrowed to Yggdrasil: what Bifrost
-does with the reader moved to the companion document on Bifrost's adoption
-of the reader, a separate draft (v0.5's section 7, the Bifrost steps
-of 8, the Bifrost half of 9 and 11). The four questions of v0.5 are decided
-(D14, D15, D16 and D4 as amended): one tag carries
+with GPT-6 Astra (2026-11-03). Scope narrowed to Yggdrasil: what the
+external UI does with the reader moved to the companion document on its
+adoption of the reader, a separate draft (v0.5's section 7, and the parts
+of 8, 9 and 11 that concern the external UI). The four questions of v0.5
+are decided (D14, D15, D16 and D4 as amended): one tag carries
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
 and this PRD; `plan_summary_from_document`
 stays in `storage` as a projection of the reader and exists for every stored
-document; Bifrost's dependency is a git source at the tag, locked, with the
+document; the external UI depends on a git source at the tag, locked, with the
 footprint measured early; the interpretation of a step's progress, error and
 blockers moves with the status rule. Amendments from the review: typed
 equality (3, 4.3, 4.4); `request_state` takes the expected ID (5.3); which
@@ -184,17 +187,17 @@ the reader now makes earlier, and the pending-finalization case is specified
 and tested (4.7, D9); the snapshot ID shares its formatting without
 tightening the writer (5.3, D11); control-check problems become structured at
 their source (5.2, D12); constants are shared as spellings only (5.1, D13);
-Bifrost's integration is validated against the candidate commit before the
-tag (7, 8). Facts as in v0.5: Yggdrasil `dev` 7ace54d, Bifrost `main`
-38c09cd.
+the external UI's integration is validated against the candidate commit
+before the tag (7, 8). Facts as in v0.5: Yggdrasil `dev` 7ace54d, the
+external UI's `main` 38c09cd.
 
 v0.5 (2026-11-02): rebased on
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
 as implemented (`dev` at 7ace54d, merge of PR #111) and on the order: that
-PRD, this PRD, the draft
-**Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**,
+PRD, this PRD, the external UI's draft
+**CouchDB PlanReader and `_changes` Refresh Hints**,
 then the draft **Document Contract: Approve and Rerun Helpers**; corrected the claim that
-Bifrost's adapter "already applies the same rule"; filled in the interface,
+the external UI's adapter "already applies the same rule"; filled in the interface,
 the rules as tables, and the delivery plan; added D7–D13 and four owner
 questions. v0.4 (2026-10-21): the strict token rule and its five Yggdrasil
 call sites moved to v0.7 of
@@ -203,8 +206,8 @@ call sites moved to v0.7 of
 (2026-10-20; v0.1 2026-10-19) followed v0.5 of that PRD and applied
 findings A3, A5 and A8 of Codex's review of the Document Contract drafts,
 as reconciled in that review's second round. Built from the
-v0.9 working draft (sections 11.3–11.4) and Bifrost's
-`docs/design/operational-views.md` sections 6–7 at 38c09cd.
+v0.9 working draft (sections 11.3–11.4) and sections 6–7 of the design of
+the external UI's operational views, at 38c09cd.
 
 ## Status
 **Implemented and released in `v0.6.0` (2026-11-18).** Section 14 records
@@ -240,8 +243,8 @@ the three Document Contract PRDs: immediately after
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md),
 with no intervening timestamp amendment, and before the follow-on draft
 **Document Contract: Approve and Rerun Helpers**. This PRD changes Yggdrasil only.
-Bifrost's adoption of the reader is the companion document's; this PRD
-gives it the interface (5) and the validation clause (7).
+The external UI's adoption of the reader is the companion document's; this
+PRD gives it the interface (5) and the validation clause (7).
 
 ## 1. Overview
 
@@ -252,24 +255,29 @@ check) and by any consumer that reads the stored documents.
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
 defined the documents and enforces their safety rules at the writer and the
 executor; this PRD gives every reader one interpretation of what a stored document
-says. Most rules exist today, split between four Yggdrasil modules and
-Bifrost's adapter (`backend/src/bifrost/yggdrasil/`, about 1,000 lines that
-re-derive Yggdrasil's rules at a pinned revision). This PRD moves the
-Yggdrasil rules under `contract`, ports the rules Bifrost re-derives with
-Bifrost's tests as the pin on their behaviour, and adds four rules from the
+says. Most rules exist today, split between four Yggdrasil modules and the
+adapter of an external UI that displays these documents (about 1,000 lines
+that re-derive Yggdrasil's rules at a pinned revision). This PRD moves the
+Yggdrasil rules under `contract`, ports the rules the external UI re-derives
+with its tests as the pin on their behaviour, and adds four rules from the
 v0.9 discussion. It also widens the contract timestamp profile to admit
 fractional seconds (4.10), before the first combined release. This does not
 change who supplies event timestamps.
 
-The purpose row for this PRD: *give Yggdrasil and Bifrost one shared
-interpretation of those documents.* The follow-on draft
-**Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**
+The purpose of this PRD is to give Yggdrasil and its consumers one shared
+interpretation of those documents. The external UI's follow-on draft
+**CouchDB PlanReader and `_changes` Refresh Hints**
 connects that interpretation to live CouchDB data; the follow-on draft
 **Document Contract: Approve and Rerun Helpers** prepares approval and rerun changes
 on top of it. Neither
 is touched here beyond the boundary notes in section 6.
 
 ### 1.1 Starting point: what *Document Contract: Schemas, Versioning and Compatibility* delivered and what it left to this PRD
+
+This section is the planning baseline: the starting point as checked on
+2026-11-02 against Yggdrasil `dev` at `7ace54d` (rechecked 2026-11-06) and
+the external UI's `main` at `38c09cd`. Section 14 records what this PRD
+delivered.
 
 Landed on `dev` (section 16 of
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)),
@@ -316,10 +324,11 @@ to this PRD, explicitly or by its package listing:
   "provides no library for reading these documents" and that a reader
   "applies the rules on this page itself". That sentence is this PRD's to
   retire.
-- Bifrost's adapter adopts the version marker rule only in the pin-move pull
-  request (section 9.4 of that PRD), which has not happened: at 38c09cd the adapter
-  reads no `schema_version` at all. Under D14 that pull request and the
-  adoption of the reader are one Bifrost change, specified in the companion.
+- The external UI's adapter adopts the version marker rule only in the
+  pin-move pull request (section 9.4 of that PRD), which had not happened
+  when this PRD was approved (2026-11-09): at 38c09cd the adapter reads no
+  `schema_version` at all. Under D14 that pull request and the adoption of
+  the reader are one change to the external UI, specified in the companion.
 
 Accepted deviations in [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
 that this PRD must read correctly: the snapshot
@@ -328,9 +337,9 @@ attempt's `plan_generation` and `run_token` are nullable (schema
 
 ## 2. Problem Statement
 
-- Bifrost's adapter re-derives Yggdrasil's rules, and every pin move needs a
-  hand review to confirm they still hold. The review of the draft
-  **Bifrost – CouchDB PlanReader and `_changes` Refresh Hints** found
+- The external UI's adapter re-derives Yggdrasil's rules, and every pin move
+  needs a hand review to confirm they still hold. The review of its draft
+  **CouchDB PlanReader and `_changes` Refresh Hints** found
   four places where they already do not (that review's findings C1 and C2,
   and this audit):
   1. an absent `run_token` is read as 0 and an absent `executed_run_token`
@@ -345,10 +354,11 @@ attempt's `plan_generation` and `run_token` are nullable (schema
      (`vocabulary.plan_failure_policy`), where that PRD's `failure_policy_of`
      reports it and the daemon refuses the plan at admission.
   All four disappear by construction when the adapter calls the shared
-  reader. The companion lists them as visible changes on Bifrost's side.
+  reader. The companion lists them as visible changes in the external UI.
 - The readers also disagreed on tokens before
   [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
-  (`int(value)` in five Yggdrasil places; JSON integers only in Bifrost).
+  (`int(value)` in five Yggdrasil places; JSON integers only in the
+  external UI).
   That PRD made Yggdrasil strict. This PRD gives every reader the same function, so they cannot drift apart
   again.
 - Some cases neither reader covers: an executed token above the run token
@@ -357,12 +367,12 @@ attempt's `plan_generation` and `run_token` are nullable (schema
   carrying the current token number; two finished records of the same attempt
   that disagree on how it ended; a finalized record that disagrees with its
   own embedded report.
-- The order changed: this PRD now precedes the draft
-  **Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**.
-  Bifrost's adoption therefore lands on its fixtures reader, and that draft
-  builds its CouchDB reader against `contract.read` from the start, instead
-  of keeping the mapping in the adapter until this PRD lands (its v0.3,
-  section 3).
+- The order changed: this PRD now precedes the external UI's draft
+  **CouchDB PlanReader and `_changes` Refresh Hints**.
+  The external UI's adoption therefore lands on its fixtures reader, and
+  that draft builds its CouchDB reader against `contract.read` from the
+  start, instead of keeping the mapping in the adapter until this PRD lands
+  (its v0.3, section 3).
 
 ## 3. Principles
 
@@ -532,8 +542,8 @@ type: the family-1 schema requires both `direct_blockers` and
 `failed_ancestors` on every step entry (`plan_status.v1.json`), and every
 writer output carries them, legacy projections included. The structure is
 checked on every step entry, whatever its status; what the lists mean is
-read only for a blocked step (4.9). Bifrost today reads an absent list as
-empty; the companion lists the visible change.
+read only for a blocked step (4.9). The external UI today reads an absent
+list as empty; the companion lists the visible change.
 
 ### 4.4 Rules added from the v0.9 discussion
 
@@ -552,8 +562,8 @@ empty; the companion lists the visible change.
    own generation and token. A record never establishes completion by
    itself: with tokens `4 / 3` and a usable record for request 4, request 4
    is not finished, its outcome and termination reason are unknown, and the
-   record stays available as the last finalized result. Bifrost today
-   matches on the token alone; the companion lists the visible change.
+   record stays available as the last finalized result. The external UI
+   today matches on the token alone; the companion lists the visible change.
 3. **Conflicting endings** exist only between two explicit, usable terminal
    claims about the same attempt, after the identity checks of 4.3 pass: a
    finalized record and a snapshot attempt in state `finished`, with equal
@@ -596,11 +606,11 @@ record.
 ### 4.6 What the caller tells the reader
 
 For each document the caller passes a body, `MISSING` (the store confirmed it
-does not exist) or `UNAVAILABLE` (the read failed). Bifrost's `PlanReader`
-port already expresses the three (a body; `None` or an absent key for
-missing; `PlanStoreUnavailable` / `OperationsStoreUnavailable` raised for
-unavailable), and its live reader (the draft
-**Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**) keeps that mapping.
+does not exist) or `UNAVAILABLE` (the read failed). The external UI's
+`PlanReader` port already expresses the three (a body; `None` or an absent
+key for missing; `PlanStoreUnavailable` / `OperationsStoreUnavailable`
+raised for unavailable), and its live reader (the draft
+**CouchDB PlanReader and `_changes` Refresh Hints**) keeps that mapping.
 
 | Input | Reading |
 | --- | --- |
@@ -719,8 +729,8 @@ supersession on the later approval/read. No new cleanup mechanism is added.
 
 ### 4.8 Step status
 
-The rule Bifrost's `snapshot.step_status` applies today, pinned by its tests
-and moved as is (D4). A step entry has a `state` (one of `pending`,
+The rule the external UI's `snapshot.step_status` applies today, pinned by
+its tests and moved as is (D4). A step entry has a `state` (one of `pending`,
 `interrupted`, `unreached` or `unknown`, or the type of its latest `step.*`
 event; the projection writes `unknown` for a legacy step with no lifecycle
 event) and an `outcome` (`succeeded`, `reused`, `failed`, `blocked`, or
@@ -750,13 +760,14 @@ contradiction is flagged. The entry's independent fields are still read as
 rows; `step_status` takes recorded values and reads `None` as `null`.
 Explicit `null` follows the other rows: a terminal state beside a `null`
 outcome, and a recognised outcome beside a `null` state, are
-contradictions. Bifrost today reads an absent key as `null`; the companion
-lists the visible change.
+contradictions. The external UI today reads an absent key as `null`; the
+companion lists the visible change.
 
 `started` is recorded past activity, not proof of present activity. The
 status vocabulary is `pending`, `started`, `succeeded`, `reused`, `failed`,
-`blocked`, `interrupted`, `unreached`, `unknown`, as in Bifrost today. A new
-step lifecycle event is a contract change to assess under section 5 of
+`blocked`, `interrupted`, `unreached`, `unknown`, as in the external UI
+today. A new step lifecycle event is a contract change to assess under
+section 5 of
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md),
 rules 5 and 6 (compatible keeps the number, incompatible raises it): an
 older reader shows it as `started`.
@@ -768,11 +779,12 @@ them: `settled` is true when the attempt's `state` is `finished`, false when
 
 ### 4.9 Step observations: progress, error, blockers
 
-The rest of what a step entry means, today in Bifrost's `_observed_step` and
-`_step_error` and pinned by its tests (D4 as amended, 2026-11-03). Each is a
-rule about Yggdrasil's documents, not about display, so leaving it behind
-would leave part of the interpretation duplicated. Bounded to the fields the
-projection writes today; nothing about jobs, events or artifacts is added.
+The rest of what a step entry means, today in the external UI's
+`_observed_step` and `_step_error` and pinned by its tests (D4 as amended,
+2026-11-03). Each is a rule about Yggdrasil's documents, not about display,
+so leaving it behind would leave part of the interpretation duplicated.
+Bounded to the fields the projection writes today; nothing about jobs,
+events or artifacts is added.
 
 | Field | Rule |
 | --- | --- |
@@ -824,7 +836,7 @@ record, attempt, snapshot-write and step-observation timestamps in 5.3.
 Canonical spelling is not a reader gate. The reader accepts the union
 (D22) of RFC 3339 `date-time` as `is_date_time`, from
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md), recognises it and the
-timezone-aware forms accepted by Bifrost's existing Python 3.11
+timezone-aware forms accepted by the external UI's existing Python 3.11
 `datetime.fromisoformat` path, subject to the precision and representability
 limits below. The accepted and rejected forms are characterized by the
 named cases below; this is not a promise to support every ISO 8601 form.
@@ -857,7 +869,7 @@ silent rounding or truncation. Excess precision returns unknown plus
 `bad_timestamp`, retaining the raw value. This precision bound is an
 explicit exception to the otherwise tolerant reader allowance of
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md) and corrects
-Bifrost's current `datetime.fromisoformat` path, which silently truncates
+reading through `datetime.fromisoformat` alone, which silently truncates
 excess digits (`.1234567` reads as `.123456`, and `,1234567` likewise). The
 guard covers a fraction introduced by `.` or `,` wherever an otherwise
 accepted time or offset form permits one, on both grammar paths, before
@@ -894,7 +906,7 @@ other case in this section keeps its answer.
 | `2026-11-06T10:20:30.1Z`, `2026-11-06T10:20:30.000001Z`, `2026-11-06T10:20:30.123456Z` | yes | exact fraction retained |
 | `2026-11-06T10:20:30.100Z`, `2026-11-06T10:20:30.000000Z` | no | exact instant; raw spelling retained |
 | `2026-11-06T10:20:30+00:00`, `2026-11-06T11:20:30+01:00` | no | same UTC instant as the first row |
-| `2026-11-06t10:20:30z` | no | same instant (lowercase `z` is newly readable; lowercase `t` with uppercase `Z` already works in Bifrost) |
+| `2026-11-06t10:20:30z` | no | same instant (lowercase `z` is newly readable; lowercase `t` with uppercase `Z` was already readable) |
 | `2026-11-06 10:20:30Z`, `20261106T102030Z`, `20261106t102030Z`, `2026-W45-5T10:20:30Z` | no | same instant as the first row; existing ISO reader support retained, including lowercase `t` |
 | `2026-11-06T10:20Z`, `2026-11-06T10Z`, `2026-11-06T10:20:30,5Z`, `2026-11-06T10:20:30+01:00:00` | no | existing ISO forms, asserted as instants: 10:20:00, 10:00:00, 10:20:30.5 and 09:20:30 UTC on 2026-11-06 |
 | `2026-11-06T10:20:30.1234567Z`, `2026-11-06T10:20:30,1234567Z`, `2026-11-06T10:20:30+01:00:00.1234567` | no | unknown with a field problem: a seventh fractional digit after `.` or `,`, in the time or in the offset |
@@ -972,7 +984,7 @@ Test canonical output, calendar boundaries, timezone conversion and
 fractional inputs. Current clock producers keep whole seconds. The
 follow-on draft **Document Contract: Approve and Rerun Helpers** may
 reuse this formatter for supplied click instants; its precision policy is
-decided there. Bifrost response serialization need not adopt producer
+decided there. A consumer's response serialization need not adopt producer
 spelling, but must preserve the parsed instant.
 
 **Event time stays observational.** Snapshot `steps.*.ts` remains required
@@ -1107,9 +1119,9 @@ read_plan(document, *, plan_id) -> PlanRead
                      of the wrong type; a step that is not an object; a
                      missing or duplicate step_id; deps absent or not a list
                      of strings). An explicit empty plan.steps or deps list
-                     is known empty, not unavailable. Bifrost today reads an
-                     absent plan.steps or deps as empty; the companion lists
-                     the visible change
+                     is known empty, not unavailable. The external UI today
+                     reads an absent plan.steps or deps as empty; the
+                     companion lists the visible change
     snapshot_id      str | None (snapshot_id_for, below)
     document         the body as given (for inspect-only display)
     problems
@@ -1342,23 +1354,25 @@ code decides with. Rule of thumb: if a second consumer, for example a future
 `yggdrasil plan status` command, would need the same answer, it belongs in
 the shared reader.
 
-**A consumer (Bifrost today):** its API models and field names; mapping the
-reader's closed sets onto its own; building rows from planned and observed
-steps and associating the two inventories (`associate`, `AssociatedSteps` /
-`SeparateSteps`); step counts and the latest step time; list order, search
-and filters; links; wording, relative times, refresh, freshness and
-connection state. What Bifrost does with these is the companion document's.
+**A consumer (the external UI today):** its API models and field names;
+mapping the reader's closed sets onto its own; building rows from planned
+and observed steps and associating the two inventories (`associate`,
+`AssociatedSteps` / `SeparateSteps`); step counts and the latest step time;
+list order, search and filters; links; wording, relative times, refresh,
+freshness and connection state. What the external UI does with these is the
+companion document's.
 
-**Bifrost – CouchDB PlanReader and `_changes` Refresh Hints** (a follow-on draft, after
-this PRD): its CouchDB `PlanReader` returns bodies, missing and unavailable
-(4.6) and calls `contract.read`; its v0.4 drops the sentence that the
-mapping lives in `bifrost/yggdrasil/` until this PRD lands, and the
-adapter-correction items of its review (C1, C2), which the companion makes
-moot. The reader offers no snapshot-ID parser; a change hint's plan ID must
-come from the changed document's body (that draft's review, G1).
+**CouchDB PlanReader and `_changes` Refresh Hints** (the external UI's
+follow-on draft, after this PRD): its CouchDB `PlanReader` returns bodies,
+missing and unavailable (4.6) and calls `contract.read`; its v0.4 drops the
+sentence that the mapping lives in the external UI's adapter until this PRD
+lands, and the adapter-correction items of its review (C1, C2), which the
+companion makes moot. The reader offers no snapshot-ID parser; a change
+hint's plan ID must come from the changed document's body (that draft's
+review, G1).
 
 **Document Contract: Approve and Rerun Helpers** (a follow-on draft, after
-**Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**): `review_context` and `prepare` can
+**CouchDB PlanReader and `_changes` Refresh Hints**): `review_context` and `prepare` can
 take their facts from `PlanRead` (identity, version, generation, status,
 tokens, authority, owner). This PRD adds no intent, digest or write helper.
 That draft's two references to section 4.2 of this PRD correctly resolve to
@@ -1377,33 +1391,46 @@ incompatible.
 
 ## 7. Consumers, the Tag and the Companion Document
 
-This PRD specifies nothing inside Bifrost. The companion document on
-Bifrost's adoption of the reader, a separate draft, does: the dependency
-and its lock, the adapter swap, the fixture regeneration and marker rule of section 9.4 of
+This section is the release plan as the owner agreed it on 2026-11-03
+(D14, D16) and approved it with this PRD at v0.12 (2026-11-09). Section 14
+records how the release went. The candidate validated for the tag was
+`eeb9359`, which replaced the original candidate `7141f44` after the
+schema correction made before the tag. The tag `v0.6.0` was cut on the
+`main` merge `724ef60`, whose tree is identical to `eeb9359`'s, and the
+external UI's pin moved to the tag on 2026-11-18.
+
+This PRD specifies nothing inside a consumer. The companion document on
+the external UI's adoption of the reader, a separate draft, does: the
+dependency and its lock, the adapter swap, the fixture regeneration and
+marker rule of section 9.4 of
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md),
 the visible changes and the tests. What this PRD owes a consumer is the
 interface of section 5 and the properties of 5.5.
 
-**One tag (D14).** [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
-is merged but not tagged (latest tag `v0.5.0`). One release tag carries
-that PRD and this one; Bifrost moves its pin once, to that tag. Fractional
-allowance is part of this PRD; there is no intervening amendment.
+**One tag (D14).** On 2026-11-03,
+[Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
+was merged but not tagged (the latest tag was `v0.5.0`). One release tag
+carries that PRD and this one; the external UI moves its pin once, to that
+tag. Fractional allowance is part of this PRD; there is no intervening
+amendment.
 
 **Validation before the tag (owner, 2026-11-03).** Before the tag is cut,
-Bifrost's integration is validated against a fixed candidate commit of
-Yggdrasil `dev` that contains this PRD's work, including 4.10, the verified
-current corpus and the first frozen release baseline: Bifrost installs the package
-from that commit, regenerates and schema-checks its fixtures as section 9.4
+the external UI's integration is validated against a fixed candidate commit
+of Yggdrasil `dev` that contains this PRD's work, including 4.10, the
+verified current corpus and the first frozen release baseline: the
+external UI installs the package from that commit, regenerates and
+schema-checks its fixtures as section 9.4
 of [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
 requires, swaps its adapter onto `contract.read`, and runs its suites,
 with the installed footprint measured and recorded (D16). A problem found
 there in the reader's interface or behaviour is fixed on `dev` and the
-validation repeated. The tag is cut from the validated commit, and Bifrost's
-pin then moves to the tag, which resolves to the same commit. The delivery
-plan (8, step 7) and the success criteria (11) carry this clause.
-After tagging, verify the locked installation and package-version metadata
-against that same commit. The companion covers consumer serialization and
-time aggregation, including preservation of fractional instants.
+validation repeated. The tag is cut from the validated commit, and the
+external UI's pin then moves to the tag, which resolves to the same commit.
+The delivery plan (8, step 7) and the success criteria (11) carry this
+clause. After tagging, verify the locked installation and package-version
+metadata against that same commit. The companion covers consumer
+serialization and time aggregation, including preservation of fractional
+instants.
 
 **The first frozen baseline.**
 [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
@@ -1429,19 +1456,20 @@ In Yggdrasil, in this order, each step green before the next:
    `controls`; `test_import_lightness.py` extended. In the existing
    `timestamps` module and the three schemas, implement 4.10 with its
    profile/parser/formatter and planning-replacement tests before porting callers.
-2. **Characterization tests first.** Bifrost's adapter tests are ported as
-   `unittest` tests of the shared reader before any rule moves, so the port
-   is checked by behaviour, not by copying code: `test_plan_document.py` →
+2. **Characterization tests first.** The external UI's adapter tests are
+   ported as `unittest` tests of the shared reader before any rule moves,
+   so the port is checked by behaviour, not by copying code:
+   `test_plan_document.py` →
    `read_plan`, `request_state`, planned steps, finalized record;
    `test_snapshot.py` → `read_snapshot`, `step_status`, `settled`, the step
    observations of 4.9, snapshot ID; `test_scenarios.py` /
    `test_sequences.py` → `correlate`; `test_values.py` → the `Recorded`
-   readers, integers and percentages. The deviations from Bifrost are
-   ported with the contract's answer, not Bifrost's: the four of section 2,
-   finalized-record ownership (4.4 rule 2), a finalized record's agreement
-   with its report (4.4 rule 4), absent blocker lists (4.3), an absent step
-   `state` or `outcome` key (4.8) and an absent planned inventory or `deps`
-   (5.3). Timestamp tests preserve
+   readers, integers and percentages. The deviations from the external UI
+   are ported with the contract's answer, not the external UI's: the four of
+   section 2, finalized-record ownership (4.4 rule 2), a finalized record's
+   agreement with its report (4.4 rule 4), absent blocker lists (4.3), an
+   absent step `state` or `outcome` key (4.8) and an absent planned
+   inventory or `deps` (5.3). Timestamp tests preserve
    both RFC 3339 and existing timezone-aware ISO reading as specified in
    4.10: the named accepted and rejected cases with their asserted UTC
    instants, and the excess-precision correction for both fraction
@@ -1450,9 +1478,9 @@ In Yggdrasil, in this order, each step green before the next:
    The hostile-value sweep
    is ported over the regression corpus (`tests/contract/documents/current/`:
    every plan document and snapshot on its own, and the plan–snapshot pairs
-   the manifest's sequences put together), with Bifrost's bar (more than
-   2,000 single-value variations; nothing raises) and its two planted-fault
-   tests that prove the sweep is not vacuous.
+   the manifest's sequences put together), with the external UI's bar
+   (more than 2,000 single-value variations; nothing raises) and its two
+   planted-fault tests that prove the sweep is not vacuous.
 3. **Rule tests.** Every row of 4.1, 4.3, 4.6, 4.7, 4.8, 4.9 and 4.10, the
    `finishes_request` truth table (including that it equals today's function
    on every enum input), the typed comparisons of section 3 (`true` against
@@ -1524,7 +1552,7 @@ In Yggdrasil, in this order, each step green before the next:
    The tag is cut only after the companion's validation against that
    candidate commit has passed (section 7).
 
-Bifrost's steps are the companion's.
+The external UI's steps are the companion's.
 
 ## 9. Backward Compatibility
 
@@ -1538,7 +1566,7 @@ Bifrost's steps are the companion's.
   what they accept is reviewed as a reader change, not absorbed. A non-UTC
   numeric offset is now read and converted to UTC, which D5 of
   [Document Contract: Schemas, Versioning and Compatibility](document_contract.md) did not
-  promise; Bifrost's additional readable ISO forms remain supported, except
+  promise; the additional readable ISO forms of D22 remain supported, except
   the narrow exceptions of 4.10: text containing a NUL, digits after the
   seconds that neither `.` nor `,` introduces, and the colon or digit
   date-time separators that look like them are now unknown (4.10, D22). The
@@ -1600,14 +1628,14 @@ Bifrost's steps are the companion's.
 
 ## 10. Out of Scope
 
-Changes inside Bifrost: its dependency, adapter, fixtures, tests and
+Changes inside the external UI: its dependency, adapter, fixtures, tests and
 documents (the companion). Approve and rerun helpers, digests and intents
 (the follow-on draft **Document Contract: Approve and Rerun Helpers**).
 Storage reads, the `PlanReader` implementation for CouchDB, retries,
 timeouts, change feeds, refresh hints, freshness and connection state (the
-follow-on draft **Bifrost – CouchDB PlanReader and `_changes` Refresh Hints**).
+external UI's follow-on draft **CouchDB PlanReader and `_changes` Refresh Hints**).
 The plan list, its order, search and filters, and how a live store serves it
-(Bifrost; that draft). Reading event records or job records; interpreting a step's
+(the external UI; that draft). Reading event records or job records; interpreting a step's
 `job`, `run_id`, `fingerprint`, `artifacts` or `metrics`. A separate
 `yggdrasil-contract` distribution (a D2 revisit, only on a concrete problem
 with the measured footprint). Broader logging and verbosity redesign
@@ -1663,7 +1691,7 @@ Status key as in section 14 of
 | D1 | Where the reader lives | Yggdrasil, `contract.read`, beside the `controls` and `versions` of [Document Contract: Schemas, Versioning and Compatibility](document_contract.md). | agreed |
 | D2 | How a consumer gets it | Dependency on the `yggdrasil` package at the tag (decision of 2026-10-07); no vendoring; a separate distribution only on a concrete problem with the measured footprint. Precondition (no `lib` hook) met by [Package Consolidation: `lib` under `yggdrasil`](package_consolidation.md). | **owner** (confirmed 2026-10-21; footprint stance 2026-11-03) |
 | D3 | Tokens | The complete rule of 4.2, with the 2^53 - 1 bound; no data check. Defined and applied in Yggdrasil by [Document Contract: Schemas, Versioning and Compatibility](document_contract.md) (its D18); reused here. | agreed (Codex A5; moved to that PRD, 2026-10-21) |
-| D4 | What moves per step | The status rule and `settled` (4.8) and the interpretation of the existing progress, error and blocker fields (4.9), bounded by Bifrost's tests; rows, association, counts, links, wording stay with the consumer; no job or event reading. | **owner** (2026-11-03, Q4) |
+| D4 | What moves per step | The status rule and `settled` (4.8) and the interpretation of the existing progress, error and blocker fields (4.9), bounded by the external UI's tests; rows, association, counts, links, wording stay with the consumer; no job or event reading. | **owner** (2026-11-03, Q4) |
 | D5 | Conflicting endings | Only between explicit terminal claims after identity checks (4.4 rule 3). | agreed (Codex A3) |
 | D6 | Unsupported documents | Inspect-only; version check first in every whole-document read; the reader derives nothing and passes the body through (4.0). The value helpers of 5.3 do not check and give no conclusions. | engineering (follows D12 of [Document Contract: Schemas, Versioning and Compatibility](document_contract.md); helpers clarified 2026-11-03) |
 | D7 | Finalized record ownership | Current request's outcome only when completion is recorded and the usable finalized record's `plan_id`, `plan_generation` and `run_token` all match, typed (4.4 rule 2); `finalized_is_current` states that recorded identity, independently of completion and eligibility (5.3). | engineering (v0.5; kept 2026-11-03; completion guard explicit in v0.13); identity rule **owner** (2026-11-09) |
@@ -1673,7 +1701,7 @@ Status key as in section 14 of
 | D11 | Snapshot ID | `snapshot_id` / `snapshot_id_for` return `None` instead of raising; the formatting is shared as `partition_name`, and every partition is `{kind}-{id}` with the scope's kind as recorded (the `proj` and `fc` abbreviations retired); `partition_key` keeps today's acceptance and `ValueError`. | engineering (v0.5; writer untouched 2026-11-03); raw scope kinds **owner** (2026-11-13) |
 | D12 | Problems | `ContractProblem` shared by `schema` and `read` through `contract/problems.py`; reader codes added; control checks produce structured details at their source, with their string messages unchanged (5.2). | engineering (v0.5; source-structured 2026-11-03) |
 | D13 | Field constants | Spellings in `contract.fields`, imported by `storage` and `ops`; each module keeps its own sets; the agreement test checks spellings, not sets. | engineering (v0.5; narrowed 2026-11-03) |
-| D14 | Release sequencing | One tag carries [Document Contract: Schemas, Versioning and Compatibility](document_contract.md) and this PRD; one Bifrost change moves the pin and adopts the reader (the companion), which makes findings C1 and C2 of the review of **Bifrost – CouchDB PlanReader and `_changes` Refresh Hints** moot. Validation against the candidate commit precedes the tag (7). | **owner** (2026-11-03, Q1) |
+| D14 | Release sequencing | One tag carries [Document Contract: Schemas, Versioning and Compatibility](document_contract.md) and this PRD; one change to the external UI moves the pin and adopts the reader (the companion), which makes findings C1 and C2 of the review of its draft **CouchDB PlanReader and `_changes` Refresh Hints** moot. Validation against the candidate commit precedes the tag (7). | **owner** (2026-11-03, Q1) |
 | D15 | Plan summary | Stays in `storage.plan_documents` as a projection of `read_plan` with no defaults; exists for every stored document; the requested ID is passed to the reader (5.4). | **owner** (2026-11-03, Q2) |
 | D16 | Dependency form and footprint | Git source at the tag, locked to its commit by uv; the full package accepted provisionally; installed dependencies and import behaviour measured early, at the candidate commit; reconsidered only on a concrete problem. Mechanics in the companion. | **owner** (2026-11-03, Q3) |
 | D17 | Request state and identity | `request_state` takes the expected plan ID; the body's own `_id` never stands in for it (5.3). A caller that already holds a `PlanRead` uses its `.request` directly. | engineering (2026-11-03, review) |
@@ -1691,19 +1719,19 @@ at v0.12 on 2026-11-09.
 1. **Reader grammar (4.10).** v0.7 asked `parse_timestamp` to retain both
    the valid RFC 3339 UTC forms of
    [Document Contract: Schemas, Versioning and Compatibility](document_contract.md)
-   and "Bifrost's existing timezone-aware ISO input forms". Checked at
+   and the external UI's existing timezone-aware ISO input forms. Checked at
    7ace54d and 38c09cd, these are two grammars that do not coincide. That
    PRD's `is_date_time` is RFC 3339 only and
    case-insensitive: it accepts `2026-11-06t10:20:30z` and rejects a space
-   separator and the compact form. Bifrost's `datetime.fromisoformat`
-   accepts lowercase `t` with uppercase `Z`, rejects lowercase `z`, and
+   separator and the compact form. The external UI's `datetime.fromisoformat`
+   path accepts lowercase `t` with uppercase `Z`, rejects lowercase `z`, and
    accepts the space separator, compact `20261106T102030Z`, and week dates.
    Ordinal dates are unsupported in Python 3.11 already. The owner clarified
    that conforming to Yggdrasil's contract must not prevent interpreting
    readable realm-supplied ISO observations. D22 therefore accepts the union,
    with explicit precision and timezone limits (4.10). This preserves the
-   existing readable ISO forms and adds lowercase `z`; Bifrost needs no
-   separate parsing fallback. The supersession of that PRD's D5 is recorded in 4.10,
+   existing readable ISO forms and adds lowercase `z`, so no separate
+   parsing fallback is needed. The supersession of that PRD's D5 is recorded in 4.10,
    and delivery step 6 preserves the historical decision while documenting
    the effective contract. No ownership amendment is revived.
    The owner's two later notes are written into 4.10 (v0.11): the named
@@ -1727,16 +1755,16 @@ at v0.12 on 2026-11-09.
    **PlanWatcher Reliability and Operational Logging** is in its section 5, not section 4, and its
    broader logging investigation is not a dependency for this change.
 5. **Index and references.** In the index of PRDs kept with the drafts,
-   outside this repository, this PRD's row ("Yggdrasil + Bifrost") is now
-   Yggdrasil only, with a row for the companion. That index records the
+   outside this repository, this PRD's row (Yggdrasil and the external UI)
+   is now Yggdrasil only, with a row for the companion. That index records the
    current order and resolves its completed and withdrawn references to
    available sources. The two references to section 4.2 of this PRD in the
    draft **Document Contract: Approve and Rerun Helpers** resolve to this
    PRD's token section and need no change (v0.6's note said otherwise).
    When that draft is picked up it should say which spelling its click
    times use, whole seconds or a canonical fraction; either is valid under
-   D18, and its `updated_at` stays clock-driven. v0.4 of the draft
-   **Bifrost – CouchDB PlanReader and `_changes` Refresh Hints** should point its
+   D18, and its `updated_at` stays clock-driven. v0.4 of the external UI's
+   draft **CouchDB PlanReader and `_changes` Refresh Hints** should point its
    sentence that the mapping lives in the adapter until this PRD lands to
    the companion.
 
@@ -1747,10 +1775,11 @@ settled while writing the tests.
 
 Implemented on `feature/contract_shared_reader`, branched from `7ace54d`
 (the merge of PR #111), and merged into `dev` by PR #115 as `7141f44`
-(2026-11-16). A correction made before the tag was merged by PR #116 as
-`eeb9359` (2026-11-17), the release candidate. PR #117 merged `dev` into
-`main` as `724ef60`, and `v0.6.0` was tagged there (2026-11-18). Every
-commit named below is in `v0.6.0`.
+(2026-11-16), the original release candidate. A correction made before
+the tag was merged by PR #116 as `eeb9359` (2026-11-17), the successor
+candidate, which was validated before the tag. PR #117 merged `dev` into
+`main` as `724ef60`, whose tree is `eeb9359`'s, and `v0.6.0` was tagged
+there (2026-11-18). Every commit named below is in `v0.6.0`.
 
 **Foundations (2026-11-09).** `contract.problems` holds `ContractProblem`
 and the problem codes, moved out of `schema.py`, which re-exports them, and
@@ -1785,31 +1814,32 @@ and the planned steps; `request_state`; `eligibility`, `is_eligible` and
 `eligibility_reason`; `finishes_request`; `generation_of`; and the snapshot
 ID functions (5.3). `contract.versions.describe_schema_version` gives one
 description of a document's `schema_version` for the reader's refusals and
-the daemon's messages. Bifrost's plan-document and value tests were ported
-first, each deviation from Bifrost asserting the contract's answer (8 step
-2). Accepted as built: `PlanRead` and `SnapshotRead` carry a presence
+the daemon's messages. The external UI's plan-document and value tests
+were ported first, each deviation from them asserting the contract's answer
+(8 step 2). Accepted as built: `PlanRead` and `SnapshotRead` carry a presence
 (`present`, `missing` or `unavailable`), and for a body
 `PlanRead.eligibility` is never empty: an unusable plan gets the refusal
 that explains it (`invalid_document`, `unsupported_document` or
 `identity_mismatch`). The review's two clarifications are v0.15. Commits
 `6acd8e6`, `0f08a5f`, `0763563`, `65a5a49` and `2913097`.
 
-**Reading snapshots and correlating (2026-11-12 to 2026-11-13).** `read_snapshot` with
-`SnapshotRead`, `Attempt` (which states `settled`), `ObservedStep` and
-`StepError`; `step_status`; the step observations of 4.9; and `correlate`
-with `Correlation`, including `request_and_observation` (5.3). Bifrost's
-snapshot, scenario and sequence tests were ported first. The hostile-value
-sweep runs in the normal suite, over every corpus plan document and
-snapshot and every plan–snapshot pair of the manifest's sequences. When it
-was added it made 66,737 single-value variations and 48 whole-body ones,
-more than 2,000 for each pair, and nothing raised; both planted faults are
-caught. Review corrections: an absent step `state` or `outcome` key is told
-apart from `null` (v0.16), and a finished attempt without a recognised
-outcome is incomplete evidence, never a conflicting ending; the pair sweep
-reads the snapshot at hand when a plan names no snapshot ID. Accepted as
-built: a legacy projection is read with its `attempt` key absent, although
-the writer schema requires an explicit `null`. Commits `2a8e229`,
-`7c50bb3`, `94dc1ec`, `928f82a`, `a5d4c8b`, `f0e44a5` and `4bb00b1`.
+**Reading snapshots and correlating (2026-11-12 to 2026-11-13).**
+`read_snapshot` with `SnapshotRead`, `Attempt` (which states `settled`),
+`ObservedStep` and `StepError`; `step_status`; the step observations of
+4.9; and `correlate` with `Correlation`, including
+`request_and_observation` (5.3). The external UI's snapshot, scenario and
+sequence tests were ported first. The hostile-value sweep runs in the
+normal suite, over every corpus plan document and snapshot and every
+plan–snapshot pair of the manifest's sequences. When it was added it made
+66,737 single-value variations and 48 whole-body ones, more than 2,000 for
+each pair, and nothing raised; both planted faults are caught. Review
+corrections: an absent step `state` or `outcome` key is told apart from
+`null` (v0.16), and a finished attempt without a recognised outcome is
+incomplete evidence, never a conflicting ending; the pair sweep reads the
+snapshot at hand when a plan names no snapshot ID. Accepted as built: a
+legacy projection is read with its `attempt` key absent, although the
+writer schema requires an explicit `null`. Commits `2a8e229`, `7c50bb3`,
+`94dc1ec`, `928f82a`, `a5d4c8b`, `f0e44a5` and `4bb00b1`.
 
 **Value helpers and spellings (2026-11-13).**
 `storage.plan_updates.finishes_request` keeps its enum signature as an
@@ -1888,7 +1918,7 @@ correction is recorded in section 16 of
 `a4b3457`, `bf362a6` and `cef2854`, then `4c5eabc` and `10c586f`, merged as
 `eeb9359` (PR #116).
 
-**Release candidate (2026-11-17).** At
+**The successor candidate (2026-11-17).** At
 `eeb935928c926eb2cd6fc0f12875d3dbf57902dc`, `python -m tests.contract.corpus`
 reports no differences, and `released/v0.6.0/` is still tree `562defc…`:
 each of its 22 documents is the same blob as its `current/` file. CI passed
@@ -1896,28 +1926,34 @@ on the push to upstream `dev`: Tests (run 44122057279, 3504 passed, without
 the two git-ignored files), Lint and Type Check (run 44122057393, Black and
 mypy clean) and Secrets scan (run 44122057748).
 
-**Bifrost's validation (2026-11-18).** Bifrost moved its pin to the
-candidate and reported every check passing, with no incompatibility.
-Between its previous pin and the candidate, the only change it saw in
-Yggdrasil was in the schemas. Its regenerated fixtures differ from the
-committed ones only in the line that records the Yggdrasil revision, and
-all 22 documents of `released/v0.6.0/` read cleanly. These results are
-recorded as Bifrost reported them: the report names no Bifrost commit or
-run, and does not itemize the footprint measurement of D16.
+**Validation by the external UI (2026-11-17 to 2026-11-18).** Everything in
+this entry comes from the external UI's integration, as it reported it:
+these are its checks and measurements, not results of Yggdrasil's suite.
+The integration first adopted the reader against the original candidate
+`7141f44` and measured the footprint of D16 there: 20 runtime packages,
+12.3 MB installed, and a median import time of about 41 ms for the shared
+reader. It then moved its pin to the successor candidate and reported every
+check passing, with no incompatibility. Between the two candidates, the
+only change it saw in Yggdrasil was in the schemas; its regenerated
+fixtures differ from the committed ones only in the line that records the
+Yggdrasil revision; and all 22 documents of `released/v0.6.0/` read
+cleanly. That report did not repeat the footprint figures.
 
 **The tag (2026-11-18).** `724ef605e70fad070237631865af502a94614443` is the
 merge of PR #117. Its parents are the previous `main` (`000d596`, tagged
-`v0.5.0`) and the candidate, and its tree is the candidate's. The annotated
-tag `v0.6.0` (tag object `b200343266ba53fb45152766409d45365613d0b7`) is on
-that merge, not on the candidate itself as section 7 says, so that the tag
-and `main`'s head are one commit. The owner accepted this: every file
-Bifrost validated is unchanged. CI passed on the merge, pushed to upstream
-`main`: Tests (run 44269573659, 3504 passed), Lint and Type Check (run
+`v0.5.0`) and the successor candidate, and its tree is the candidate's. The
+annotated tag `v0.6.0` (tag object
+`b200343266ba53fb45152766409d45365613d0b7`) is on that merge, not on the
+validated candidate itself as section 7 says, so that the tag and `main`'s
+head are one commit. The owner accepted this: every file the external UI
+validated is unchanged. CI passed on the merge, pushed to upstream `main`:
+Tests (run 44269573659, 3504 passed), Lint and Type Check (run
 44269573544, Black and mypy clean), Secrets scan (run 44269573615) and the
 strict documentation build (run 44269573694).
 
-**After the tag (2026-11-19).** `git describe` on the tagged commit gives
-`v0.6.0`, and `released/v0.6.0/` there is tree `562defc…`. `pip install
+**After the tag (2026-11-18 to 2026-11-19).** `git describe` on the tagged
+commit gives `v0.6.0`, and `released/v0.6.0/` there is tree `562defc…`. On
+2026-11-19, `pip install
 "yggdrasil @ git+https://github.com/NationalGenomicsInfrastructure/Yggdrasil@v0.6.0"`
 into a new virtual environment (Python 3.11.0) installed the package and 21
 third-party distributions. Run from outside the source checkout:
@@ -1929,5 +1965,8 @@ third-party distributions. Run from outside the source checkout:
   through `schema_for` and equal the tagged files;
 - the 125 installed modules equal the tagged ones.
 
-Moving Bifrost's pin to the tag, and checking its locked installation, are
-the companion's (section 7).
+The external UI's integration moved its pin to the tag on 2026-11-18. It
+reported that a clean locked installation from `v0.6.0` resolved to
+`724ef60`, and that its checks and its reads of all 22 frozen documents
+passed; its `main` branch has depended on the tag since then. These, too,
+are the integration's results as it reported them.

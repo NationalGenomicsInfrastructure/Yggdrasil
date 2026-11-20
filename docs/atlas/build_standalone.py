@@ -11,8 +11,8 @@ documentation home, the Atlas and the documentation share the reader's light
 or dark choice, and the browser tab shows the documentation's icon, the only
 file the page asks the server for.
 
-``--plain`` writes a copy without those, for embedding elsewhere (such as
-Bifrost) or opening from disk. A plain copy makes no network request.
+``--plain`` writes a copy without those, for embedding elsewhere or opening
+from disk. A plain copy makes no network request.
 
 Both builds change the source in only three ways:
 
