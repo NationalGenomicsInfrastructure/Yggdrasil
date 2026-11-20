@@ -36,8 +36,8 @@ for reference while they are rewritten.
   `ruamel.yaml`) are imported only by the legacy realms, or by nothing at all
   (`networkx`, `numba`). Installed, they account for roughly 400 MB of a
   650 MB environment; the core's own dependencies come to about 10 MB.
-- Every consumer that installs Yggdrasil, external realms today and Bifrost
-  tomorrow, pays for those dependencies without using them.
+- Every consumer that installs Yggdrasil, external realms today and an
+  external UI tomorrow, pays for those dependencies without using them.
 - The legacy code misleads realm authors about the current model: it shows
   realms submitting their own jobs and reading the database directly, which is
   no longer how a realm is written.
@@ -65,9 +65,9 @@ for reference while they are rewritten.
 4. **Paths under `trashcan/` mirror the originals** (`trashcan/lib/realms/tenx/`,
    `trashcan/tests/test_module_resolver.py`), so provenance stays obvious.
 5. **No behaviour change for current users.** `test_realm`, `demux_realm`, the
-   CLI, the daemon and Bifrost's fixture generator (which calls Yggdrasil's
-   document, report and projection functions) behave identically after every
-   cycle.
+   CLI, the daemon and the external UI's fixture generator (which calls
+   Yggdrasil's document, report and projection functions) behave identically
+   after every cycle.
 6. **Undecided things stay.** Code whose future position is open
    (`lib/module_utils`) is kept, tested and untouched; deciding it is a
    separate document.
@@ -189,8 +189,8 @@ through the module-registry tests listed above.
 - Full check suite green; `demux_realm`'s suite green against the result.
 - `grep -rn "module_registry\|module_resolver\|lib\.base\|lib\.handlers"`
   over `yggdrasil/`, `lib/`, `tests/`, `docs/` returns nothing.
-- Bifrost's `scripts/generate-source-fixtures --check` against the new
-  revision still reports the committed fixtures as matching (the generator
+- The external UI's `scripts/generate-source-fixtures --check` against the
+  new revision still reports the committed fixtures as matching (the generator
   calls `lib.storage.plan_documents`, `lib.ops.snapshot` and
   `yggdrasil.flow.outcomes`, none of which change).
 
@@ -253,7 +253,7 @@ commit.
 - The deprecated `ygg.handler` entry-point group is not touched by this
   document.
 - Documents written to `yggdrasil_plans`, `yggdrasil_ops` and the event spool
-  are unchanged, so Bifrost's committed fixtures remain valid.
+  are unchanged, so the external UI's committed fixtures remain valid.
 
 ---
 
@@ -275,8 +275,8 @@ commit.
   linters, type check and a fresh install pass; documentation is accurate.
 - After cycle 2: the remnants are gone; the runtime dependency list is seven
   packages; a fresh install contains none of the removed
-  packages; the suite, linters, type check, `demux_realm`'s suite and Bifrost's
-  fixture check all pass.
+  packages; the suite, linters, type check, `demux_realm`'s suite and the
+  external UI's fixture check all pass.
 - Nothing under `trashcan/` is imported by anything under `yggdrasil/`,
   `lib/` or `tests/`.
 
@@ -336,10 +336,10 @@ Where the implementation departed from the plan:
    resolved to `lib/handlers/base_handler.py`. Section 9 did not list it.
    After cycle 2 the daemon logged the failed load and skipped that handler;
    `tenx_realm` now imports `yggdrasil.flow.base_handler` and loads again.
-6. **Bifrost's fixture check was not run.** Its generator refuses any
+6. **The external UI's fixture check was not run.** Its generator refuses any
    Yggdrasil revision other than its pinned `SOURCE_REVISION`, which is the
    cleanup's base revision. Of the modules it loads, only
    `lib/couchdb/project_db_manager.py` changed, and the generator never
    imports it, since it replaces `lib.couchdb` with an empty package and loads
    only `partitions`. Checking against the new revision requires moving
-   Bifrost's pin.
+   the external UI's pin.

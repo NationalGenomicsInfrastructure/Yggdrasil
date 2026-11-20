@@ -19,9 +19,9 @@ grab-bag into packages named for what they are, gather the CouchDB storage
 backend in one place, retire the `lib.*` meta-path import hook and the
 `ygg.handler` legacy entry-point group, and move the code that the current
 architecture has already replaced into the trashcan. The result is one
-coherent, installable package that a second project (Bifrost) can depend on
-from a Git tag, and in which the real layering of the code is visible from
-its paths.
+coherent, installable package that a second project, an external UI, can
+depend on from a Git tag, and in which the real layering of the code is
+visible from its paths.
 
 Behaviour does not change. Classes keep their names; code moves between
 files only where section 7 says so.
@@ -32,7 +32,7 @@ files only where section 7 says so.
 
 Verified against `dev` (caacacc, the merge of `main`/v0.4.0 into `dev` by
 PR #106; its tree is identical to f35b031, on which the investigation was
-done), demux_realm `master` and Bifrost `main`:
+done), demux_realm `master` and the external UI's `main`:
 
 - `lib/` holds 66 Python files (17 730 lines) in seven subpackages; the
   daemon, coordinator, watchers, ops consumer, storage and realm loading all
@@ -47,8 +47,8 @@ done), demux_realm `master` and Bifrost `main`:
   import `lib.core_utils.event_types` and `lib.watchers.watchspec` next to
   `yggdrasil.core.realm` and `yggdrasil.flow.*`; its tests import
   `lib.core_utils.plan_eligibility`, `lib.core_utils.plan_execution`,
-  `lib.storage` and `lib.storage.sqlite`. Bifrost's fixture generator maps
-  `lib.storage`, `lib.ops`, `lib.couchdb` and imports
+  `lib.storage` and `lib.storage.sqlite`. The external UI's fixture generator
+  maps `lib.storage`, `lib.ops`, `lib.couchdb` and imports
   `lib.storage.plan_documents`, `lib.storage.plan_updates`, `lib.ops.snapshot`
   and `lib.couchdb.partitions`. The realm-authoring guide, cookbook, glossary
   and test-realm reference all teach `lib.*` imports.
@@ -380,8 +380,9 @@ The only code that moves between files. Each is one commit with its tests.
     `ibmcloudant.cloudant_v1`, `urllib3.connectionpool`) move from module
     scope in `logging_utils` into `configure_logging()`. The CLI calls it
     first thing, so daemon and run-doc output is unchanged; an importer that
-    never calls it (tests, Bifrost) no longer has its logging altered by an
-    import. Tests that depended on the import-time state are adjusted.
+    never calls it (tests, an external consumer) no longer has its logging
+    altered by an import. Tests that depended on the import-time state are
+    adjusted.
 
 ---
 
@@ -450,11 +451,11 @@ effects (one-letter level names, third-party logger levels). Moving
   filters, if any, follow.
 - Release: tag `v0.5.0` on the `main` merge commit, as `v0.4.0` was, then
   merge `main` back into `dev` (as PR #106 did for v0.4.0) so the tag stays
-  reachable from `dev` and development builds report `0.5.0.postN`. Bifrost
-  and demux_realm pin the tag. Until it exists, Bifrost's interim pin (draft
-  09's pin move) should be caacacc or later, from which `v0.4.0` is reachable
-  (a wheel from it reports `0.4.0.post6`); demux_realm needs no interim pin
-  (section 12).
+  reachable from `dev` and development builds report `0.5.0.postN`. The
+  external UI and demux_realm pin the tag. Until it exists, the external UI's
+  interim pin (draft 09's pin move) should be caacacc or later, from which
+  `v0.4.0` is reachable (a wheel from it reports `0.4.0.post6`); demux_realm
+  needs no interim pin (section 12).
 
 ---
 
@@ -480,7 +481,7 @@ Any `lib.*` import becomes its `yggdrasil.*` counterpart;
 `ygg.handler`, it must register a `RealmDescriptor` under `ygg.realm`
 (decision 5). The owner does not require it to keep working unchanged.
 
-### 10.3 Bifrost
+### 10.3 External UI
 
 `backend/tools/generate_source_fixtures.py`: `MODULE_PATHS` and the imports
 become `yggdrasil.storage.plan_documents`, `yggdrasil.storage.plan_updates`,
@@ -614,7 +615,7 @@ yggdrasil.watchers"` imports neither `ibmcloudant` nor
    into `main`; tag `v0.5.0`; merge `main` back into `dev`.
 3. Immediately after: demux_realm's import update (10.1) and move to the
    tag, in one commit on its `master`; tenx_realm notified or updated
-   (10.2); Bifrost's pin move is draft 09.
+   (10.2); the external UI's pin move is draft 09.
 
 Verification, in an empty virtual environment and from a directory outside
 the source checkout: `pip install "yggdrasil @ git+…@v0.5.0"` (or the built
@@ -624,8 +625,8 @@ wheel); `python -c "import lib"` fails with `ModuleNotFoundError`;
 yggdrasil.storage.plan_updates, yggdrasil.storage.partitions,
 yggdrasil.ops.snapshot, yggdrasil.flow.model, yggdrasil.flow.outcomes,
 yggdrasil.flow.attempt, yggdrasil.core.execution_ids"` (the modules
-Bifrost's generator loads) succeeds; `yggdrasil --version` prints 0.5.0;
-demux_realm's suite passes against the tag.
+the external UI's generator loads) succeeds; `yggdrasil --version` prints
+0.5.0; demux_realm's suite passes against the tag.
 
 ### Daemon smoke test
 
@@ -732,15 +733,16 @@ planned from.
 - demux_realm's suite passes against the tag after the import update of
   10.1; `yggdrasil --dev daemon` discovers `test_realm` and `dmx_realm` and
   starts their watchers.
-- Bifrost's generator loads modules from `yggdrasil.*` only (after draft
-  09's pin move).
+- The external UI's generator loads modules from `yggdrasil.*` only (after
+  draft 09's pin move).
 - `grep -rn "\blib\." yggdrasil tests docs` returns nothing outside
   `docs/design/`.
 - Importing `yggdrasil.flow` and `yggdrasil.watchers` imports neither
   `ibmcloudant` nor `yggdrasil.logging_utils` and leaves the logging
   configuration untouched (`tests/test_import_lightness.py`).
 - From an empty virtual environment outside the checkout, with the package
-  installed from the tag, every module Bifrost's generator loads imports.
+  installed from the tag, every module the external UI's generator loads
+  imports.
 - Every removed or trimmed file exists under `trashcan/` at its original
   path; nothing under `trashcan/` is imported by `yggdrasil/` or `tests/`.
 
@@ -837,8 +839,8 @@ A wheel built from the branch head holds 107 modules in 20 packages, all under
 `yggdrasil/`, and no `lib/` entry. Installed into an empty virtual environment
 and used from a directory outside the checkout: `import lib` fails with
 `ModuleNotFoundError`; `yggdrasil.daemon.core`, `yggdrasil.cli` and the eight
-modules Bifrost's generator loads import; importing `yggdrasil.flow` and
-`yggdrasil.watchers` leaves `ibmcloudant` and `yggdrasil.logging_utils`
+modules the external UI's generator loads import; importing `yggdrasil.flow`
+and `yggdrasil.watchers` leaves `ibmcloudant` and `yggdrasil.logging_utils`
 unimported and the `DEBUG` level name unchanged. The seven runtime
 dependencies and `requirements/lock.txt` are unchanged. `yggdrasil --version`
 reports a `0.4.0.postN` development version until the tag exists. These
